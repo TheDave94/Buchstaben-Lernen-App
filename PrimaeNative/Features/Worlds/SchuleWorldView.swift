@@ -172,11 +172,6 @@ struct SchuleWorldView: View {
             // Rendered inside `TracingCanvasView` — it needs canvas
             // geometry and reference-stroke data.
             EmptyView()
-        case .frechetScore:
-            // Reserved for a future inline Fréchet-score chip; the
-            // inline form/guided feedback cards above render the
-            // signal today. Kept to avoid an enum-shape migration.
-            EmptyView()
         case .none:
             EmptyView()
         }

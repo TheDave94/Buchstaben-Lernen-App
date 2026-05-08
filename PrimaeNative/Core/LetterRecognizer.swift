@@ -289,7 +289,6 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, @unche
         let calibratedTopConfidence = calibrator.calibrate(
             rawConfidence: CGFloat(top.confidence),
             predictedLetter: rawTopLetter,
-            expectedLetter: expectedLetter,
             historicalFormScores: historicalFormScores
         )
         let topThree: [RecognitionResult.TopCandidate] = classifications
@@ -298,7 +297,6 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, @unche
                 let conf = calibrator.calibrate(
                     rawConfidence: CGFloat(obs.confidence),
                     predictedLetter: obs.identifier,
-                    expectedLetter: expectedLetter,
                     historicalFormScores: historicalFormScores
                 )
                 return .init(letter: obs.identifier, confidence: conf)

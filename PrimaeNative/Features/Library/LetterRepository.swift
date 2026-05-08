@@ -375,102 +375,23 @@ private extension LetterRepository {
         resources.resourceURL(for: relativePath) != nil
     }
 
-    func defaultStrokes(for letter: String) -> LetterStrokes {
-        let strokes: [StrokeDefinition]
-        switch letter.uppercased() {
-        case "A":
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.58, y: 0.04), .init(x: 0.52, y: 0.13),
-                    .init(x: 0.42, y: 0.30), .init(x: 0.34, y: 0.44),
-                    .init(x: 0.25, y: 0.60), .init(x: 0.15, y: 0.78), .init(x: 0.03, y: 0.99)]),
-                .init(id: 2, checkpoints: [
-                    .init(x: 0.58, y: 0.04), .init(x: 0.66, y: 0.17),
-                    .init(x: 0.73, y: 0.35), .init(x: 0.78, y: 0.48),
-                    .init(x: 0.82, y: 0.60), .init(x: 0.90, y: 0.79), .init(x: 0.97, y: 0.98)]),
-                .init(id: 3, checkpoints: [
-                    .init(x: 0.26, y: 0.60), .init(x: 0.553, y: 0.60), .init(x: 0.82, y: 0.60)])
-            ]
-        case "F":
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.17, y: 0.05), .init(x: 0.16, y: 0.20),
-                    .init(x: 0.15, y: 0.35), .init(x: 0.13, y: 0.55),
-                    .init(x: 0.12, y: 0.70), .init(x: 0.10, y: 0.85), .init(x: 0.09, y: 0.95)]),
-                .init(id: 2, checkpoints: [
-                    .init(x: 0.17, y: 0.08), .init(x: 0.55, y: 0.06), .init(x: 0.92, y: 0.05)]),
-                .init(id: 3, checkpoints: [
-                    .init(x: 0.14, y: 0.48), .init(x: 0.44, y: 0.47), .init(x: 0.75, y: 0.46)])
-            ]
-        case "I":
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.387, y: 0.237), .init(x: 0.495, y: 0.237), .init(x: 0.602, y: 0.237)]),
-                .init(id: 2, checkpoints: [
-                    .init(x: 0.579, y: 0.250), .init(x: 0.579, y: 0.369),
-                    .init(x: 0.579, y: 0.487), .init(x: 0.579, y: 0.646), .init(x: 0.579, y: 0.764)]),
-                .init(id: 3, checkpoints: [
-                    .init(x: 0.396, y: 0.771), .init(x: 0.487, y: 0.771), .init(x: 0.579, y: 0.771)])
-            ]
-        case "K":
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.417, y: 0.170), .init(x: 0.413, y: 0.336),
-                    .init(x: 0.413, y: 0.502), .init(x: 0.413, y: 0.635), .init(x: 0.413, y: 0.801)]),
-                .init(id: 2, checkpoints: [
-                    .init(x: 0.685, y: 0.170), .init(x: 0.618, y: 0.270),
-                    .init(x: 0.567, y: 0.419), .init(x: 0.517, y: 0.519)]),
-                .init(id: 3, checkpoints: [
-                    .init(x: 0.503, y: 0.480), .init(x: 0.587, y: 0.580),
-                    .init(x: 0.675, y: 0.729), .init(x: 0.691, y: 0.829)])
-            ]
-        case "L":
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.425, y: 0.170), .init(x: 0.425, y: 0.328),
-                    .init(x: 0.425, y: 0.486), .init(x: 0.425, y: 0.605), .init(x: 0.425, y: 0.763)]),
-                .init(id: 2, checkpoints: [
-                    .init(x: 0.293, y: 0.780), .init(x: 0.476, y: 0.780), .init(x: 0.657, y: 0.780)])
-            ]
-        case "M":
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.384, y: 0.170), .init(x: 0.364, y: 0.340),
-                    .init(x: 0.324, y: 0.510), .init(x: 0.185, y: 0.668), .init(x: 0.209, y: 0.821)]),
-                .init(id: 2, checkpoints: [
-                    .init(x: 0.384, y: 0.170), .init(x: 0.396, y: 0.319),
-                    .init(x: 0.413, y: 0.419), .init(x: 0.431, y: 0.519), .init(x: 0.450, y: 0.595)]),
-                .init(id: 3, checkpoints: [
-                    .init(x: 0.569, y: 0.595), .init(x: 0.601, y: 0.481),
-                    .init(x: 0.625, y: 0.381), .init(x: 0.645, y: 0.270), .init(x: 0.658, y: 0.170)]),
-                .init(id: 4, checkpoints: [
-                    .init(x: 0.658, y: 0.170), .init(x: 0.658, y: 0.340),
-                    .init(x: 0.672, y: 0.510), .init(x: 0.836, y: 0.668), .init(x: 0.777, y: 0.821)])
-            ]
-        case "O":
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.500, y: 0.197), .init(x: 0.606, y: 0.244),
-                    .init(x: 0.661, y: 0.339), .init(x: 0.680, y: 0.425),
-                    .init(x: 0.682, y: 0.500), .init(x: 0.680, y: 0.575),
-                    .init(x: 0.661, y: 0.661), .init(x: 0.606, y: 0.756),
-                    .init(x: 0.500, y: 0.802), .init(x: 0.395, y: 0.754),
-                    .init(x: 0.339, y: 0.661), .init(x: 0.320, y: 0.575),
-                    .init(x: 0.318, y: 0.500), .init(x: 0.320, y: 0.425),
-                    .init(x: 0.339, y: 0.339), .init(x: 0.394, y: 0.244)])
-            ]
-        default:
-            strokes = [
-                .init(id: 1, checkpoints: [
-                    .init(x: 0.50, y: 0.20), .init(x: 0.50, y: 0.50), .init(x: 0.50, y: 0.80)])
-            ]
-        }
-        return LetterStrokes(letter: letter, checkpointRadius: 0.04, strokes: strokes)
-    }
-
+    /// Hardcoded stroke definition for the no-assets fallback. Only the
+    /// "A" path is reachable; bundle scan covers every other letter.
     func fallbackSampleLetter() -> LetterAsset {
-        LetterAsset(id: "A", name: "A",
-                    audioFiles: ["A1.mp3"], strokes: defaultStrokes(for: "A"))
+        let strokes = LetterStrokes(letter: "A", checkpointRadius: 0.04, strokes: [
+            .init(id: 1, checkpoints: [
+                .init(x: 0.58, y: 0.04), .init(x: 0.52, y: 0.13),
+                .init(x: 0.42, y: 0.30), .init(x: 0.34, y: 0.44),
+                .init(x: 0.25, y: 0.60), .init(x: 0.15, y: 0.78), .init(x: 0.03, y: 0.99)]),
+            .init(id: 2, checkpoints: [
+                .init(x: 0.58, y: 0.04), .init(x: 0.66, y: 0.17),
+                .init(x: 0.73, y: 0.35), .init(x: 0.78, y: 0.48),
+                .init(x: 0.82, y: 0.60), .init(x: 0.90, y: 0.79), .init(x: 0.97, y: 0.98)]),
+            .init(id: 3, checkpoints: [
+                .init(x: 0.26, y: 0.60), .init(x: 0.553, y: 0.60), .init(x: 0.82, y: 0.60)])
+        ])
+        return LetterAsset(id: "A", name: "A",
+                           audioFiles: ["A1.mp3"], strokes: strokes)
     }
 
     func logValidationIssues(_ letters: [LetterAsset], issues: [ValidationIssue]) {

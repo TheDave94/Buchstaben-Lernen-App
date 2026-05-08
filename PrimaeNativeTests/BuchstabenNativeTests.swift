@@ -281,20 +281,18 @@ import AVFoundation
 
     @Test func overlayQueue_displaysFirstEnqueuedImmediately() {
         let q = OverlayQueueManager()
-        q.enqueue(.frechetScore(0.82))
-        if case .frechetScore(let s) = q.currentOverlay {
-            #expect(abs(s - 0.82) < 1e-6)
-        } else {
-            #expect(Bool(false), "Expected .frechetScore as current overlay")
+        q.enqueue(.kpOverlay)
+        if case .kpOverlay = q.currentOverlay {} else {
+            #expect(Bool(false), "Expected .kpOverlay as current overlay")
         }
     }
 
     @Test func overlayQueue_secondOverlayWaitsBehindFirst() {
         let q = OverlayQueueManager()
-        q.enqueue(.frechetScore(0.5))
         q.enqueue(.kpOverlay)
+        q.enqueue(.celebration(stars: 3))
         // First overlay still on screen, second is queued.
-        if case .frechetScore = q.currentOverlay {} else {
+        if case .kpOverlay = q.currentOverlay {} else {
             #expect(Bool(false), "First overlay must be displayed before second is queued")
         }
         #expect(q.pendingCount == 1)
@@ -302,11 +300,11 @@ import AVFoundation
 
     @Test func overlayQueue_dismissAdvancesToNext() {
         let q = OverlayQueueManager()
-        q.enqueue(.frechetScore(0.5))
         q.enqueue(.kpOverlay)
+        q.enqueue(.celebration(stars: 3))
         q.dismiss()
-        // After dismissing the head, the queue should advance to the kpOverlay.
-        if case .kpOverlay = q.currentOverlay {} else {
+        // After dismissing the head, the queue should advance to the celebration.
+        if case .celebration = q.currentOverlay {} else {
             #expect(Bool(false), "Dismiss must advance to the next queued overlay")
         }
         #expect(q.pendingCount == 0)

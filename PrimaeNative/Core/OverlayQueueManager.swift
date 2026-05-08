@@ -18,11 +18,6 @@ import Foundation
 /// overlays (paperTransfer, celebration, retrievalPrompt) use
 /// `defaultDuration == nil` so they wait for an explicit `.dismiss()`.
 enum CanvasOverlay: Equatable, Sendable {
-    /// Quick Fréchet-score confirmation chip. Currently unused — the
-    /// inline feedback cards in SchuleWorldView render this signal
-    /// instead. Retained so the chip can be reintroduced without an
-    /// enum-shape migration.
-    case frechetScore(CGFloat)
     /// KP (Knowledge of Performance) overlay with the reference path
     /// drawn over the child's trace.
     case kpOverlay
@@ -45,7 +40,6 @@ enum CanvasOverlay: Equatable, Sendable {
     /// `.dismiss()` advances the queue.
     var defaultDuration: TimeInterval? {
         switch self {
-        case .frechetScore:       return 1.5
         case .kpOverlay:          return 3.0
         case .recognitionBadge:   return 3.0
         case .paperTransfer:      return nil   // modal: wait for child

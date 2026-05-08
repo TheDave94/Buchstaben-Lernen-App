@@ -24,7 +24,6 @@ private func sampleResult(_ predicted: String = "A",
     // MARK: - Default duration table
 
     @Test func defaultDuration_perCase() {
-        #expect(CanvasOverlay.frechetScore(0.5).defaultDuration == 1.5)
         #expect(CanvasOverlay.kpOverlay.defaultDuration == 3.0)
         #expect(CanvasOverlay.recognitionBadge(sampleResult()).defaultDuration == 3.0)
         #expect(CanvasOverlay.paperTransfer(letter: "A").defaultDuration == nil)
@@ -201,7 +200,7 @@ private func sampleResult(_ predicted: String = "A",
         // queue state.
         let fakeSleeper: Sleeper = { _ in await Task.yield() }
         let q = OverlayQueueManager(sleeper: fakeSleeper)
-        q.enqueue(.frechetScore(0.5), duration: 0.05)
+        q.enqueue(.kpOverlay, duration: 0.05)
         q.enqueue(.celebration(stars: 1))
         // Yield until the auto-advance Task has had a chance to run.
         // Two yields covers the dispatch → sleep-await → resume → advance

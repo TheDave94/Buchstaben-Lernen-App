@@ -70,13 +70,10 @@ nonisolated struct ConfidenceCalibrator: Sendable {
     // MARK: - Calibration
 
     /// Calibrate a raw model confidence. Pass an empty
-    /// `historicalFormScores` to skip the boost branch. `expectedLetter`
-    /// is currently unused but reserved for per-letter calibration
-    /// tables.
+    /// `historicalFormScores` to skip the boost branch.
     func calibrate(
         rawConfidence: CGFloat,
         predictedLetter: String,
-        expectedLetter: String? = nil,
         historicalFormScores: [CGFloat] = []
     ) -> CGFloat {
         var confidence = max(0, min(1, rawConfidence))
