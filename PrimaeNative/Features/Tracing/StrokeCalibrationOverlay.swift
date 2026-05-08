@@ -470,13 +470,35 @@ struct StrokeCalibrationOverlay: View {
     private func anchorsLayer(in size: CGSize) -> some View {
         if let anchors = anchorsPerStroke[activeStroke], !anchors.isEmpty {
             let color = strokeColors[activeStroke % strokeColors.count]
-            // Snap-indicator rings — yellow with black outline so the
-            // user can clearly see where each anchor was resolved on
-            // the actual skeleton. When the ring sits visibly off the
-            // anchor centre, the BFS picked a nearby branch and a
-            // small drag pulls the anchor onto the intended one.
-            ForEach(Array(snappedAnchorPoints().enumerated()),
-                    id: \.offset) { _, snapped in
+            let snapPts = snappedAnchorPoints()
+            // Drift lines — yellow line from anchor centre to its
+            // snapped skeleton position whenever the gap is bigger
+            // than ~5 % of the bbox. Without these, the snap ring
+            // sits under the 28 pt anchor marker and the offset is
+            // invisible in screenshots.
+            ForEach(Array(zip(anchors.indices, snapPts).enumerated()),
+                    id: \.offset) { _, pair in
+                let (i, snapped) = pair
+                let anchorScreen = glyphToScreen(anchors[i], in: size)
+                let snappedScreen = glyphToScreen(snapped, in: size)
+                let dx = anchorScreen.x - snappedScreen.x
+                let dy = anchorScreen.y - snappedScreen.y
+                let dist = (dx * dx + dy * dy).squareRoot()
+                if dist > 5 {
+                    Path { p in
+                        p.move(to: anchorScreen)
+                        p.addLine(to: snappedScreen)
+                    }
+                    .stroke(Color.yellow, style: StrokeStyle(lineWidth: 2,
+                                                              dash: [4, 3]))
+                    .allowsHitTesting(false)
+                }
+            }
+            // Snap-indicator dots — yellow with black outline at each
+            // snapped skeleton position, always rendered so static
+            // screenshots show exactly where the BFS resolved each
+            // anchor on the centerline.
+            ForEach(Array(snapPts.enumerated()), id: \.offset) { _, snapped in
                 let snappedScreen = glyphToScreen(snapped, in: size)
                 Circle()
                     .fill(Color.yellow)
