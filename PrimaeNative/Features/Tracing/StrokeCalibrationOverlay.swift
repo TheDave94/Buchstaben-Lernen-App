@@ -791,13 +791,30 @@ private struct ExportSheet: View {
                     .bold()
 
                 ScrollView {
-                    Text(text)
-                        .font(.system(size: 11, design: .monospaced))
-                        .textSelection(.enabled)
+                    if text.count > 20_000 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("\(text.count) Zeichen — Vorschau gekürzt. "
+                                 + "Über »Teilen« die ganze Datei sichern.")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Text(String(text.prefix(2_000))
+                                 + "\n\n… (\(text.count - 2_000) weitere Zeichen)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(.systemGray6))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        Text(text)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.systemGray6))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
                 }
 
                 HStack(spacing: 12) {
