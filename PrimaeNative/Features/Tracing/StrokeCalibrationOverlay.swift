@@ -31,7 +31,6 @@ struct StrokeCalibrationOverlay: View {
     enum CalibrationMode: String, CaseIterable {
         case points = "Anker"
         case drag = "Ziehen"
-        case add = "Punkt"
         case delete = "Löschen"
     }
 
@@ -109,14 +108,6 @@ struct StrokeCalibrationOverlay: View {
 
     @ViewBuilder
     private func addTapLayer(in size: CGSize) -> some View {
-        if mode == .add {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { location in
-                    let glyph = screenToGlyph(location, in: size)
-                    addCheckpoint(glyph)
-                }
-        }
         if mode == .points {
             Color.clear
                 .contentShape(Rectangle())
@@ -459,15 +450,6 @@ struct StrokeCalibrationOverlay: View {
                 // above the glyph render area for all demo letters.
                 .padding(.top, 50)
 
-            if mode == .add {
-                Text("Tippe um Punkt zu setzen")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-
             if mode == .points {
                 let count = anchorsPerStroke[activeStroke]?.count ?? 0
                 let hint = count < 2
@@ -649,13 +631,6 @@ struct StrokeCalibrationOverlay: View {
 
     // MARK: - Editing
 
-    private func addCheckpoint(_ pt: CGPoint) {
-        while editableStrokes.count <= activeStroke {
-            editableStrokes.append([])
-        }
-        editableStrokes[activeStroke].append(pt)
-    }
-
     private func deleteCheckpoint(si: Int, ci: Int) {
         guard editableStrokes.indices.contains(si),
               editableStrokes[si].indices.contains(ci) else { return }
@@ -681,7 +656,8 @@ struct StrokeCalibrationOverlay: View {
     private func addStroke() {
         editableStrokes.append([])
         activeStroke = editableStrokes.count - 1
-        mode = .add
+        anchorsPerStroke[activeStroke] = []
+        mode = .points
     }
 
     private func deleteStroke(_ idx: Int) {
