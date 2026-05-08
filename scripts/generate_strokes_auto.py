@@ -390,10 +390,14 @@ ALL_LETTERS = (
 # Rasterisation
 # -----------------------------------------------------------------------------
 
-def rasterize(letter: str, font_path: Path) -> np.ndarray:
+def rasterize(letter: str, font_path: Path,
+              features: list[str] | None = None) -> np.ndarray:
     """Render `letter` to a SIZE×SIZE binary mask using uniform
     font-metric scaling (em-square = 80 % of canvas height, baseline
     placed at `pad + ascent`). Mirrors `PrimaeLetterRenderer.glyphPath`.
+    `features` is an optional list of OpenType feature tags (e.g.
+    `["ss02"]`) to enable alternate glyphs — used for k's curled
+    variant.
     """
     avail = int(SIZE * (1 - 2 * PAD))
     probe_size = 1000
@@ -412,8 +416,10 @@ def rasterize(letter: str, font_path: Path) -> np.ndarray:
     x = (SIZE - w) // 2 - bbox[0]
     baseline_y = int(SIZE * PAD + ascent)
     img = Image.new("L", (SIZE, SIZE), 255)
-    ImageDraw.Draw(img).text((x, baseline_y), letter, font=font,
-                             fill=0, anchor="ls")
+    text_kwargs = {"font": font, "fill": 0, "anchor": "ls"}
+    if features:
+        text_kwargs["features"] = features
+    ImageDraw.Draw(img).text((x, baseline_y), letter, **text_kwargs)
     return np.array(img) < 128
 
 
