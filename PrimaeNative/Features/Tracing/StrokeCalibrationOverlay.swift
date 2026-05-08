@@ -59,9 +59,24 @@ struct StrokeCalibrationOverlay: View {
                 if mode == .points { anchorsLayer(in: size) }
                 controlsLayer
             }
-            .onAppear { loadFromVM() }
-            .onChange(of: vm.currentLetterName) { loadFromVM() }
-            .onChange(of: vm.schriftArt) { loadFromVM(force: true) }
+            .onAppear {
+                loadFromVM()
+                bootstrapAnchorsFromExistingStrokes()
+            }
+            .onChange(of: vm.currentLetterName) {
+                loadFromVM()
+                bootstrapAnchorsFromExistingStrokes()
+            }
+            .onChange(of: vm.schriftArt) {
+                loadFromVM(force: true)
+                bootstrapAnchorsFromExistingStrokes()
+            }
+            .onChange(of: mode) {
+                // Re-bootstrap when entering Anker mode after a manual
+                // delete-all so the user always has a starting set of
+                // draggable anchors.
+                if mode == .points { bootstrapAnchorsFromExistingStrokes() }
+            }
         }
         .sheet(isPresented: $showExport) {
             ExportSheet(text: exportText, letterName: vm.currentLetterName)
@@ -191,12 +206,13 @@ struct StrokeCalibrationOverlay: View {
         while editableStrokes.count <= activeStroke {
             editableStrokes.append([])
         }
+        // 0–1 anchors: leave whatever line is currently shown alone.
+        // The user is mid-calibration; replacing the visible stroke
+        // with a single dot would feel like the work disappeared.
+        guard anchors.count >= 2 else { return }
         guard let raw = vm.glyphRelativeStrokes,
               let skel = raw.skeleton, !skel.isEmpty,
-              let adj = raw.skeletonAdj, adj.count == skel.count,
-              anchors.count >= 2 else {
-            // Fewer than two anchors: just keep the anchors so the
-            // user sees what they've set so far.
+              let adj = raw.skeletonAdj, adj.count == skel.count else {
             editableStrokes[activeStroke] = anchors
             return
         }
@@ -236,6 +252,25 @@ struct StrokeCalibrationOverlay: View {
             ? resampleUniformBbox(pathPts, count: denseCount)
             : pathPts
         editableStrokes[activeStroke] = dense
+    }
+
+    /// For each stroke that already has checkpoints loaded but no
+    /// anchors set, sample 5 anchor positions evenly across the
+    /// existing chain (first, 25 %, 50 %, 75 %, last). Lets the user
+    /// drop into Anker mode and refine an existing stroke by dragging
+    /// 5 anchors instead of starting from scratch.
+    private func bootstrapAnchorsFromExistingStrokes() {
+        for (i, cps) in editableStrokes.enumerated() {
+            guard !cps.isEmpty else { continue }
+            if let existing = anchorsPerStroke[i], !existing.isEmpty { continue }
+            let n = cps.count
+            if n <= 5 {
+                anchorsPerStroke[i] = cps
+            } else {
+                let indices = [0, n / 4, n / 2, 3 * n / 4, n - 1]
+                anchorsPerStroke[i] = indices.map { cps[$0] }
+            }
+        }
     }
 
     /// Snapped skeleton positions for the current stroke's anchors —
@@ -353,22 +388,74 @@ struct StrokeCalibrationOverlay: View {
 
     @ViewBuilder
     private func strokePathsLayer(in size: CGSize) -> some View {
-        // Active stroke renders as a solid colored line so it's easy to
-        // see whether the polyline matches the underlying ink. Other
-        // strokes' starts still appear as faded chips for switch.
+        // Active stroke renders as a high-contrast cyan line with a
+        // black halo so it stays visible even where it overlaps the
+        // red anchor markers. A small triangle marks the end so
+        // direction is unambiguous in screenshots.
         if editableStrokes.indices.contains(activeStroke) {
             let stroke = editableStrokes[activeStroke]
-            let color = strokeColors[activeStroke % strokeColors.count]
+            let pts = stroke.map { glyphToScreen($0, in: size) }
+            // Halo (drawn first, wider) — separates the line visually
+            // from anchor fills so the route is readable in a static
+            // screenshot regardless of stroke colour.
             Path { path in
-                let pts = stroke.map { glyphToScreen($0, in: size) }
                 guard let first = pts.first else { return }
                 path.move(to: first)
                 for pt in pts.dropFirst() { path.addLine(to: pt) }
             }
-            .stroke(color.opacity(0.85),
-                    style: StrokeStyle(lineWidth: 6,
+            .stroke(Color.black.opacity(0.55),
+                    style: StrokeStyle(lineWidth: 9,
                                        lineCap: .round,
                                        lineJoin: .round))
+            Path { path in
+                guard let first = pts.first else { return }
+                path.move(to: first)
+                for pt in pts.dropFirst() { path.addLine(to: pt) }
+            }
+            .stroke(Color.cyan,
+                    style: StrokeStyle(lineWidth: 5,
+                                       lineCap: .round,
+                                       lineJoin: .round))
+            // Direction arrowhead at the last point.
+            if pts.count >= 2 {
+                directionArrow(from: pts[pts.count - 2], to: pts[pts.count - 1])
+            }
+        }
+    }
+
+    /// Small triangle pointing along the line's terminal segment so
+    /// stroke direction is obvious in a screenshot.
+    @ViewBuilder
+    private func directionArrow(from a: CGPoint, to b: CGPoint) -> some View {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len = (dx * dx + dy * dy).squareRoot()
+        if len > 1 {
+            let ux = dx / len, uy = dy / len
+            let arrowLen: CGFloat = 14
+            let arrowWidth: CGFloat = 9
+            let tip = b
+            let base = CGPoint(x: b.x - ux * arrowLen, y: b.y - uy * arrowLen)
+            let perpX = -uy, perpY = ux
+            let left = CGPoint(x: base.x + perpX * arrowWidth,
+                               y: base.y + perpY * arrowWidth)
+            let right = CGPoint(x: base.x - perpX * arrowWidth,
+                                y: base.y - perpY * arrowWidth)
+            Path { p in
+                p.move(to: tip)
+                p.addLine(to: left)
+                p.addLine(to: right)
+                p.closeSubpath()
+            }
+            .fill(Color.cyan)
+            .overlay(
+                Path { p in
+                    p.move(to: tip)
+                    p.addLine(to: left)
+                    p.addLine(to: right)
+                    p.closeSubpath()
+                }
+                .stroke(Color.black.opacity(0.6), lineWidth: 1.5)
+            )
         }
     }
 
@@ -383,14 +470,18 @@ struct StrokeCalibrationOverlay: View {
     private func anchorsLayer(in size: CGSize) -> some View {
         if let anchors = anchorsPerStroke[activeStroke], !anchors.isEmpty {
             let color = strokeColors[activeStroke % strokeColors.count]
-            // Snap-indicator rings (rendered first so anchor markers
-            // sit above them).
+            // Snap-indicator rings — yellow with black outline so the
+            // user can clearly see where each anchor was resolved on
+            // the actual skeleton. When the ring sits visibly off the
+            // anchor centre, the BFS picked a nearby branch and a
+            // small drag pulls the anchor onto the intended one.
             ForEach(Array(snappedAnchorPoints().enumerated()),
                     id: \.offset) { _, snapped in
                 let snappedScreen = glyphToScreen(snapped, in: size)
                 Circle()
-                    .stroke(Color.white.opacity(0.9), lineWidth: 2)
-                    .frame(width: 12, height: 12)
+                    .fill(Color.yellow)
+                    .frame(width: 14, height: 14)
+                    .overlay(Circle().stroke(.black, lineWidth: 2))
                     .position(snappedScreen)
                     .allowsHitTesting(false)
             }
