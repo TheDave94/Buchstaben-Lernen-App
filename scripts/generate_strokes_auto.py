@@ -876,8 +876,18 @@ def prune_retraces(seg: list[tuple[int, int]],
     valid sub-150° angle. Here we walk forward and, whenever a later
     point is within `near_thr_px` of an earlier one, drop everything
     strictly between them.
+
+    Closed-loop paths (start == end, e.g. O bowl) are passed through
+    unchanged — every closed cycle would otherwise collapse to its
+    two endpoints.
     """
     if len(seg) < 4:
+        return seg
+    closed_loop = (
+        math.hypot(seg[-1][0] - seg[0][0], seg[-1][1] - seg[0][1])
+        < near_thr_px
+    )
+    if closed_loop:
         return seg
     keep = [True] * len(seg)
     i = 0
