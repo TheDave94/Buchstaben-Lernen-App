@@ -121,7 +121,7 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "D": [
         {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TR", "MR", "BR"]},
+        {"kind": "continuous", "anchors": ["TL", "MR", "BL"]},
     ],
     "E": [
         {"kind": "walk", "from": "TL", "to": "BL"},
@@ -193,7 +193,7 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "T", "to": "B"},
     ],
     "U": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
+        {"kind": "continuous", "anchors": ["TL", "BL", "BR", "TR"]},
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "V": [
@@ -263,10 +263,11 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         # from the vertical descender, so we anchor the upper-diagonal
         # tip + junction directly via tuples to keep the BFS within
         # the diagonal component.
-        {"kind": "continuous", "anchors": [(0.90, 0.45), (0.40, 0.50), "BR"]},
+        {"kind": "walk", "from": (0.90, 0.45), "to": (0.40, 0.50)},
+        {"kind": "walk", "from": (0.40, 0.50), "to": "BR"},
     ],
     "l": [
-        {"kind": "walk", "from": "T", "to": "B"},
+        {"kind": "walk", "from": "T", "to": "BR"},
     ],
     "m": [
         # Worksheet shows the start arrow at TL going down — the BFS
@@ -299,11 +300,11 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BL"},
     ],
     "t": [
-        {"kind": "walk", "from": "T", "to": "B"},
+        {"kind": "walk", "from": "T", "to": "BR"},
         {"kind": "walk", "from": "ML", "to": "MR"},
     ],
     "u": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
+        {"kind": "continuous", "anchors": ["TL", "BL", "BR", "TR"]},
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "v": [
@@ -317,7 +318,7 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BL"},
     ],
     "y": [
-        {"kind": "walk", "from": "TL", "to": "BC"},
+        {"kind": "walk", "from": "TL", "to": "C"},
         {"kind": "walk", "from": "TR", "to": "BL"},
     ],
     "z": [
@@ -367,7 +368,7 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "ß": [
         {"kind": "continuous",
-         "anchors": ["BL", "TL", "TR", "MR", "ML", "MR", "BR"]},
+         "anchors": ["BL", "TL", "TR", "MR", "ML", "MR", "BC"]},
     ],
 }
 
