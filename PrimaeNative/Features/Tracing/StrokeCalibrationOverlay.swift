@@ -139,19 +139,30 @@ struct StrokeCalibrationOverlay: View {
     /// constraining anchor in the wrong region forces the BFS to take
     /// a different route between its neighbours.
     private func addAnchor(_ pt: CGPoint) {
+        // Snap the tap to the nearest skeleton pixel immediately so
+        // the anchor marker sits ON the skeleton — eliminates the
+        // gap between anchor centre and the BFS-walked line that made
+        // earlier calibrations look like points were "skipped".
+        let snapped = snapPointToSkeleton(pt) ?? pt
         var anchors = anchorsPerStroke[activeStroke] ?? []
-        // If the tap lands close to an existing anchor-to-anchor
-        // segment, insert the new anchor between those two — lets the
-        // user disambiguate W / M / V corners after seeing where the
-        // BFS routed without rebuilding the whole stroke from scratch.
-        if let insertIdx = closestSegmentInsertIndex(for: pt, in: anchors,
+        if let insertIdx = closestSegmentInsertIndex(for: snapped, in: anchors,
                                                      threshold: 0.04) {
-            anchors.insert(pt, at: insertIdx)
+            anchors.insert(snapped, at: insertIdx)
         } else {
-            anchors.append(pt)
+            anchors.append(snapped)
         }
         anchorsPerStroke[activeStroke] = anchors
         rebuildStrokeFromAnchors()
+    }
+
+    /// Resolve a tapped/dragged anchor position to the nearest pixel
+    /// on the skeleton point cloud. Returns nil when the bundle has
+    /// no skeleton metadata (caller falls back to the tap position).
+    private func snapPointToSkeleton(_ pt: CGPoint) -> CGPoint? {
+        guard let raw = vm.glyphRelativeStrokes,
+              let skel = raw.skeleton, !skel.isEmpty else { return nil }
+        let i = nearestSkelIndex(pt, in: skel)
+        return CGPoint(x: skel[i].x, y: skel[i].y)
     }
 
     /// Returns the index at which to insert `pt` so that it falls on
@@ -264,12 +275,16 @@ struct StrokeCalibrationOverlay: View {
             guard !cps.isEmpty else { continue }
             if let existing = anchorsPerStroke[i], !existing.isEmpty { continue }
             let n = cps.count
+            let sampled: [CGPoint]
             if n <= 5 {
-                anchorsPerStroke[i] = cps
+                sampled = cps
             } else {
                 let indices = [0, n / 4, n / 2, 3 * n / 4, n - 1]
-                anchorsPerStroke[i] = indices.map { cps[$0] }
+                sampled = indices.map { cps[$0] }
             }
+            // Snap each bootstrapped anchor onto the skeleton so the
+            // marker and the BFS line coincide from the start.
+            anchorsPerStroke[i] = sampled.map { snapPointToSkeleton($0) ?? $0 }
         }
     }
 
@@ -531,7 +546,13 @@ struct StrokeCalibrationOverlay: View {
                                 anchorsPerStroke[activeStroke]?[idx] =
                                     screenToGlyph(value.location, in: size)
                             }
-                            .onEnded { _ in
+                            .onEnded { value in
+                                // Snap the released position to the
+                                // skeleton so the anchor marker ends
+                                // up exactly where the BFS will walk.
+                                let final = screenToGlyph(value.location, in: size)
+                                anchorsPerStroke[activeStroke]?[idx] =
+                                    snapPointToSkeleton(final) ?? final
                                 rebuildStrokeFromAnchors()
                             }
                     )
