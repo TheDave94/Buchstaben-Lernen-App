@@ -7,18 +7,6 @@ the bottom.
 
 ## Asset generators
 
-### `generate_pbm.py`
-Render a P4 PBM bitmap of a glyph from `Primae-Regular.otf` for use as
-the letter's background image.
-
-```bash
-pip install Pillow
-python3 scripts/generate_pbm.py A B C   # specific letters
-python3 scripts/generate_pbm.py         # all letters
-```
-
-Output: `PrimaeNative/Resources/Letters/<X>/<X>.pbm`
-
 ### `generate_strokes.py`
 Generate `strokes.json` skeleton tracing paths for letters that don't
 ship hand-calibrated checkpoints. Coordinates are normalised 0–1
@@ -108,14 +96,11 @@ git commit --no-verify
 
 ## Adding a new letter
 
-1. `python3 scripts/generate_pbm.py X` — produces `<X>.pbm`.
-2. `python3 scripts/generate_strokes.py` — drafts `strokes.json`.
+1. `python3 scripts/generate_strokes.py` — drafts `strokes.json`.
    **Review** the order and direction against a handwriting reference.
-3. `python3 scripts/generate_letter_audio.py --letter X` — auditions
+2. `python3 scripts/generate_letter_audio.py --letter X` — auditions
    all bundled voices for the phoneme. Pick one, copy its files into
    `PrimaeNative/Resources/Letters/X/`.
-4. Sync the PBM into the Xcode resource group:
-   `cp PrimaeNative/Resources/Letters/X/X.pbm Primae/Primae/Letters/X/`
-5. Open the calibration overlay in DEBUG mode on-device to refine the
+3. Open the calibration overlay in DEBUG mode on-device to refine the
    checkpoint positions interactively (the calibrator persists per-
    letter overrides into Application Support).

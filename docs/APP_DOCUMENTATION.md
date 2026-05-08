@@ -139,7 +139,6 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | `FreeformWordList.swift` | small | Demo word library for freeform-word mode. |
 | `GlyphStrokeExtractor.swift` | small | CoreText path → checkpoint extraction (debug calibrator). |
 | `PrimaeLetterRenderer.swift` | small | OTF-based glyph render → UIImage. SchriftArt-aware. |
-| `PBMLoader.swift` | small | PBM bitmap fallback. |
 | `LetterAnimationGuide.swift` | small | Per-stroke animation timing model. |
 | `CalibrationStore.swift` | small | Per-letter user-calibrated stroke persistence. |
 
@@ -208,7 +207,7 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 * `Letters/<X>/strokes.json` — 26 uppercase + 26 lowercase + Ä Ö Ü ß. Demo set (A F I K L M O) plus full alphabet placeholders for completion.
 * `Letters/<X>/strokes_variant.json` — alternate stroke order (uppercase F, H, lowercase r).
 * `Letters/<X>/strokes_schulschrift.json` — Schreibschrift script strokes for the demo letters.
-* `Letters/<X>/<X>.pbm` + `<X><n>.mp3` — bitmap glyph fallback + recorded audio variants.
+* `Letters/<X>/<X><n>.mp3` — recorded letter-name + phoneme audio variants.
 * `Fonts/Primae-*.otf` (12 weights) + `PlaywriteAT-Regular.ttf` + `PlaywriteAT-OFL.txt` (license).
 * `ML/GermanLetterRecognizer.mlpackage/` — CoreML model + manifest.
 * `letter_set.json` — `active_letters: ["A","F","I","K","L","M","O"]`.

@@ -61,10 +61,9 @@ enum ThesisCondition: String, Codable, CaseIterable, Sendable {
 }
 
 /// Persists a per-install participant UUID for stable A/B cohort
-/// assignment. Storage layering: iCloud-KVS is primary (survives
-/// reinstall on the same Apple ID); UserDefaults is the offline /
-/// no-entitlement fallback. Both sources are read on first access,
-/// the valid UUID wins, and writes hit both stores.
+/// assignment. Survives app updates via UserDefaults; a clean reinstall
+/// resets the assignment (acceptable for thesis pilots — no iCloud
+/// entitlement is configured).
 enum ParticipantStore {
     private static let key = "de.flamingistan.primae.participantId"
     private static let enrolledKey = "de.flamingistan.primae.thesisEnrolled"
@@ -76,89 +75,45 @@ enum ParticipantStore {
 
     /// Researcher-set thesis arm. When non-nil, `defaultForInstall`
     /// returns this verbatim, bypassing the byte-modulo assignment.
-    /// Mirrored to iCloud-KVS for reinstall persistence.
     static var conditionOverride: ThesisCondition? {
         get {
-            let icloud = NSUbiquitousKeyValueStore.default
-            if let raw = icloud.string(forKey: conditionOverrideKey),
-               let arm = ThesisCondition(rawValue: raw) {
-                return arm
-            }
-            if let raw = UserDefaults.standard.string(forKey: conditionOverrideKey),
-               let arm = ThesisCondition(rawValue: raw) {
-                return arm
-            }
-            return nil
+            guard let raw = UserDefaults.standard.string(forKey: conditionOverrideKey) else { return nil }
+            return ThesisCondition(rawValue: raw)
         }
         set {
-            let icloud = NSUbiquitousKeyValueStore.default
             if let value = newValue {
                 UserDefaults.standard.set(value.rawValue, forKey: conditionOverrideKey)
-                icloud.set(value.rawValue, forKey: conditionOverrideKey)
             } else {
                 UserDefaults.standard.removeObject(forKey: conditionOverrideKey)
-                icloud.removeObject(forKey: conditionOverrideKey)
             }
-            icloud.synchronize()
         }
     }
 
     /// The participant's UUID, generated on first call and persisted.
-    /// Reads iCloud-KVS first so reinstall preserves the assignment.
     static var participantId: UUID {
-        let icloud = NSUbiquitousKeyValueStore.default
-        // Pre-existing values win over fresh generation.
-        if let raw = icloud.string(forKey: key),
-           let uuid = UUID(uuidString: raw) {
-            // Backfill local UserDefaults so offline reads still work.
-            if UserDefaults.standard.string(forKey: key) != raw {
-                UserDefaults.standard.set(raw, forKey: key)
-            }
-            return uuid
-        }
         if let raw = UserDefaults.standard.string(forKey: key),
            let uuid = UUID(uuidString: raw) {
-            // Promote local-only UUID to iCloud so a future reinstall
-            // sees the same cohort assignment.
-            icloud.set(raw, forKey: key)
-            icloud.synchronize()
             return uuid
         }
-        // First-ever launch.
         let new = UUID()
-        let raw = new.uuidString
-        UserDefaults.standard.set(raw, forKey: key)
-        icloud.set(raw, forKey: key)
-        icloud.synchronize()
+        UserDefaults.standard.set(new.uuidString, forKey: key)
         return new
     }
 
     /// Whether this install participates in the thesis A/B study.
     /// When `false`, `TracingDependencies.live` pins the condition to
-    /// `.threePhase`. Mirrored to iCloud-KVS for reinstall persistence.
+    /// `.threePhase`.
     static var isEnrolled: Bool {
-        get {
-            // Prefer iCloud if it has a value; otherwise fall back to local.
-            let icloud = NSUbiquitousKeyValueStore.default
-            if icloud.object(forKey: enrolledKey) != nil {
-                return icloud.bool(forKey: enrolledKey)
-            }
-            return UserDefaults.standard.bool(forKey: enrolledKey)
-        }
+        get { UserDefaults.standard.bool(forKey: enrolledKey) }
         set {
             let wasEnrolled = isEnrolled
             UserDefaults.standard.set(newValue, forKey: enrolledKey)
-            let icloud = NSUbiquitousKeyValueStore.default
-            icloud.set(newValue, forKey: enrolledKey)
             // Stamp the enrolment timestamp the first time enrolment
             // flips on. Don't overwrite on toggle-off-then-on or
             // legitimate study data would be filtered as pre-enrolment.
             if newValue, !wasEnrolled, enrolledAt == nil {
-                let now = Date()
-                UserDefaults.standard.set(now, forKey: enrolledAtKey)
-                icloud.set(now.timeIntervalSince1970, forKey: enrolledAtKey)
+                UserDefaults.standard.set(Date(), forKey: enrolledAtKey)
             }
-            icloud.synchronize()
         }
     }
 
@@ -166,11 +121,6 @@ enum ParticipantStore {
     /// enrolled installs. The CSV exporter discards phase-session rows
     /// older than this date.
     static var enrolledAt: Date? {
-        let icloud = NSUbiquitousKeyValueStore.default
-        let icloudTs = icloud.double(forKey: enrolledAtKey)
-        if icloudTs > 0 {
-            return Date(timeIntervalSince1970: icloudTs)
-        }
-        return UserDefaults.standard.object(forKey: enrolledAtKey) as? Date
+        UserDefaults.standard.object(forKey: enrolledAtKey) as? Date
     }
 }

@@ -36,19 +36,6 @@ import AVFoundation
         for i in 1..<mapped.count { #expect(mapped[i] >= mapped[i-1]) }
     }
 
-    @Test func letterRepositoryFallsBackFromInvalidJsonToFolderScan() throws {
-        let fs = try TempResourceFS()
-        defer { fs.cleanup() }
-        try fs.write(relative: "A_strokes.json", content: "{not-json")
-        try fs.write(relative: "A/A.pbm", content: "P1\n1 1\n0")
-        try fs.write(relative: "A/A1.mp3", content: "dummy")
-        let repo = LetterRepository(resources: fs.provider)
-        let letters = repo.loadLetters()
-        #expect(letters.first?.name == "A")
-        #expect(letters.first?.imageName == "A/A.pbm")
-        #expect(letters.first?.audioFiles == ["A/A1.mp3"])
-    }
-
     @Test func letterRepositoryFallsBackToSampleWhenNoAssetsExist() {
         let repo = LetterRepository(resources: LocalMockResourceProvider(urls: [], byRelativePath: [:]), cache: NullLetterCache())
         let letters = repo.loadLetters()
@@ -61,7 +48,6 @@ import AVFoundation
         let fs = try TempResourceFS()
         defer { fs.cleanup() }
         try fs.write(relative: "M_strokes.json", content: validJSON(letter: "M"))
-        try fs.write(relative: "M/M.pbm", content: "P1\n1 1\n0")
         try fs.write(relative: "M/Möwe.mp3", content: "ok")
         try fs.write(relative: "M/Meer.mp3", content: "ok")
         try fs.write(relative: "M/hmmm.wav", content: "stale")

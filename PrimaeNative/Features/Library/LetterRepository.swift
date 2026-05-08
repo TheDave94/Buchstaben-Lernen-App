@@ -126,16 +126,9 @@ final class LetterRepository {
     func loadWithErrors() -> Result<[LetterAsset], LetterRepositoryError> {
         let stroked = loadBundledStrokeLettersWithValidation()
         if !stroked.letters.isEmpty {
-            logValidationIssues(stroked.issues)
+            logValidationIssues(stroked.letters, issues: stroked.issues)
             persistToCache(stroked.letters)
             return .success(stroked.letters)
-        }
-
-        let folderOnly = loadBundledFolderLettersWithValidation()
-        if !folderOnly.letters.isEmpty {
-            logValidationIssues(folderOnly.issues)
-            persistToCache(folderOnly.letters)
-            return .success(folderOnly.letters)
         }
 
         // Bundle failed — try cache as fallback.
@@ -144,7 +137,7 @@ final class LetterRepository {
             return .success(cached)
         }
 
-        let allIssues = (stroked.issues + folderOnly.issues).map { "\($0.letter): \($0.message)" }
+        let allIssues = stroked.issues.map { "\($0.letter): \($0.message)" }
         if !allIssues.isEmpty {
             return .failure(.partialLoad(loaded: 0, issues: allIssues))
         }
@@ -171,7 +164,7 @@ final class LetterRepository {
     /// generator's output convention changes (dev builds reuse
     /// `CFBundleVersion` between commits, so a JSON-shape refactor
     /// would otherwise keep serving the old cached strokes).
-    private static let cacheBundleVersionKey = "PrimaeNative.LetterCache.bundleVersion.v8"
+    private static let cacheBundleVersionKey = "PrimaeNative.LetterCache.bundleVersion.v9"
 
     /// Build identifier — `CFBundleShortVersionString-CFBundleVersion`.
     /// Returns nil in unit-test hosts so the fast path defers to the
@@ -258,22 +251,7 @@ private extension LetterRepository {
                 : folderName
             guard !base.isEmpty, base.count <= 2 else { return nil }
 
-            // PBM glyph fallback (legacy installs); the vector path
-            // is preferred at render time. Walks both the case-
-            // suffixed folder and the bare name so legacy uppercase
-            // folders without a suffix still resolve.
             let imageBase = isLowercaseFolder ? "\(base)_l" : base
-            let imageCandidates = [
-                "Letters/\(imageBase)/\(base).pbm",
-                "\(imageBase)/\(base).pbm",
-                "\(base).pbm"
-            ]
-            let imageName = imageCandidates.first(where: { bundleHasResource(at: $0) }) ?? "\(base).pbm"
-
-            if !bundleHasResource(at: imageName) {
-                issues.append(.init(letter: base,
-                    message: "Missing PBM image (expected \(imageCandidates.joined(separator: " or ")))"))
-            }
 
             let allAudio = findAudioAssets(for: base)
             if allAudio.isEmpty {
@@ -300,50 +278,12 @@ private extension LetterRepository {
             let variants: [String]? = variantIDs.isEmpty ? nil : variantIDs
             return LetterAsset(id: imageBase, name: displayName,
                                baseLetter: baseLetter, letterCase: letterCase,
-                               imageName: imageName, audioFiles: audio, strokes: strokes,
+                               audioFiles: audio, strokes: strokes,
                                variants: variants,
                                phonemeAudioFiles: phonemeAudio)
         }.sorted { $0.name < $1.name }
 
         return (letters, issues)
-    }
-
-    func loadBundledFolderLettersWithValidation() -> ValidationResult {
-        let pbms = resources.allResourceURLs().filter { $0.pathExtension.lowercased() == "pbm" }
-        var issues: [ValidationIssue] = []
-
-        let letters = pbms.compactMap { pbm -> LetterAsset? in
-            let normalized = pbm.path.replacingOccurrences(of: "\\", with: "/")
-            let comps      = normalized.split(separator: "/")
-            guard comps.count >= 2 else { return nil }
-
-            let folder = String(comps[comps.count - 2])
-            let file   = String(comps.last ?? "")
-            guard folder.count == 1 || file.count == 5 else { return nil }
-
-            let id            = folder.count == 1 ? folder : String(file.prefix(1))
-            let imageRelative = "Letters/\(id)/\(id).pbm"
-            let allAudio      = findAudioAssets(for: id)
-            if allAudio.isEmpty {
-                issues.append(.init(letter: id, message: "No audio files found for folder-scanned letter"))
-                return nil
-            }
-            let (audio, phonemeAudio) = partitionPhonemeAudio(allAudio)
-
-            return LetterAsset(
-                id: id, name: id.uppercased(),
-                imageName: bundleHasResource(at: imageRelative) ? imageRelative : "\(id)/\(id).pbm",
-                audioFiles: audio,
-                strokes: defaultStrokes(for: id.uppercased()),
-                phonemeAudioFiles: phonemeAudio
-            )
-        }
-
-        let deduped = Dictionary(grouping: letters, by: { $0.id.uppercased() })
-            .compactMap { $0.value.first }
-            .sorted { $0.name < $1.name }
-
-        return (deduped, issues)
     }
 
     /// Split into letter-name vs phoneme populations.
@@ -529,19 +469,18 @@ private extension LetterRepository {
     }
 
     func fallbackSampleLetter() -> LetterAsset {
-        LetterAsset(id: "A", name: "A", imageName: "A.pbm",
+        LetterAsset(id: "A", name: "A",
                     audioFiles: ["A1.mp3"], strokes: defaultStrokes(for: "A"))
     }
 
-    func logValidationIssues(_ issues: [ValidationIssue]) {
-        // Most issues are benign — stroke JSONs ship for every letter
-        // but audio/PBM only for the recorded subset. Summary at
-        // .info; per-letter detail at .debug.
+    func logValidationIssues(_ letters: [LetterAsset], issues: [ValidationIssue]) {
+        // Stroke JSONs ship for every letter; audio recordings exist
+        // only for the recorded subset. Summary at .info; per-letter
+        // detail at .debug.
         guard !issues.isEmpty else { return }
         let missingAudio = issues.filter { $0.message.contains("No audio files") }.count
-        let missingPBM   = issues.filter { $0.message.contains("Missing PBM") }.count
-        let otherCount   = issues.count - missingAudio - missingPBM
-        repoLogger.info("Asset validation summary: \(issues.count) issues (missing audio: \(missingAudio), missing PBM: \(missingPBM), other: \(otherCount)). Per-letter details at debug level.")
+        let otherCount   = issues.count - missingAudio
+        repoLogger.info("Asset validation: \(letters.count) letters loaded, \(missingAudio)/\(letters.count) without audio recordings, \(otherCount) other issue(s). Per-letter details at debug level.")
         for issue in issues {
             repoLogger.debug("Asset validation [\(issue.letter)]: \(issue.message)")
         }

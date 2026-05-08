@@ -35,7 +35,7 @@ private final class InMemoryCache: LetterCacheStoring {
 }
 
 private func makeSampleLetter(_ id: String = "A") -> LetterAsset {
-    LetterAsset(id: id, name: id.uppercased(), imageName: "\(id).pbm", audioFiles: ["\(id).mp3"],
+    LetterAsset(id: id, name: id.uppercased(), audioFiles: ["\(id).mp3"],
         strokes: LetterStrokes(letter: id.uppercased(), checkpointRadius: 0.05,
             strokes: [StrokeDefinition(id: 1, checkpoints: [Checkpoint(x: 0.5, y: 0.5)])]))
 }
@@ -92,7 +92,7 @@ private func makeSampleLetter(_ id: String = "A") -> LetterAsset {
         defer { try? FileManager.default.removeItem(at: tempURL) }
         let strokes = LetterStrokes(letter: "M", checkpointRadius: 0.07,
             strokes: [StrokeDefinition(id: 1, checkpoints: [Checkpoint(x: 0.1, y: 0.9), Checkpoint(x: 0.5, y: 0.1)])])
-        let letter = LetterAsset(id: "M", name: "M", imageName: "M.pbm", audioFiles: ["M.mp3"], strokes: strokes)
+        let letter = LetterAsset(id: "M", name: "M", audioFiles: ["M.mp3"], strokes: strokes)
         try cache.save([letter])
         let loaded = try cache.load()
         #expect(abs(loaded[0].strokes.checkpointRadius - 0.07) < 1e-9)

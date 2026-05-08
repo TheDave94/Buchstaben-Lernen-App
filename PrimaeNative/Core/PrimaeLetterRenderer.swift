@@ -4,7 +4,7 @@ import CoreText
 import CoreGraphics
 
 /// Renders a single letter using the Primae-Regular OTF font into a UIImage.
-/// Produces the same dark-gray-on-transparent style as PBMLoader.
+/// Dark-gray glyph on transparent background.
 /// Results are cached by letter+size to avoid redundant renders.
 /// Cache is capped at 52 entries (26 letters × 2 common display sizes) to
 /// prevent unbounded memory growth across letter/layout changes.

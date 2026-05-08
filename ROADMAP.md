@@ -57,9 +57,8 @@ Detail sections follow with effort, file list, citations, failure modes per item
    - Drag-place each checkpoint visually over the rendered glyph
    - The calibration store writes to `Application Support/PrimaeNative/calibration/`
    - Export the calibrated checkpoints into the bundle's `Resources/Letters/<x>/strokes.json`
-2. **PBM bitmap fallback.** Optional but the validator complains without it.
-3. **Audio takes.** 3 mp3 recordings of the letter name (`<x>1.mp3`, `<x>2.mp3`, `<x>3.mp3`).
-4. **Phoneme audio.** P6 infrastructure is in place; you need 3 phoneme takes per letter. See Appendix C in `docs/APP_DOCUMENTATION.md` for the convention and ElevenLabs prompt template.
+2. **Audio takes.** 3 mp3 recordings of the letter name (`<x>1.mp3`, `<x>2.mp3`, `<x>3.mp3`).
+3. **Phoneme audio.** P6 infrastructure is in place; you need 3 phoneme takes per letter. See Appendix C in `docs/APP_DOCUMENTATION.md` for the convention and ElevenLabs prompt template.
 
 **Per-letter budget.** ~2–3 hours, mostly the calibration session + audio editing.
 
@@ -157,7 +156,7 @@ These are worthwhile additions once the thesis ships. None of them is a thesis-b
 ### F1 — App Store readiness pass
 **Effort:** L · **Priority:** P1 (post-thesis)
 
-Privacy Manifest (`PrivacyInfo.xcprivacy`) declaring `UserDefaults`, `NSUbiquitousKeyValueStore`, `Application Support` writes, on-device CoreML usage. App icon set at every required size. iPad screenshots (5–7 stills covering Schule / Werkstatt / Fortschritte / Eltern-Dashboard). Marketing copy in German + English. App Store Connect "Privacy Practices" section: "Daten werden auf dem Gerät gespeichert; keine Übertragung." TestFlight build with crash-reporting opt-in.
+Privacy Manifest (`PrivacyInfo.xcprivacy`) declaring `UserDefaults`, `Application Support` writes, on-device CoreML usage. App icon set at every required size. iPad screenshots (5–7 stills covering Schule / Werkstatt / Fortschritte / Eltern-Dashboard). Marketing copy in German + English. App Store Connect "Privacy Practices" section: "Daten werden auf dem Gerät gespeichert; keine Übertragung." TestFlight build with crash-reporting opt-in.
 
 ### F2 — Lowercase letters + diacritics complete
 **Effort:** XL (subsumes T1's full-alphabet scope) · **Priority:** P1 (post-thesis if T1 ships demo set only)

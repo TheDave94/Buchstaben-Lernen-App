@@ -73,7 +73,6 @@ private struct CodableLetterAsset: Codable {
     let name: String
     let baseLetter: String?
     let letterCase: LetterAsset.LetterCase?
-    let imageName: String
     let audioFiles: [String]
     let strokes: LetterStrokes
     let variants: [String]?
@@ -83,7 +82,6 @@ private struct CodableLetterAsset: Codable {
         name       = asset.name
         baseLetter = asset.baseLetter
         letterCase = asset.letterCase
-        imageName  = asset.imageName
         audioFiles = asset.audioFiles
         strokes    = asset.strokes
         variants   = asset.variants
@@ -95,7 +93,6 @@ private struct CodableLetterAsset: Codable {
             name: name,
             baseLetter: baseLetter ?? name.uppercased(),
             letterCase: letterCase ?? .upper,
-            imageName: imageName,
             audioFiles: audioFiles,
             strokes: strokes,
             variants: variants

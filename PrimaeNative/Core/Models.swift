@@ -6,7 +6,6 @@ struct LetterAsset: Identifiable, Equatable {
     /// Grouping key — always the uppercase letter (e.g. "A" for both "A" and "a").
     let baseLetter: String
     let letterCase: LetterCase
-    let imageName: String
     let audioFiles: [String]
     /// Phoneme recordings — the *sound* the letter makes (/a/ as in
     /// *Affe*) rather than its name (/aː/). Cycled when the parent
@@ -23,14 +22,13 @@ struct LetterAsset: Identifiable, Equatable {
     }
 
     /// Convenience init preserving backward compatibility (defaults to .upper, no variants).
-    init(id: String, name: String, imageName: String,
+    init(id: String, name: String,
          audioFiles: [String], strokes: LetterStrokes,
          phonemeAudioFiles: [String] = []) {
         self.id = id
         self.name = name
         self.baseLetter = name.uppercased()
         self.letterCase = .upper
-        self.imageName = imageName
         self.audioFiles = audioFiles
         self.phonemeAudioFiles = phonemeAudioFiles
         self.strokes = strokes
@@ -39,7 +37,7 @@ struct LetterAsset: Identifiable, Equatable {
 
     /// Full init with case specification and optional variants.
     init(id: String, name: String, baseLetter: String,
-         letterCase: LetterCase, imageName: String,
+         letterCase: LetterCase,
          audioFiles: [String], strokes: LetterStrokes,
          variants: [String]? = nil,
          phonemeAudioFiles: [String] = []) {
@@ -47,7 +45,6 @@ struct LetterAsset: Identifiable, Equatable {
         self.name = name
         self.baseLetter = baseLetter
         self.letterCase = letterCase
-        self.imageName = imageName
         self.audioFiles = audioFiles
         self.phonemeAudioFiles = phonemeAudioFiles
         self.strokes = strokes

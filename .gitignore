@@ -38,3 +38,7 @@ vcpkg/
 # `.local` convention — per-machine tool allowlists, never team-shared.
 # A team-wide `settings.json` would be tracked; this repo doesn't use one.
 .claude/settings.local.json
+
+# Python build artifacts
+__pycache__/
+*.pyc

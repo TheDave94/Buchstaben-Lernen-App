@@ -10,8 +10,7 @@ of the glyph; the arc needs a `via` near its rightmost point).
 Algorithm
 ---------
 1. Rasterize the letter from `Primae-Regular.otf` at 512×512 with 10% pad
-   (matches `scripts/generate_pbm.py` so results align with what the app
-   actually renders).
+   (matches what the app actually renders via PrimaeLetterRenderer).
 2. Skeletonize the glyph mask (Zhang-Suen via scikit-image).
 3. For each stroke spec: BFS along the skeleton from the nearest skeleton
    pixel to `start`, through each `via`, to the nearest pixel to `end`.
@@ -51,8 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FONT_PATH = REPO_ROOT / "design-system/fonts/Primae-Regular.otf"
 OUTPUT_BASE = REPO_ROOT / "PrimaeNative/Resources/Letters"
 
-# Raster size matches `generate_pbm.py` so checkpoints land where the
-# rendered glyph (512×512 PBM ghost) actually is.
+# Raster size of the rendered glyph used for skeleton extraction.
 SIZE = 512
 PAD = 0.10
 DEFAULT_RADIUS = 0.06

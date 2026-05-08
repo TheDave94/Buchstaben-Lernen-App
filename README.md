@@ -130,7 +130,7 @@ PrimaeNative/          Swift Package (library)
 Primae/             Xcode host app (imports PrimaeNative)
 PrimaeNativeTests/     Swift Testing + XCTest suite
 docs/                      Architecture, thesis foundation, code invariants
-scripts/                   PBM, stroke, audio, app-icon generators + git hooks
+scripts/                   Stroke, audio, app-icon, colorset generators + git hooks
 ```
 
 ## Documentation

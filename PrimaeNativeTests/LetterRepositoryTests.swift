@@ -35,12 +35,10 @@ private func makeJSON(letter: String, radius: Double = 0.06) -> Data {
 private extension MockResourceProvider {
     func addLetter(_ base: String) {
         let jsonName = "\(base)_strokes.json"
-        let pbmName  = "\(base).pbm"
         let tmp = FileManager.default.temporaryDirectory
         let jsonURL = tmp.appendingPathComponent(jsonName)
         try? makeJSON(letter: base).write(to: jsonURL)
         resources[jsonName] = jsonURL
-        add(pbmName)
         let pathURL = URL(fileURLWithPath: "/mock/\(base)/\(base)1.mp3")
         resources["\(base)/\(base)1.mp3"] = pathURL
     }
@@ -61,7 +59,6 @@ struct LetterRepositoryTests {
         let letter = repo.loadLetters().first!
         #expect(!letter.name.isEmpty)
         #expect(!letter.audioFiles.isEmpty)
-        #expect(!letter.imageName.isEmpty)
     }
 
     @Test func invalidJSON_isSkipped_returnsAtLeastFallback() {
@@ -124,9 +121,9 @@ struct LetterRepositoryTests {
     }
 
     @Test func letterAsset_equatable() {
-        let a = LetterAsset(id: "A", name: "A", imageName: "A.pbm",
+        let a = LetterAsset(id: "A", name: "A",
                             audioFiles: ["A.mp3"], strokes: LetterStrokes(letter: "A", checkpointRadius: 0.06, strokes: []))
-        let b = LetterAsset(id: "A", name: "A", imageName: "A.pbm",
+        let b = LetterAsset(id: "A", name: "A",
                             audioFiles: ["A.mp3"], strokes: LetterStrokes(letter: "A", checkpointRadius: 0.06, strokes: []))
         #expect(a == b)
     }
