@@ -98,12 +98,19 @@ public final class TracingViewModel {
         }
         guard let raw else { return nil }
         let cellSize = grid.cells[index].frame.size
+        // Word mode: `cellSize` is a per-character frame from
+        // CTLineGetGlyphRuns, which is already snug around the ink.
+        // Skip the 10 % padding `normalizedGlyphRect` applies for
+        // single-letter cells so checkpoints align with the rendered
+        // word image instead of sitting ~5 % inside it.
+        let cellPad: CGFloat = grid.wordRendering == nil ? 0.10 : 0.0
         guard cellSize.width > 0, cellSize.height > 0,
               let gr = PrimaeLetterRenderer.normalizedGlyphRect(
                 for: cellLetter, canvasSize: cellSize,
                 schriftArt: schriftArt,
                 openTypeFeatures: PrimaeLetterRenderer.openTypeFeatures(
-                    for: cellLetter, schriftArt: schriftArt, variant: showingVariant)) else {
+                    for: cellLetter, schriftArt: schriftArt, variant: showingVariant),
+                pad: cellPad) else {
             return raw
         }
         let mapped = raw.strokes.map { def in

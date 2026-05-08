@@ -19,6 +19,7 @@ public enum PrimaeLetterRenderer {
         let height:     Int
         let schriftArt: SchriftArt
         let features:   String
+        let padBp:      Int
     }
 
     private static var rectCache: [RectCacheKey: CGRect] = [:]
@@ -200,16 +201,25 @@ public enum PrimaeLetterRenderer {
     /// Stroke JSON checkpoints are stored bbox-relative; the canvas maps
     /// them through this rect to get cell-fraction screen positions.
     /// Memoized — the canvas calls this 3× per 60 fps frame.
+    /// `pad` is the fraction of `canvasSize.height` left as margin
+    /// above and below the glyph. Default 0.10 matches single-letter
+    /// cells (where the canvas adds 10 % padding around the ghost).
+    /// In word mode the cell is the per-character frame from
+    /// `renderWord`, which already fills the frame with no padding —
+    /// callers there pass `pad: 0` so checkpoints align with the ink.
     public static func normalizedGlyphRect(for letter: String, canvasSize: CGSize,
                                            schriftArt: SchriftArt = .druckschrift,
-                                           openTypeFeatures: [String] = []) -> CGRect? {
+                                           openTypeFeatures: [String] = [],
+                                           pad: CGFloat = 0.10) -> CGRect? {
         guard !isRunningTests, !letter.isEmpty,
               canvasSize.width > 0, canvasSize.height > 0 else { return nil }
+        let padBp = Int((pad * 1000).rounded())
         let key = RectCacheKey(letter: letter,
                                width: Int(canvasSize.width),
                                height: Int(canvasSize.height),
                                schriftArt: schriftArt,
-                               features: openTypeFeatures.sorted().joined(separator: ","))
+                               features: openTypeFeatures.sorted().joined(separator: ","),
+                               padBp: padBp)
         if let cached = rectCache[key] { return cached }
         let probe: CGFloat = 800
         guard let font = makeFont(size: probe, fontName: schriftArt.fontFileName,
@@ -217,7 +227,6 @@ public enum PrimaeLetterRenderer {
               var glyph = getGlyph(for: letter, in: font) else { return nil }
         let bbox = CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, nil, 1)
         guard bbox.width > 0, bbox.height > 0 else { return nil }
-        let pad: CGFloat = 0.10
         let availH = canvasSize.height * (1 - 2 * pad)
         let ascent = CTFontGetAscent(font)
         let descent = CTFontGetDescent(font)
