@@ -110,7 +110,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "B": [
         {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TR", "MR", "ML", "MR", "BR"]},
+        {"kind": "continuous", "anchors": ["TL", "TR", "MR", "ML"]},
+        {"kind": "continuous", "anchors": ["ML", "MR", "BR", "BL"]},
     ],
     "C": [
         {"kind": "walk", "from": "TR", "to": "BR"},
@@ -131,7 +132,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "ML", "to": "MR"},
     ],
     "G": [
-        {"kind": "continuous", "anchors": ["TR", "L", "B", "MR"]},
+        {"kind": "continuous", "anchors": ["TR", "L", "B", "BR"]},
+        {"kind": "walk", "from": "BR", "to": "MR"},
         {"kind": "walk", "from": "MR", "to": "C"},
     ],
     "H": [
@@ -147,8 +149,12 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "K": [
         {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "walk", "from": "TR", "to": "ML"},
-        {"kind": "walk", "from": "ML", "to": "BR"},
+        # K's diagonals are a separate skeleton component from the
+        # vertical (ML lands on the vertical component, breaking BFS
+        # bridge). Anchor the junction directly via a tuple inside the
+        # diagonals component.
+        {"kind": "walk", "from": "TR", "to": (0.30, 0.50)},
+        {"kind": "walk", "from": (0.30, 0.50), "to": "BR"},
     ],
     "L": [
         {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
@@ -164,7 +170,7 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "P": [
         {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TR", "MR", "ML"]},
+        {"kind": "continuous", "anchors": ["TL", "TR", "MR", "ML"]},
     ],
     "Q": [
         {"kind": "loop", "start": "T", "direction": "ccw"},
@@ -172,8 +178,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "R": [
         {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TR", "MR", "ML"]},
-        {"kind": "walk", "from": "MR", "to": "BR"},
+        {"kind": "continuous", "anchors": ["TL", "TR", "MR", "ML"]},
+        {"kind": "walk", "from": "ML", "to": "BR"},
     ],
     "S": [
         {"kind": "walk", "from": "TR", "to": "BL"},
@@ -183,7 +189,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "T", "to": "B"},
     ],
     "U": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR", "TR"]},
+        {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
+        {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "V": [
         {"kind": "continuous", "anchors": ["TL", "BC", "TR"]},
@@ -197,11 +204,12 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "Y": [
         {"kind": "walk", "from": "TL", "to": "C"},
-        {"kind": "walk", "from": "TR", "to": "C"},
-        {"kind": "walk", "from": "C",  "to": "B"},
+        {"kind": "continuous", "anchors": ["TR", "C", "B"]},
     ],
     "Z": [
-        {"kind": "continuous", "anchors": ["TL", "TR", "BL", "BR"]},
+        {"kind": "walk", "from": "TL", "to": "TR"},
+        {"kind": "walk", "from": "TR", "to": "BL"},
+        {"kind": "walk", "from": "BL", "to": "BR"},
     ],
 
     # ─── Lowercase ────────────────────────────────────────────────────
@@ -235,27 +243,36 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "BR", "to": "ML"},
     ],
     "i": [
-        {"kind": "walk", "from": "T", "to": "B"},
+        # Body starts below the dot (~y=0.3); using "T" lands on the
+        # dot, which is a separate skeleton component from the body.
+        {"kind": "walk", "from": (0.50, 0.30), "to": "B"},
         {"kind": "loop", "start": (0.5, 0.05), "direction": "ccw"},
     ],
     "j": [
-        {"kind": "walk", "from": "T", "to": "BL"},
+        # Same dot/body component-bridge issue as i.
+        {"kind": "walk", "from": (0.50, 0.30), "to": "BL"},
         {"kind": "loop", "start": (0.5, 0.05), "direction": "ccw"},
     ],
     "k": [
         {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "walk", "from": "TR", "to": "ML"},
-        {"kind": "walk", "from": "ML", "to": "BR"},
+        # Lowercase k's diagonals are a separate skeleton component
+        # from the vertical descender, so we anchor the upper-diagonal
+        # tip + junction directly via tuples to keep the BFS within
+        # the diagonal component.
+        {"kind": "continuous", "anchors": [(0.90, 0.45), (0.40, 0.50), "BR"]},
     ],
     "l": [
         {"kind": "walk", "from": "T", "to": "B"},
     ],
     "m": [
-        {"kind": "continuous",
-         "anchors": ["BL", "TL", "BC", "TC", "BR", "TR"]},
+        # Worksheet shows the start arrow at TL going down — the BFS
+        # walks down the left vertical, then up-arch-down to BC, then
+        # up-arch-down to BR.
+        {"kind": "continuous", "anchors": ["TL", "BL", "BC", "BR"]},
     ],
     "n": [
-        {"kind": "continuous", "anchors": ["BL", "TL", "TR", "BR"]},
+        # Same as m: start at TL going down, then up-arch-down to BR.
+        {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
     ],
     "o": [
         {"kind": "loop", "start": "T", "direction": "ccw"},
@@ -269,8 +286,10 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "r": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "walk", "from": "TL", "to": "TR"},
+        # One continuous stroke: down the vertical, retrace up, hook
+        # right. BFS handles the retrace as the shortest path on the
+        # skeleton.
+        {"kind": "continuous", "anchors": ["TL", "BL", "TR"]},
     ],
     "s": [
         {"kind": "walk", "from": "TR", "to": "BL"},
@@ -280,7 +299,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "ML", "to": "MR"},
     ],
     "u": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR", "TR"]},
+        {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
+        {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "v": [
         {"kind": "continuous", "anchors": ["TL", "BC", "TR"]},
@@ -297,7 +317,9 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BL"},
     ],
     "z": [
-        {"kind": "continuous", "anchors": ["TL", "TR", "BL", "BR"]},
+        {"kind": "walk", "from": "TL", "to": "TR"},
+        {"kind": "walk", "from": "TR", "to": "BL"},
+        {"kind": "walk", "from": "BL", "to": "BR"},
     ],
 
     # ─── Diaeresis & ß ────────────────────────────────────────────────
@@ -316,7 +338,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "Ü": [
         {"kind": "continuous",
-         "anchors": [(0.05, 0.18), (0.05, 0.95), (0.95, 0.95), (0.95, 0.18)]},
+         "anchors": [(0.05, 0.18), (0.05, 0.95), (0.95, 0.95)]},
+        {"kind": "walk", "from": (0.95, 0.18), "to": (0.95, 0.95)},
         {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
         {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
     ],
@@ -333,8 +356,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "ü": [
         {"kind": "continuous",
-         "anchors": [(0.05, 0.30), (0.05, 0.95),
-                     (0.95, 0.95), (0.95, 0.30)]},
+         "anchors": [(0.05, 0.30), (0.05, 0.95), (0.95, 0.95)]},
+        {"kind": "walk", "from": (0.95, 0.30), "to": (0.95, 0.95)},
         {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
         {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
     ],
@@ -950,17 +973,35 @@ def walk_loop_at(anchor,
                  ) -> list[tuple[int, int]] | None:
     """Walk a closed cycle on the skeleton component containing the
     anchor's nearest skeleton pixel, then enforce direction (CCW = the
-    Austrian writing convention for O / o). Returns None if the
-    component isn't a cycle."""
+    Austrian writing convention for O / o). Falls back to a chain walk
+    (endpoint-to-endpoint) when the component is a degenerate non-loop
+    — i/j dots skeletonize to a 3–5 px line rather than a true cycle,
+    so requiring a closed cycle would drop the dot entirely."""
     seed = resolve_anchor(anchor, skel, bbox)
     if seed is None:
         return None
-    if seed not in adj or len(adj[seed]) < 2:
+    if seed not in adj:
         return None
-    path = _walk_cycle_ccw(seed, adj)
-    if direction == "cw":
-        path = list(reversed(path))
-    return path
+    if len(adj[seed]) >= 2:
+        path = _walk_cycle_ccw(seed, adj)
+        if direction == "cw":
+            path = list(reversed(path))
+        return path
+    # Non-cycle (degree-1 endpoint): walk the whole connected chain
+    # by collecting the component, then return endpoint-to-endpoint.
+    component: set[tuple[int, int]] = {seed}
+    stack = [seed]
+    while stack:
+        cur = stack.pop()
+        for n in adj[cur]:
+            if n not in component:
+                component.add(n)
+                stack.append(n)
+    endpoints = [p for p in component if len(adj[p]) == 1]
+    if len(endpoints) < 2:
+        return [seed]
+    path = bfs_path(endpoints[0], endpoints[1], adj)
+    return path if path else [seed]
 
 
 def strokes_from_override(letter: str,
