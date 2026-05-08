@@ -124,8 +124,58 @@ struct StrokeCalibrationOverlay: View {
     /// constraining anchor in the wrong region forces the BFS to take
     /// a different route between its neighbours.
     private func addAnchor(_ pt: CGPoint) {
-        anchorsPerStroke[activeStroke, default: []].append(pt)
+        var anchors = anchorsPerStroke[activeStroke] ?? []
+        // If the tap lands close to an existing anchor-to-anchor
+        // segment, insert the new anchor between those two — lets the
+        // user disambiguate W / M / V corners after seeing where the
+        // BFS routed without rebuilding the whole stroke from scratch.
+        if let insertIdx = closestSegmentInsertIndex(for: pt, in: anchors,
+                                                     threshold: 0.04) {
+            anchors.insert(pt, at: insertIdx)
+        } else {
+            anchors.append(pt)
+        }
+        anchorsPerStroke[activeStroke] = anchors
         rebuildStrokeFromAnchors()
+    }
+
+    /// Returns the index at which to insert `pt` so that it falls on
+    /// the existing anchor segment closest to it — but only when the
+    /// perpendicular distance to that segment is within `threshold`
+    /// (bbox-relative). Returns nil when the tap is far from every
+    /// segment, signalling the caller to append instead.
+    private func closestSegmentInsertIndex(for pt: CGPoint,
+                                           in anchors: [CGPoint],
+                                           threshold: CGFloat) -> Int? {
+        guard anchors.count >= 2 else { return nil }
+        var bestIdx: Int? = nil
+        var bestDist = CGFloat.infinity
+        for i in 0..<(anchors.count - 1) {
+            let d = pointSegmentDistance(pt: pt,
+                                         a: anchors[i],
+                                         b: anchors[i + 1])
+            if d < bestDist {
+                bestDist = d
+                bestIdx = i + 1   // insert after anchor i
+            }
+        }
+        guard let idx = bestIdx, bestDist <= threshold else { return nil }
+        return idx
+    }
+
+    private func pointSegmentDistance(pt: CGPoint, a: CGPoint, b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        let lenSq = dx * dx + dy * dy
+        guard lenSq > 0 else {
+            let ex = pt.x - a.x; let ey = pt.y - a.y
+            return (ex * ex + ey * ey).squareRoot()
+        }
+        let t = max(0, min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / lenSq))
+        let projX = a.x + t * dx
+        let projY = a.y + t * dy
+        let ex = pt.x - projX; let ey = pt.y - projY
+        return (ex * ex + ey * ey).squareRoot()
     }
 
     private func removeAnchor(strokeIdx: Int, anchorIdx: Int) {
@@ -178,8 +228,12 @@ struct StrokeCalibrationOverlay: View {
                                        y: skel[snappedIdx[i + 1]].y))
             }
         }
+        // Density proportional to skeleton path length so long
+        // strokes (M, W, ß) preview as smoothly as the auto-generator
+        // bundle output. Capped at 200 to keep redraws fast on iPad.
+        let denseCount = max(40, min(200, pathPts.count / 4))
         let dense = pathPts.count >= 2
-            ? resampleUniformBbox(pathPts, count: 40)
+            ? resampleUniformBbox(pathPts, count: denseCount)
             : pathPts
         editableStrokes[activeStroke] = dense
     }
@@ -243,10 +297,11 @@ struct StrokeCalibrationOverlay: View {
             }
             guard fullPath.count >= 2 else { return stroke }
             let pathPts = fullPath.map { CGPoint(x: skel[$0].x, y: skel[$0].y) }
-            // ~1 checkpoint per skeleton-pixel-stride; use a conservative
-            // 40-point dense sample so the proximity tracker has plenty
-            // of waypoints regardless of stroke length.
-            return resampleUniformBbox(pathPts, count: 40)
+            // Density scales with skeleton-pixel count so long strokes
+            // (M, W) get more checkpoints than short ones (i body), at
+            // a similar density to the bundled auto-generator output.
+            let count = max(40, min(200, pathPts.count / 4))
+            return resampleUniformBbox(pathPts, count: count)
         }
     }
 
@@ -353,11 +408,19 @@ struct StrokeCalibrationOverlay: View {
                     .shadow(color: .black.opacity(0.5), radius: 2)
                     .position(screenPt)
                     .gesture(
-                        DragGesture(minimumDistance: 4).onChanged { value in
-                            anchorsPerStroke[activeStroke]?[idx] =
-                                screenToGlyph(value.location, in: size)
-                            rebuildStrokeFromAnchors()
-                        }
+                        DragGesture(minimumDistance: 4)
+                            .onChanged { value in
+                                // Move the anchor visually but don't
+                                // rebuild yet — re-snapping on every
+                                // tick flickers the line at junctions
+                                // where the nearest skeleton pixel
+                                // jumps between branches.
+                                anchorsPerStroke[activeStroke]?[idx] =
+                                    screenToGlyph(value.location, in: size)
+                            }
+                            .onEnded { _ in
+                                rebuildStrokeFromAnchors()
+                            }
                     )
                     .onTapGesture {
                         if mode == .delete {
