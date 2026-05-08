@@ -29,7 +29,7 @@ struct StrokeCalibrationOverlay: View {
     }
 
     enum CalibrationMode: String, CaseIterable {
-        case points = "Punkte"
+        case points = "Anker"
         case drag = "Ziehen"
         case add = "Punkt"
         case delete = "Löschen"
@@ -160,26 +160,51 @@ struct StrokeCalibrationOverlay: View {
             return
         }
         let snappedIdx = anchors.map { nearestSkelIndex($0, in: skel) }
-        var fullPath: [Int] = []
+        // Build a list of skeleton-pixel CGPoints, guaranteeing each
+        // anchor's snapped pixel is present in the output even when
+        // the BFS leg between two consecutive anchors fails (anchors
+        // in disconnected components) or collapses to a single pixel
+        // (two anchors snapping to the same skeleton point). Without
+        // this guarantee the resampler can drop or skip anchors and
+        // the rebuilt stroke would visibly miss them.
+        var pathPts: [CGPoint] = [
+            CGPoint(x: skel[snappedIdx[0]].x, y: skel[snappedIdx[0]].y)
+        ]
         for i in 0..<(snappedIdx.count - 1) {
             let leg = bfsAlongSkeleton(from: snappedIdx[i],
                                        to: snappedIdx[i + 1],
                                        adj: adj)
-            if leg.isEmpty { continue }
-            if i == 0 {
-                fullPath.append(contentsOf: leg)
+            if leg.count >= 2 {
+                pathPts.append(contentsOf: leg.dropFirst().map {
+                    CGPoint(x: skel[$0].x, y: skel[$0].y)
+                })
             } else {
-                fullPath.append(contentsOf: leg.dropFirst())
+                // BFS empty (degenerate or disconnected). Include the
+                // next anchor's pixel directly; the resampler will
+                // linear-interpolate, which at least keeps the anchor
+                // present and visible in the output.
+                pathPts.append(CGPoint(x: skel[snappedIdx[i + 1]].x,
+                                       y: skel[snappedIdx[i + 1]].y))
             }
         }
-        let pathPts = fullPath.map { CGPoint(x: skel[$0].x, y: skel[$0].y) }
-        // Dense final sample: 40 evenly-spaced checkpoints for the
-        // tracker; each anchor stays roughly in place because BFS
-        // walks the actual centerline.
         let dense = pathPts.count >= 2
             ? resampleUniformBbox(pathPts, count: 40)
             : pathPts
         editableStrokes[activeStroke] = dense
+    }
+
+    /// Snapped skeleton positions for the current stroke's anchors —
+    /// rendered as small ring indicators so the user can see where
+    /// each anchor was resolved onto the centerline (and judge whether
+    /// the BFS picked the intended skeleton branch).
+    private func snappedAnchorPoints() -> [CGPoint] {
+        guard let raw = vm.glyphRelativeStrokes,
+              let skel = raw.skeleton, !skel.isEmpty,
+              let anchors = anchorsPerStroke[activeStroke] else { return [] }
+        return anchors.map {
+            let i = nearestSkelIndex($0, in: skel)
+            return CGPoint(x: skel[i].x, y: skel[i].y)
+        }
     }
 
     private func nearestSkelIndex(_ p: CGPoint, in skel: [Checkpoint]) -> Int {
@@ -302,12 +327,27 @@ struct StrokeCalibrationOverlay: View {
     }
 
     /// Anchor markers for `.points` mode — large numbered dots that
-    /// represent the user's BFS waypoints. Tap-to-delete behaviour
-    /// piggybacks on `.delete` mode for symmetry with checkpoint dots.
+    /// represent the user's BFS waypoints. Tap to delete; drag to
+    /// adjust position (rebuilds the path live as you drag). The
+    /// small ring overlay shows where the anchor resolved onto the
+    /// actual skeleton — when it sits visibly off the user's anchor,
+    /// the BFS picked a nearby branch and dragging slightly nudges
+    /// it onto the intended one.
     @ViewBuilder
     private func anchorsLayer(in size: CGSize) -> some View {
         if let anchors = anchorsPerStroke[activeStroke], !anchors.isEmpty {
             let color = strokeColors[activeStroke % strokeColors.count]
+            // Snap-indicator rings (rendered first so anchor markers
+            // sit above them).
+            ForEach(Array(snappedAnchorPoints().enumerated()),
+                    id: \.offset) { _, snapped in
+                let snappedScreen = glyphToScreen(snapped, in: size)
+                Circle()
+                    .stroke(Color.white.opacity(0.9), lineWidth: 2)
+                    .frame(width: 12, height: 12)
+                    .position(snappedScreen)
+                    .allowsHitTesting(false)
+            }
             ForEach(Array(anchors.enumerated()), id: \.offset) { idx, pt in
                 let screenPt = glyphToScreen(pt, in: size)
                 Circle()
@@ -321,6 +361,13 @@ struct StrokeCalibrationOverlay: View {
                     )
                     .shadow(color: .black.opacity(0.5), radius: 2)
                     .position(screenPt)
+                    .gesture(
+                        DragGesture(minimumDistance: 4).onChanged { value in
+                            anchorsPerStroke[activeStroke]?[idx] =
+                                screenToGlyph(value.location, in: size)
+                            rebuildStrokeFromAnchors()
+                        }
+                    )
                     .onTapGesture {
                         if mode == .delete {
                             removeAnchor(strokeIdx: activeStroke, anchorIdx: idx)
@@ -424,8 +471,8 @@ struct StrokeCalibrationOverlay: View {
             if mode == .points {
                 let count = anchorsPerStroke[activeStroke]?.count ?? 0
                 let hint = count < 2
-                    ? "Strich \(activeStroke + 1) — Punkt setzen (\(count)/min 2)"
-                    : "Strich \(activeStroke + 1) — \(count) Punkte gesetzt; weitere Punkte korrigieren den Verlauf"
+                    ? "Strich \(activeStroke + 1) — Anker setzen (\(count)/min 2)"
+                    : "Strich \(activeStroke + 1) — \(count) Anker gesetzt; ziehen oder weitere Anker korrigieren den Verlauf"
                 Text(hint)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
