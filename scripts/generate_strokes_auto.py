@@ -148,7 +148,8 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "T", "to": "B"},
     ],
     "J": [
-        {"kind": "continuous", "anchors": ["TL", "TR", "BR", "BC", "BL"]},
+        {"kind": "walk", "from": "TL", "to": "TR"},
+        {"kind": "continuous", "anchors": ["TR", "BR", "BC", "BL"]},
     ],
     "K": [
         {"kind": "walk", "from": "TL", "to": "BL"},
