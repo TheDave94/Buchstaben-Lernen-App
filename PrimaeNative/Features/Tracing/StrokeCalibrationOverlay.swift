@@ -55,7 +55,9 @@ struct StrokeCalibrationOverlay: View {
                 glyphRectDebugLayer(in: size)
                 strokePathsLayer(in: size)
                 if mode != .points { dotsLayer(in: size) }
-                anchorsLayer(in: size)
+                // Anchor markers belong to Punkte mode only — in Ziehen
+                // they sit above the dots and steal drag gestures.
+                if mode == .points { anchorsLayer(in: size) }
                 controlsLayer
             }
             .onAppear { loadFromVM() }
@@ -193,6 +195,43 @@ struct StrokeCalibrationOverlay: View {
             }
         }
         return bestIdx
+    }
+
+    /// Snap each user-drawn stroke onto the glyph's skeleton centerline.
+    /// Treats every checkpoint as a routing anchor and BFS-walks along
+    /// the skeleton between consecutive anchors — preserves stroke
+    /// start, end, direction, and general path shape while throwing
+    /// away the off-center wobble of a hand-placed point. Single-point
+    /// strokes (dots) pass through untouched. Strokes pass through
+    /// unchanged when the bundle has no skeleton metadata.
+    private func snappedToSkeleton(_ strokes: [[CGPoint]]) -> [[CGPoint]] {
+        guard let raw = vm.glyphRelativeStrokes,
+              let skel = raw.skeleton, !skel.isEmpty,
+              let adj = raw.skeletonAdj, adj.count == skel.count else {
+            return strokes
+        }
+        return strokes.map { stroke -> [CGPoint] in
+            if stroke.count < 2 { return stroke }
+            let snappedIdx = stroke.map { nearestSkelIndex($0, in: skel) }
+            var fullPath: [Int] = []
+            for i in 0..<(snappedIdx.count - 1) {
+                let leg = bfsAlongSkeleton(from: snappedIdx[i],
+                                           to: snappedIdx[i + 1],
+                                           adj: adj)
+                if leg.isEmpty { continue }
+                if i == 0 {
+                    fullPath.append(contentsOf: leg)
+                } else {
+                    fullPath.append(contentsOf: leg.dropFirst())
+                }
+            }
+            guard fullPath.count >= 2 else { return stroke }
+            let pathPts = fullPath.map { CGPoint(x: skel[$0].x, y: skel[$0].y) }
+            // ~1 checkpoint per skeleton-pixel-stride; use a conservative
+            // 40-point dense sample so the proximity tracker has plenty
+            // of waypoints regardless of stroke length.
+            return resampleUniformBbox(pathPts, count: 40)
+        }
     }
 
     private func bfsAlongSkeleton(from start: Int, to end: Int,
@@ -629,14 +668,22 @@ struct StrokeCalibrationOverlay: View {
     }
 
     private func applyToVM() {
-        vm.applyCalibration(editableStrokes)
+        let snapped = snappedToSkeleton(editableStrokes)
+        vm.applyCalibration(snapped)
+        // Replace the user's hand-placed checkpoints with the snapped
+        // result so the strokePathsLayer line redraws as the actual
+        // centerline that was applied — visual confirmation that the
+        // snap worked as intended.
+        editableStrokes = snapped
     }
 
     /// Apply the edits to the live tracker AND persist per-script.
     /// Primary save path; JSON export is the backup.
     private func saveToVM() {
-        vm.applyCalibration(editableStrokes)
-        vm.persistCalibratedStrokes(editableStrokes, for: vm.currentLetterName)
+        let snapped = snappedToSkeleton(editableStrokes)
+        vm.applyCalibration(snapped)
+        vm.persistCalibratedStrokes(snapped, for: vm.currentLetterName)
+        editableStrokes = snapped
         savedFlashUntil = Date().addingTimeInterval(1.2)
         // Clear the badge after the flash window so a second save can
         // re-flash green instead of sticking.
@@ -649,11 +696,12 @@ struct StrokeCalibrationOverlay: View {
     }
 
     private func generateJSON() -> String {
+        let snapped = snappedToSkeleton(editableStrokes)
         var dict: [String: Any] = [
             "letter": vm.currentLetterName,
             "checkpointRadius": 0.05
         ]
-        let strokesArr: [[String: Any]] = editableStrokes.enumerated().compactMap { (i, pts) in
+        let strokesArr: [[String: Any]] = snapped.enumerated().compactMap { (i, pts) in
             guard !pts.isEmpty else { return nil }
             return [
                 "id": i + 1,
