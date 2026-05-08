@@ -282,7 +282,6 @@ final class PhaseTransitionCoordinator {
                                         date: Date(),
                                         condition: vm.thesisCondition,
                                         inputDevice: device)
-        Task { [weak vm] in try? await vm?.syncCoordinator.pushAll() }
 
         let adaptSample = AdaptationSample(letter: dashboardLabel,
                                            accuracy: CGFloat(accuracy),

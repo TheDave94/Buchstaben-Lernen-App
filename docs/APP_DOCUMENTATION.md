@@ -128,7 +128,6 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | `StreakStore.swift` | 219 | Daily-streak JSON store + `RewardEvent` enum. `earnedRewards: Set<RewardEvent>` exposed on the protocol so the Fortschritte gallery can render achievement badges. Schema-versioned (W-17). |
 | `LocalNotificationScheduler.swift` | small | Daily reminder with quiet hours + streak-aware copy. |
 | `OnboardingCoordinator.swift` | 220 | 7-step state machine. U4 adds an `OnboardingVariant` enum (`.full` 7-step, `.short` 3-step) so the cohort can A/B compare onboarding length. The variant the child actually completed is locked into `OnboardingState.variantUsedRaw` on first complete (re-runs don't overwrite) so post-hoc analysis can correlate engagement metrics with the original variant. |
-| `CloudSyncService.swift` | small | Protocol + NullSyncService + SyncCoordinator (CloudKit-ready, not live). |
 | `LetterScheduler.swift` | 152 | Spaced-repetition prioritiser. Ebbinghaus-style decay. |
 | `RetrievalScheduler.swift` | 75 | P1 — every-Nth-letter cadence for retrieval-practice prompts (Roediger & Karpicke 2006). Persisted counter survives relaunch; minimum-prior-completions guard skips testing on never-seen letters. Drives `RetrievalPromptView` via `OverlayQueueManager.retrievalPrompt`. |
 | `SchemaMigrator.swift` | 65 | D2 — step-walking framework for forward-incompatible store-schema migrations. Today's stores are all at v1 and the framework is dormant; the load path can register `[Int: (Data) -> Data]` migrations when v2+ ships. |
@@ -241,7 +240,6 @@ PrimaeNativeApp
             ├── JSONParentDashboardStore
             ├── JSONOnboardingStore
             ├── LocalNotificationScheduler
-            ├── SyncCoordinator → NullSyncService
             ├── ThesisCondition.defaultForInstall
             ├── SchriftArt        (UserDefaults-persisted)
             ├── LetterOrderingStrategy   (UserDefaults-persisted)
@@ -1350,8 +1348,8 @@ rows missing `recordedAt` (D-8).
 ### 6.5 GDPR / DSGVO considerations
 
 * All stores live in **Application Support** inside the app sandbox.
-  Nothing is uploaded by default — `SyncCoordinator` is currently
-  wired to `NullSyncService`.
+  Nothing is uploaded — the app has no network sync code at all
+  (the CloudKit scaffolding was removed pre-thesis; see ROADMAP F3).
 * The participant UUID is **not derived from any device identifier**;
   it is randomly generated on first call (`UUID()` in
   `ParticipantStore.participantId`).
@@ -1730,7 +1728,7 @@ Round-4 added contract tests for the recent fixes:
 | 5 | On-device letter recognition via CoreML CNN | **SUPPORTED** | `CoreMLLetterRecognizer` loads `GermanLetterRecognizer.mlpackage` and runs Vision inference on a `Task.detached`. The .mlpackage is bundled in `Resources/ML/` and includes `Manifest.json` + `Data/`. Inference never leaves the device. |
 | 6 | Built-in A/B testing comparing adaptive vs. non-adaptive instruction | **SUPPORTED** | `ThesisCondition` provides three arms; `MovingAverageAdaptationPolicy` (adaptive) vs `FixedAdaptationPolicy` (control) selected by `TracingDependencies.live`; `ParticipantStore` persists stable UUID-derived assignment with explicit opt-in (see §4.14). Every dashboard write tags the condition so post-hoc analysis can split arms cleanly. |
 | 7 | Fading feedback implements the guidance hypothesis | **SUPPORTED** | `feedbackIntensity` is a four-step fade (1.0 → 1.0 → 0.6 → 0.0), gates audio (> 0.3) and haptics (> 0) at three call sites in `updateTouch` (see §4.2). |
-| 8 | Privacy-preserving on-device inference | **SUPPORTED** | The `CoreMLLetterRecognizer` runs entirely locally; `SyncCoordinator` is wired to `NullSyncService` so nothing is transmitted; the participant UUID is randomly generated, not derived from device identifiers; export is share-sheet driven (manual). The data flow is verifiable from `TracingDependencies.live` (see §6.5). |
+| 8 | Privacy-preserving on-device inference | **SUPPORTED** | The `CoreMLLetterRecognizer` runs entirely locally; the app contains no network sync code so nothing is transmitted; the participant UUID is randomly generated, not derived from device identifiers; export is share-sheet driven (manual). The data flow is verifiable from `TracingDependencies.live` (see §6.5). |
 
 **Partially supported claims worth flagging in the thesis:**
 

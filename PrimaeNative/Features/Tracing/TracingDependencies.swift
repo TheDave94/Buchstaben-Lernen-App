@@ -19,7 +19,6 @@ struct TracingDependencies {
     var dashboardStore: ParentDashboardStoring
     var onboardingStore: OnboardingStoring
     var notificationScheduler: LocalNotificationScheduler
-    var syncCoordinator: SyncCoordinator
     var thesisCondition: ThesisCondition
     var schriftArt: SchriftArt
     var letterOrdering: LetterOrderingStrategy
@@ -73,7 +72,6 @@ struct TracingDependencies {
         dashboardStore: ParentDashboardStoring = JSONParentDashboardStore(),
         onboardingStore: OnboardingStoring = JSONOnboardingStore(),
         notificationScheduler: LocalNotificationScheduler = LocalNotificationScheduler(),
-        syncCoordinator: SyncCoordinator? = nil,
         // Default to the full four-phase flow unless the install opted
         // into the thesis A/B study; gate lives on ThesisCondition for
         // testability.
@@ -136,16 +134,6 @@ struct TracingDependencies {
         self.dashboardStore = dashboardStore
         self.onboardingStore = onboardingStore
         self.notificationScheduler = notificationScheduler
-        // Default to NullSyncService until CloudKit is wired up.
-        if let coordinator = syncCoordinator {
-            self.syncCoordinator = coordinator
-        } else {
-            self.syncCoordinator = SyncCoordinator(
-                sync: NullSyncService(),
-                progressStore: progressStore,
-                streakStore: streakStore
-            )
-        }
         self.thesisCondition = thesisCondition
         self.schriftArt = schriftArt
         self.letterOrdering = letterOrdering

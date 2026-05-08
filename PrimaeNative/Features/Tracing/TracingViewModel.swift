@@ -493,7 +493,6 @@ public final class TracingViewModel {
     let thesisCondition: ThesisCondition
     private let onboardingStore: OnboardingStoring
     private let notificationScheduler: LocalNotificationScheduler
-    let syncCoordinator: SyncCoordinator
     var adaptationPolicy: any AdaptationPolicy
     private var onboardingCoordinator: OnboardingCoordinator
     var phaseController: LearningPhaseController
@@ -566,7 +565,6 @@ public final class TracingViewModel {
         self.dashboardStore         = deps.dashboardStore
         self.onboardingStore        = deps.onboardingStore
         self.notificationScheduler  = deps.notificationScheduler
-        self.syncCoordinator        = deps.syncCoordinator
         self.thesisCondition        = deps.thesisCondition
         self.enablePaperTransfer    = deps.enablePaperTransfer
         self.enableFreeformMode     = deps.enableFreeformMode

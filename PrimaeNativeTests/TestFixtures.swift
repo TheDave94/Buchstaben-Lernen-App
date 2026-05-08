@@ -177,11 +177,6 @@ extension TracingDependencies {
             dashboardStore:       StubDashboardStore(),
             onboardingStore:      StubOnboardingStore(),
             notificationScheduler: LocalNotificationScheduler(center: StubNotificationCenter()),
-            syncCoordinator:      SyncCoordinator(
-                sync:          NullSyncService(),
-                progressStore: progressStore,
-                streakStore:   streakStore
-            ),
             thesisCondition:      .guidedOnly,
             letterRecognizer:     StubLetterRecognizer(),
             speech:               NullSpeechSynthesizer(),
@@ -212,9 +207,6 @@ extension TracingDependencies {
     }
     func with(onboardingStore: OnboardingStoring) -> TracingDependencies {
         var copy = self; copy.onboardingStore = onboardingStore; return copy
-    }
-    func with(syncCoordinator: SyncCoordinator) -> TracingDependencies {
-        var copy = self; copy.syncCoordinator = syncCoordinator; return copy
     }
     func with(thesisCondition: ThesisCondition) -> TracingDependencies {
         var copy = self; copy.thesisCondition = thesisCondition; return copy

@@ -166,7 +166,7 @@ Privacy Manifest (`PrivacyInfo.xcprivacy`) declaring `UserDefaults`, `Applicatio
 ### F3 — CloudKit sync
 **Effort:** L · **Priority:** P1 (post-thesis)
 
-`SyncCoordinator` is wired to `NullSyncService`. Implement a real CloudKit-backed `CloudSyncService` so a child using the app on multiple iPads sees a unified streak and progress. Privacy: zone-per-participant, no PII, opt-in at first launch. Depends on F1.
+A child using the app on multiple iPads should see unified streak + progress. Implement as a CloudKit-backed sync that pushes `ProgressRecord` and `StreakRecord` snapshots after each phase completion. Privacy: zone-per-participant, no PII, opt-in at first launch. Depends on F1. (Scaffolding for this — `CloudSyncService` protocol + `NullSyncService` + `SyncCoordinator` — was removed from `main` to drop dormant code; reintroduce together with the real CloudKit conformer.)
 
 ### F4 — Teacher dashboard (multi-child)
 **Effort:** L · **Priority:** P2
