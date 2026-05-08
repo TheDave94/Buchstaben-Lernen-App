@@ -7,20 +7,36 @@ the bottom.
 
 ## Asset generators
 
-### `generate_strokes.py`
-Generate `strokes.json` skeleton tracing paths for letters that don't
-ship hand-calibrated checkpoints. Coordinates are normalised 0–1
-(x = right, y = down), one entry per stroke.
+### `generate_strokes_auto.py`
+Generate `strokes.json` for every letter from the Primae font's
+rendered glyph centerlines. Walks `LETTER_OVERRIDES` anchors via
+BFS over the skeleton, then runs retrace / spike / lead-in pruning
+to clean BFS artifacts. Coordinates are bbox-relative 0–1.
 
 ```bash
-python3 scripts/generate_strokes.py
+python3 scripts/generate_strokes_auto.py            # all 59 letters
+python3 scripts/generate_strokes_auto.py M N B      # subset
 ```
 
-> The output is algorithmic, not pedagogical. **Always review with a
-> Volksschule-1.-Klasse handwriting reference before shipping** — wrong
-> stroke order or direction will cement bad motor programs.
+Output: `PrimaeNative/Resources/Letters/<X>/strokes.json`.
 
-Output: `PrimaeNative/Resources/Letters/<X>/strokes.json`
+### `skeleton_audit.py`
+Per-letter and global diagnostics on the rendered skeletons —
+disconnected components, spurs, named-anchor drift. Surfaces
+letters whose `LETTER_OVERRIDES` anchors won't resolve cleanly.
+
+```bash
+python3 scripts/skeleton_audit.py
+python3 scripts/skeleton_audit.py --letters K k --verbose
+```
+
+### `calibration_to_override.py`
+Suggest a `LETTER_OVERRIDES` patch from a hand-calibrated
+`strokes.json` so future regenerations produce the same shape.
+
+```bash
+python3 scripts/calibration_to_override.py i
+```
 
 ### `generate_letter_audio.py`
 ElevenLabs voice generator for letter phonemes, example words, and
@@ -96,8 +112,10 @@ git commit --no-verify
 
 ## Adding a new letter
 
-1. `python3 scripts/generate_strokes.py` — drafts `strokes.json`.
-   **Review** the order and direction against a handwriting reference.
+1. Add a `LETTER_OVERRIDES` entry in `generate_strokes_auto.py`,
+   then run it for the new letter:
+   `python3 scripts/generate_strokes_auto.py X`. Review the output
+   against the Volksschule-1.-Klasse Druckschrift worksheet.
 2. `python3 scripts/generate_letter_audio.py --letter X` — auditions
    all bundled voices for the phoneme. Pick one, copy its files into
    `PrimaeNative/Resources/Letters/X/`.

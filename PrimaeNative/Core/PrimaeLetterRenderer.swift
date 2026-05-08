@@ -35,7 +35,8 @@ public enum PrimaeLetterRenderer {
 
     private static var cache: [CacheKey: UIImage] = [:]
     private static var rectCache: [RectCacheKey: CGRect] = [:]
-    private static let cacheLimit = 52
+    /// Holds 59 letters × ~3 common cell sizes × 2 OT-feature variants.
+    private static let cacheLimit = 360
 
     // MARK: - Public API
 

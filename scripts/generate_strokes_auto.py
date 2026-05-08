@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import defaultdict, deque
@@ -823,6 +824,46 @@ def _uniform_resample(seg: list[tuple[int, int]],
     return [_interp_pixel(seg, cum, total * k / (n - 1)) for k in range(n)]
 
 
+def trim_lead_in(seg: list[tuple[int, int]],
+                 max_off_axis_deg: float = 60.0
+                 ) -> list[tuple[int, int]]:
+    """Trim the first checkpoints whose direction differs by more
+    than `max_off_axis_deg` from the path's overall direction.
+
+    BFS legs that start on the wrong skeleton branch (e.g. an `ML`
+    anchor for a horizontal crossbar resolves to the left vertical
+    pixel rather than the bar itself) produce a perpendicular
+    "lead-in" before the path enters the intended segment. The first
+    checkpoint reads as a sharp upward step before the trace turns
+    horizontal — a child can't advance through it.
+    """
+    if len(seg) < 3:
+        return seg
+    overall_dx = seg[-1][0] - seg[0][0]
+    overall_dy = seg[-1][1] - seg[0][1]
+    overall_len = math.hypot(overall_dx, overall_dy)
+    if overall_len < 1:
+        return seg
+    overall_ux = overall_dx / overall_len
+    overall_uy = overall_dy / overall_len
+    cos_thr = math.cos(math.radians(max_off_axis_deg))
+    drop = 0
+    for i in range(min(3, len(seg) - 2)):
+        dx = seg[i + 1][0] - seg[i][0]
+        dy = seg[i + 1][1] - seg[i][1]
+        n = math.hypot(dx, dy)
+        if n < 1:
+            continue
+        cos_a = (dx * overall_ux + dy * overall_uy) / n
+        if cos_a < cos_thr:
+            drop = i + 1
+        else:
+            break
+    if drop == 0:
+        return seg
+    return seg[drop:]
+
+
 def prune_retraces(seg: list[tuple[int, int]],
                    near_thr_px: float = 4.0
                    ) -> list[tuple[int, int]]:
@@ -1200,7 +1241,8 @@ def generate_for_letter(letter: str, font_path: Path,
         raw_strokes = order_strokes(raw_strokes)
         raw_strokes = [order_stroke(s) for s in raw_strokes]
 
-    sampled = [prune_spikes(prune_retraces(resample(s))) for s in raw_strokes]
+    sampled = [trim_lead_in(prune_spikes(prune_retraces(resample(s))))
+               for s in raw_strokes]
 
     json_strokes = []
     for i, s in enumerate(sampled, start=1):
@@ -1340,6 +1382,18 @@ def main() -> int:
         if args.debug:
             debug_overlay(letter, debug, Path(f"/tmp/auto_{letter}.png"))
         ok += 1
+    if ok > 0:
+        manifest = out_base / "_meta.json"
+        try:
+            font_hash = hashlib.sha256(font_path.read_bytes()).hexdigest()
+            manifest.write_text(json.dumps({
+                "fontPath": str(font_path),
+                "fontSha256": font_hash,
+                "generator": "generate_strokes_auto.py",
+            }, indent=2))
+            print(f"  _meta.json: font sha256 {font_hash[:12]}…")
+        except Exception as e:
+            print(f"  _meta.json: FAIL — {e}")
     print(f"\nDone — {ok} ok, {fail} failed.")
     return 0 if fail == 0 else 1
 

@@ -10,6 +10,48 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  stroke_audit:
+    name: "Skeleton & stroke audit (advisory)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install scikit-image / pillow / numpy / fonttools
+        run: pip install --quiet pillow numpy "scikit-image>=0.21" fonttools
+      - name: Skeleton audit
+        run: |
+          python3 scripts/skeleton_audit.py --anchor-drift-pct 10 \
+            | tee /tmp/skeleton-audit.txt
+      - name: Stroke artifact scan
+        run: |
+          python3 - <<'PY'
+          import json, math, pathlib, sys
+          def angle(a,b,c):
+              v1=(b[0]-a[0],b[1]-a[1]); v2=(c[0]-b[0],c[1]-b[1])
+              n1=math.hypot(*v1); n2=math.hypot(*v2)
+              if n1==0 or n2==0: return 0
+              d=max(-1,min(1,(v1[0]*v2[0]+v1[1]*v2[1])/(n1*n2)))
+              return math.degrees(math.acos(d))
+          warnings=[]
+          for f in sorted(pathlib.Path('PrimaeNative/Resources/Letters').rglob('strokes.json')):
+              d=json.load(f.open())
+              L=f.parent.name.replace('_l','')
+              for s in d['strokes']:
+                  cps=[(c['x'],c['y']) for c in s['checkpoints']]
+                  if len(cps)<3: continue
+                  worst=max(angle(cps[i-1],cps[i],cps[i+1]) for i in range(1,len(cps)-1))
+                  if worst>150:
+                      warnings.append(f"{L} s{s['id']}: {worst:.0f}° kink")
+          if warnings:
+              print("Stroke artifact warnings (kink >150°):")
+              for w in warnings: print("  "+w)
+              sys.exit(0)  # advisory; do not fail CI
+          print("No retrace/spike artifacts found.")
+          PY
+
   xcode_test:
     name: "Build & Test — iPad Simulator (macos-26 / Xcode 26)"
     runs-on: macos-26
