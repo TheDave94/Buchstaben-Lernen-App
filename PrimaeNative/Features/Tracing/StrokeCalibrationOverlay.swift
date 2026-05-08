@@ -39,6 +39,20 @@ struct StrokeCalibrationOverlay: View {
     /// by BFS-walking the glyph skeleton between consecutive points.
     @State private var anchorsPerStroke: [Int: [CGPoint]] = [:]
 
+    /// Pre-drag anchor positions, keyed by `"<strokeIdx>:<anchorIdx>"`.
+    /// Captured on the first DragGesture `onChanged` of a drag so the
+    /// anchor can be reverted on `onEnded` if the user drags into a
+    /// region too far from the skeleton (a snap there would teleport
+    /// the anchor to the closest skeleton pixel, which is rarely the
+    /// intent).
+    @State private var preDragAnchorPositions: [String: CGPoint] = [:]
+
+    /// Maximum bbox-relative distance an anchor may snap on drag-end.
+    /// Beyond this the drag is reverted instead of snapping to a far
+    /// skeleton pixel (e.g. tapping in the white space between X's
+    /// diagonals would otherwise pull every anchor onto the crossing).
+    private let maxSnapDistanceBboxRel: CGFloat = 0.10
+
     private let strokeColors: [Color] = [.red, .blue, .green, .orange, .purple, .pink, .cyan, .yellow]
 
     private var isSaved: Bool {
@@ -153,6 +167,35 @@ struct StrokeCalibrationOverlay: View {
         }
         anchorsPerStroke[activeStroke] = anchors
         rebuildStrokeFromAnchors()
+    }
+
+    /// Commit a dragged anchor's new (snapped) position. If the
+    /// dragged anchor's new spot is closer to a different segment
+    /// between *other* anchors than to its current neighbours, the
+    /// anchor is removed and re-inserted at that segment so the BFS
+    /// walks anchors in spatial order — not in original tap order.
+    /// Without this, dragging anchor 5 to sit between anchors 2 and
+    /// 3 leaves it at list index 4, and the BFS path zigzags through
+    /// the letter (visible as the chaotic line on W IMG_0379).
+    private func commitDragWithReorder(_ snapped: CGPoint, draggedIdx: Int) {
+        guard var anchors = anchorsPerStroke[activeStroke] else { return }
+        anchors[draggedIdx] = snapped
+        // Find the closest segment among anchors EXCLUDING the dragged
+        // one. If that segment is far from the dragged anchor's
+        // current list position, re-sequence.
+        var others = anchors
+        others.remove(at: draggedIdx)
+        guard let bestInsertIdx = closestSegmentInsertIndex(
+            for: snapped, in: others, threshold: 0.20) else {
+            anchorsPerStroke[activeStroke] = anchors
+            return
+        }
+        // Convert "insert into others at bestInsertIdx" back into
+        // "insert into anchors at this position" — accounting for the
+        // gap left by the dragged anchor.
+        var newList = others
+        newList.insert(snapped, at: bestInsertIdx)
+        anchorsPerStroke[activeStroke] = newList
     }
 
     /// Resolve a tapped/dragged anchor position to the nearest pixel
@@ -538,21 +581,38 @@ struct StrokeCalibrationOverlay: View {
                     .gesture(
                         DragGesture(minimumDistance: 4)
                             .onChanged { value in
-                                // Move the anchor visually but don't
-                                // rebuild yet — re-snapping on every
-                                // tick flickers the line at junctions
-                                // where the nearest skeleton pixel
-                                // jumps between branches.
+                                let key = "\(activeStroke):\(idx)"
+                                // Capture the anchor's pre-drag spot
+                                // once (first onChanged of this drag)
+                                // so onEnded can revert when the snap
+                                // would be too far.
+                                if preDragAnchorPositions[key] == nil,
+                                   let cur = anchorsPerStroke[activeStroke]?[idx] {
+                                    preDragAnchorPositions[key] = cur
+                                }
                                 anchorsPerStroke[activeStroke]?[idx] =
                                     screenToGlyph(value.location, in: size)
                             }
                             .onEnded { value in
-                                // Snap the released position to the
-                                // skeleton so the anchor marker ends
-                                // up exactly where the BFS will walk.
+                                let key = "\(activeStroke):\(idx)"
                                 let final = screenToGlyph(value.location, in: size)
-                                anchorsPerStroke[activeStroke]?[idx] =
-                                    snapPointToSkeleton(final) ?? final
+                                let snapped = snapPointToSkeleton(final) ?? final
+                                let dx = snapped.x - final.x
+                                let dy = snapped.y - final.y
+                                let dist = (dx * dx + dy * dy).squareRoot()
+                                if dist <= maxSnapDistanceBboxRel {
+                                    // Snap is plausible — commit and
+                                    // re-insert the anchor at its
+                                    // spatially-correct list position
+                                    // so the BFS walks anchors in the
+                                    // order they're laid out on the
+                                    // letter, not in tap order.
+                                    commitDragWithReorder(snapped, draggedIdx: idx)
+                                } else if let pre = preDragAnchorPositions[key] {
+                                    // Snap too far — revert the drag.
+                                    anchorsPerStroke[activeStroke]?[idx] = pre
+                                }
+                                preDragAnchorPositions[key] = nil
                                 rebuildStrokeFromAnchors()
                             }
                     )
