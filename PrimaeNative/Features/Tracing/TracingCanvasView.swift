@@ -64,16 +64,11 @@ struct TracingCanvasView: View {
                     // strokes inside the ghost.
                     for stroke in rawStrokes.strokes {
                         guard stroke.checkpoints.count >= 2 else { continue }
-                        var ghostPath = Path()
-                        let first = stroke.checkpoints[0]
-                        ghostPath.move(to: CGPoint(
-                            x: ox + first.x * cellSize.width,
-                            y: oy + first.y * cellSize.height))
-                        for cp in stroke.checkpoints.dropFirst() {
-                            ghostPath.addLine(to: CGPoint(
-                                x: ox + cp.x * cellSize.width,
-                                y: oy + cp.y * cellSize.height))
+                        let pts = stroke.checkpoints.map { cp in
+                            CGPoint(x: ox + cp.x * cellSize.width,
+                                    y: oy + cp.y * cellSize.height)
                         }
+                        let ghostPath = smoothPath(through: pts)
                         context.stroke(ghostPath, with: .color(.canvasGhost.opacity(0.35)),
                                        style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
                     }
@@ -335,6 +330,33 @@ struct TracingCanvasView: View {
                 }
             )
         }
+    }
+
+    /// Catmull-Rom-to-Bezier smoothing. Replaces a polyline through the
+    /// supplied points with a `Path` whose segments are cubic Beziers,
+    /// so corners between adjacent samples round off instead of forming
+    /// visible kinks.
+    private func smoothPath(through pts: [CGPoint]) -> Path {
+        var path = Path()
+        guard let first = pts.first else { return path }
+        path.move(to: first)
+        guard pts.count >= 2 else { return path }
+        if pts.count == 2 {
+            path.addLine(to: pts[1])
+            return path
+        }
+        for i in 0..<(pts.count - 1) {
+            let p0 = i == 0 ? pts[0] : pts[i - 1]
+            let p1 = pts[i]
+            let p2 = pts[i + 1]
+            let p3 = i + 2 < pts.count ? pts[i + 2] : pts[i + 1]
+            let c1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6.0,
+                             y: p1.y + (p2.y - p0.y) / 6.0)
+            let c2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6.0,
+                             y: p2.y - (p3.y - p1.y) / 6.0)
+            path.addCurve(to: p2, control1: c1, control2: c2)
+        }
+        return path
     }
 }
 

@@ -115,20 +115,34 @@ struct LetterAnimationGuide {
 
     // MARK: - Factory
 
-    /// Build steps from a letter's stroke definition.
-    /// Each consecutive checkpoint pair becomes one step with `baseSegmentDuration`.
+    /// Build steps from a letter's stroke definition. Per-segment
+    /// duration scales with Euclidean distance between consecutive
+    /// checkpoints so the dot moves at constant linear speed regardless
+    /// of how densely a stroke is sampled.
+    /// `unitsPerSecond` is in cell-relative units (1.0 ≈ one cell width).
     static func build(from strokes: LetterStrokes,
-                      baseSegmentDuration: TimeInterval = 0.05) -> LetterAnimationGuide {
+                      unitsPerSecond: TimeInterval = 0.9) -> LetterAnimationGuide {
         var allSteps: [AnimationStep] = []
         for (strokeIdx, stroke) in strokes.strokes.enumerated() {
+            var prev: CGPoint? = nil
             for (cpIdx, checkpoint) in stroke.checkpoints.enumerated() {
-                let step = AnimationStep(
+                let pt = CGPoint(x: checkpoint.x, y: checkpoint.y)
+                let dt: TimeInterval
+                if let p = prev {
+                    let dx = pt.x - p.x
+                    let dy = pt.y - p.y
+                    let dist = (dx * dx + dy * dy).squareRoot()
+                    dt = max(1.0 / 240.0, Double(dist) / unitsPerSecond)
+                } else {
+                    dt = 1.0 / 60.0
+                }
+                allSteps.append(AnimationStep(
                     strokeIndex: strokeIdx,
                     checkpointIndex: cpIdx,
-                    point: CGPoint(x: checkpoint.x, y: checkpoint.y),
-                    segmentDuration: baseSegmentDuration
-                )
-                allSteps.append(step)
+                    point: pt,
+                    segmentDuration: dt
+                ))
+                prev = pt
             }
         }
         return LetterAnimationGuide(steps: allSteps)
