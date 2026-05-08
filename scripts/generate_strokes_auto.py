@@ -50,14 +50,16 @@ PAD = 0.10
 DEFAULT_RADIUS = 0.05
 # Curvature-adaptive sampling. Straights get a checkpoint every
 # `BASE_SPACING_PX`; curves (local angle change > `CURVE_ANGLE_DEG`)
-# get one every `CURVE_SPACING_PX` (3× denser). Floor at
-# `MIN_CHECKPOINTS_PER_STROKE` so even tiny dots have enough waypoints
-# for the proximity tracker.
+# get one every `CURVE_SPACING_PX` (3× denser). Paths shorter than
+# `DOT_LENGTH_THRESHOLD_PX` collapse to a single checkpoint at the
+# midpoint — i / j dots and umlaut dots are tap-targets, not traced
+# strokes, so 15 waypoints over 5 px of skeleton was overkill.
 BASE_SPACING_PX = 12
 CURVE_SPACING_PX = 4
 CURVE_ANGLE_DEG = 15
 CURVE_WINDOW_PX = 6
-MIN_CHECKPOINTS_PER_STROKE = 15
+MIN_CHECKPOINTS_PER_STROKE = 3
+DOT_LENGTH_THRESHOLD_PX = 30
 MERGE_ANGLE_THRESHOLD_DEG = 35  # segments within 35° of collinear get merged
 
 # Lowercase folder suffix dodges APFS / HFS+ case-insensitive collision
@@ -452,23 +454,29 @@ def _walk_cycle_ccw(seed: tuple[int, int],
                     ) -> list[tuple[int, int]]:
     """Walk a closed skeleton cycle starting at `seed`, return the
     full path including the seed at both ends. Direction is forced to
-    visual counter-clockwise (handwriting convention for O / o)."""
+    visual counter-clockwise (handwriting convention for O / o).
+    Tries both starting neighbours and picks the longer walk — a 1-px
+    dangling skeletonisation stub adjacent to the seed would otherwise
+    dead-end the walker after a single step (seen on lowercase d's
+    bowl)."""
     if len(adj[seed]) < 2:
         return [seed]
-    # Walk one direction first; reverse if it turned out clockwise.
-    visited = {seed}
-    cur = adj[seed][0]
-    path = [seed, cur]
-    visited.add(cur)
-    while True:
-        options = [n for n in adj[cur] if n not in visited]
-        if not options:
-            if seed in adj[cur] and cur != seed:
-                path.append(seed)
-            break
-        cur = options[0]
-        path.append(cur)
-        visited.add(cur)
+    candidate_paths: list[list[tuple[int, int]]] = []
+    for start in adj[seed][:2]:
+        visited = {seed, start}
+        path = [seed, start]
+        cur = start
+        while True:
+            options = [n for n in adj[cur] if n not in visited]
+            if not options:
+                if seed in adj[cur] and cur != seed:
+                    path.append(seed)
+                break
+            cur = options[0]
+            path.append(cur)
+            visited.add(cur)
+        candidate_paths.append(path)
+    path = max(candidate_paths, key=len)
 
     # Image-coord shoelace: positive sign = clockwise visually.
     s = 0.0
@@ -820,13 +828,22 @@ def resample(seg: list[tuple[int, int]],
              curve: float = CURVE_SPACING_PX,
              curve_angle_deg: float = CURVE_ANGLE_DEG,
              window_px: float = CURVE_WINDOW_PX,
-             min_pts: int = MIN_CHECKPOINTS_PER_STROKE
+             min_pts: int = MIN_CHECKPOINTS_PER_STROKE,
+             dot_threshold_px: float = DOT_LENGTH_THRESHOLD_PX
              ) -> list[tuple[int, int]]:
-    """Curvature-adaptive resampling. Straight runs get a checkpoint
-    every `base` pixels; runs whose local angle change exceeds
-    `curve_angle_deg` get one every `curve` pixels (≈ 3× density).
-    Falls back to uniform sampling at `min_pts` if the adaptive walk
-    yielded too few checkpoints (true for short strokes like dots)."""
+    """Curvature-adaptive resampling. Three regimes by total length:
+
+    * `total <= dot_threshold_px` (umlaut dots, i/j dots): a single
+      checkpoint at the midpoint — the proximity tracker treats it as
+      a tap target.
+    * `dot_threshold_px < total <= base`: short bar; 2 checkpoints
+      (start, end) so the tracker has a direction.
+    * `total > base`: full curvature-adaptive walk; straights get a
+      checkpoint every `base` px, curves every `curve` px (~3× denser).
+
+    `min_pts` only floors the long-path output so a barely-curved
+    moderate stroke still has enough waypoints to register hits.
+    """
     if len(seg) < 2:
         return seg
     cum = [0.0]
@@ -834,8 +851,11 @@ def resample(seg: list[tuple[int, int]],
         cum.append(cum[-1] + math.hypot(seg[i][0] - seg[i - 1][0],
                                         seg[i][1] - seg[i - 1][1]))
     total = cum[-1]
+    if total <= dot_threshold_px:
+        mid = _interp_pixel(seg, cum, total / 2)
+        return [mid]
     if total <= base:
-        return _uniform_resample(seg, cum, min_pts)
+        return [seg[0], seg[-1]]
 
     angle_thr = math.radians(curve_angle_deg)
     out = [seg[0]]
