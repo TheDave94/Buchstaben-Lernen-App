@@ -55,8 +55,6 @@ struct StrokeCalibrationOverlay: View {
                 glyphRectDebugLayer(in: size)
                 strokePathsLayer(in: size)
                 if mode != .points { dotsLayer(in: size) }
-                // Anchor markers belong to Punkte mode only — in Ziehen
-                // they sit above the dots and steal drag gestures.
                 if mode == .points { anchorsLayer(in: size) }
                 controlsLayer
             }
@@ -73,9 +71,6 @@ struct StrokeCalibrationOverlay: View {
                 bootstrapAnchorsFromExistingStrokes()
             }
             .onChange(of: mode) {
-                // Re-bootstrap when entering Anker mode after a manual
-                // delete-all so the user always has a starting set of
-                // draggable anchors.
                 if mode == .points { bootstrapAnchorsFromExistingStrokes() }
             }
         }
@@ -85,8 +80,6 @@ struct StrokeCalibrationOverlay: View {
     }
 
     /// Uniform arc-length resample in bbox-relative coordinates.
-    /// Densifies the BFS-walked path so the tracker has ~40 evenly
-    /// spaced checkpoints instead of one per skeleton pixel.
     private func resampleUniformBbox(_ pts: [CGPoint], count: Int) -> [CGPoint] {
         guard pts.count >= 2, count >= 2 else { return pts }
         var cum: [CGFloat] = [0]
@@ -134,17 +127,7 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    /// Append an anchor for the active stroke and rebuild the polyline
-    /// between anchors via BFS along the glyph skeleton. With ≥ 2
-    /// anchors the user sees the auto-completed centerline; one
-    /// constraining anchor in the wrong region forces the BFS to take
-    /// a different route between its neighbours.
     private func addAnchor(_ pt: CGPoint) {
-        // Anchors store the user's literal tap position so taps close
-        // together don't collapse onto the same skeleton pixel —
-        // BFS internally resolves each anchor to its nearest skel
-        // pixel for routing, and the yellow drift line / ring shows
-        // where each anchor was resolved.
         var anchors = anchorsPerStroke[activeStroke] ?? []
         if let insertIdx = closestSegmentInsertIndex(for: pt, in: anchors,
                                                      threshold: 0.04) {
@@ -156,20 +139,12 @@ struct StrokeCalibrationOverlay: View {
         rebuildStrokeFromAnchors()
     }
 
-    /// Commit a dragged anchor's new (snapped) position. If the
-    /// dragged anchor's new spot is closer to a different segment
-    /// between *other* anchors than to its current neighbours, the
-    /// anchor is removed and re-inserted at that segment so the BFS
-    /// walks anchors in spatial order — not in original tap order.
-    /// Without this, dragging anchor 5 to sit between anchors 2 and
-    /// 3 leaves it at list index 4, and the BFS path zigzags through
-    /// the letter (visible as the chaotic line on W IMG_0379).
+    /// Commit a dragged anchor and re-insert it at the spatially-
+    /// closest segment so the polyline walks anchors in visible order
+    /// rather than tap order.
     private func commitDragWithReorder(_ snapped: CGPoint, draggedIdx: Int) {
         guard var anchors = anchorsPerStroke[activeStroke] else { return }
         anchors[draggedIdx] = snapped
-        // Find the closest segment among anchors EXCLUDING the dragged
-        // one. If that segment is far from the dragged anchor's
-        // current list position, re-sequence.
         var others = anchors
         others.remove(at: draggedIdx)
         guard let bestInsertIdx = closestSegmentInsertIndex(
@@ -177,29 +152,14 @@ struct StrokeCalibrationOverlay: View {
             anchorsPerStroke[activeStroke] = anchors
             return
         }
-        // Convert "insert into others at bestInsertIdx" back into
-        // "insert into anchors at this position" — accounting for the
-        // gap left by the dragged anchor.
         var newList = others
         newList.insert(snapped, at: bestInsertIdx)
         anchorsPerStroke[activeStroke] = newList
     }
 
-    /// Resolve a tapped/dragged anchor position to the nearest pixel
-    /// on the skeleton point cloud. Returns nil when the bundle has
-    /// no skeleton metadata (caller falls back to the tap position).
-    private func snapPointToSkeleton(_ pt: CGPoint) -> CGPoint? {
-        guard let raw = vm.glyphRelativeStrokes,
-              let skel = raw.skeleton, !skel.isEmpty else { return nil }
-        let i = nearestSkelIndex(pt, in: skel)
-        return CGPoint(x: skel[i].x, y: skel[i].y)
-    }
-
-    /// Returns the index at which to insert `pt` so that it falls on
-    /// the existing anchor segment closest to it — but only when the
-    /// perpendicular distance to that segment is within `threshold`
-    /// (bbox-relative). Returns nil when the tap is far from every
-    /// segment, signalling the caller to append instead.
+    /// Index at which `pt` should be inserted to land on the closest
+    /// existing anchor-to-anchor segment, or nil when farther than
+    /// `threshold` from every segment.
     private func closestSegmentInsertIndex(for pt: CGPoint,
                                            in anchors: [CGPoint],
                                            threshold: CGFloat) -> Int? {
@@ -242,64 +202,24 @@ struct StrokeCalibrationOverlay: View {
         if strokeIdx == activeStroke { rebuildStrokeFromAnchors() }
     }
 
+    /// Densify the active stroke as a polyline through the user's
+    /// anchors in list order. ≤1 anchor leaves the existing line
+    /// alone so mid-edit work isn't wiped.
     private func rebuildStrokeFromAnchors() {
         let anchors = anchorsPerStroke[activeStroke] ?? []
         while editableStrokes.count <= activeStroke {
             editableStrokes.append([])
         }
-        // 0–1 anchors: leave whatever line is currently shown alone.
-        // The user is mid-calibration; replacing the visible stroke
-        // with a single dot would feel like the work disappeared.
         guard anchors.count >= 2 else { return }
-        guard let raw = vm.glyphRelativeStrokes,
-              let skel = raw.skeleton, !skel.isEmpty,
-              let adj = raw.skeletonAdj, adj.count == skel.count else {
-            editableStrokes[activeStroke] = anchors
-            return
-        }
-        let snappedIdx = anchors.map { nearestSkelIndex($0, in: skel) }
-        // Build a list of skeleton-pixel CGPoints, guaranteeing each
-        // anchor's snapped pixel is present in the output even when
-        // the BFS leg between two consecutive anchors fails (anchors
-        // in disconnected components) or collapses to a single pixel
-        // (two anchors snapping to the same skeleton point). Without
-        // this guarantee the resampler can drop or skip anchors and
-        // the rebuilt stroke would visibly miss them.
-        var pathPts: [CGPoint] = [
-            CGPoint(x: skel[snappedIdx[0]].x, y: skel[snappedIdx[0]].y)
-        ]
-        for i in 0..<(snappedIdx.count - 1) {
-            let leg = bfsAlongSkeleton(from: snappedIdx[i],
-                                       to: snappedIdx[i + 1],
-                                       adj: adj)
-            if leg.count >= 2 {
-                pathPts.append(contentsOf: leg.dropFirst().map {
-                    CGPoint(x: skel[$0].x, y: skel[$0].y)
-                })
-            } else {
-                // BFS empty (degenerate or disconnected). Include the
-                // next anchor's pixel directly; the resampler will
-                // linear-interpolate, which at least keeps the anchor
-                // present and visible in the output.
-                pathPts.append(CGPoint(x: skel[snappedIdx[i + 1]].x,
-                                       y: skel[snappedIdx[i + 1]].y))
-            }
-        }
-        // Density proportional to skeleton path length so long
-        // strokes (M, W, ß) preview as smoothly as the auto-generator
-        // bundle output. Capped at 200 to keep redraws fast on iPad.
-        let denseCount = max(40, min(200, pathPts.count / 4))
-        let dense = pathPts.count >= 2
-            ? resampleUniformBbox(pathPts, count: denseCount)
-            : pathPts
-        editableStrokes[activeStroke] = dense
+        let segments = anchors.count - 1
+        let denseCount = max(40, min(200, segments * 8))
+        editableStrokes[activeStroke] = resampleUniformBbox(anchors,
+                                                            count: denseCount)
     }
 
-    /// For each stroke that already has checkpoints loaded but no
-    /// anchors set, sample 5 anchor positions evenly across the
-    /// existing chain (first, 25 %, 50 %, 75 %, last). Lets the user
-    /// drop into Anker mode and refine an existing stroke by dragging
-    /// 5 anchors instead of starting from scratch.
+    /// Seed `anchorsPerStroke` from existing checkpoint chains so a
+    /// user opening the calibrator can refine instead of starting
+    /// from zero.
     private func bootstrapAnchorsFromExistingStrokes() {
         for (i, cps) in editableStrokes.enumerated() {
             guard !cps.isEmpty else { continue }
@@ -314,96 +234,6 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    /// Snapped skeleton positions for the current stroke's anchors —
-    /// rendered as small ring indicators so the user can see where
-    /// each anchor was resolved onto the centerline (and judge whether
-    /// the BFS picked the intended skeleton branch).
-    private func snappedAnchorPoints() -> [CGPoint] {
-        guard let raw = vm.glyphRelativeStrokes,
-              let skel = raw.skeleton, !skel.isEmpty,
-              let anchors = anchorsPerStroke[activeStroke] else { return [] }
-        return anchors.map {
-            let i = nearestSkelIndex($0, in: skel)
-            return CGPoint(x: skel[i].x, y: skel[i].y)
-        }
-    }
-
-    private func nearestSkelIndex(_ p: CGPoint, in skel: [Checkpoint]) -> Int {
-        var bestIdx = 0
-        var bestD2: CGFloat = .infinity
-        for i in 0..<skel.count {
-            let dx = skel[i].x - p.x
-            let dy = skel[i].y - p.y
-            let d2 = dx * dx + dy * dy
-            if d2 < bestD2 {
-                bestD2 = d2
-                bestIdx = i
-            }
-        }
-        return bestIdx
-    }
-
-    /// Snap each user-drawn stroke onto the glyph's skeleton centerline.
-    /// Treats every checkpoint as a routing anchor and BFS-walks along
-    /// the skeleton between consecutive anchors — preserves stroke
-    /// start, end, direction, and general path shape while throwing
-    /// away the off-center wobble of a hand-placed point. Single-point
-    /// strokes (dots) pass through untouched. Strokes pass through
-    /// unchanged when the bundle has no skeleton metadata.
-    private func snappedToSkeleton(_ strokes: [[CGPoint]]) -> [[CGPoint]] {
-        guard let raw = vm.glyphRelativeStrokes,
-              let skel = raw.skeleton, !skel.isEmpty,
-              let adj = raw.skeletonAdj, adj.count == skel.count else {
-            return strokes
-        }
-        return strokes.map { stroke -> [CGPoint] in
-            if stroke.count < 2 { return stroke }
-            let snappedIdx = stroke.map { nearestSkelIndex($0, in: skel) }
-            var fullPath: [Int] = []
-            for i in 0..<(snappedIdx.count - 1) {
-                let leg = bfsAlongSkeleton(from: snappedIdx[i],
-                                           to: snappedIdx[i + 1],
-                                           adj: adj)
-                if leg.isEmpty { continue }
-                if i == 0 {
-                    fullPath.append(contentsOf: leg)
-                } else {
-                    fullPath.append(contentsOf: leg.dropFirst())
-                }
-            }
-            guard fullPath.count >= 2 else { return stroke }
-            let pathPts = fullPath.map { CGPoint(x: skel[$0].x, y: skel[$0].y) }
-            // Density scales with skeleton-pixel count so long strokes
-            // (M, W) get more checkpoints than short ones (i body), at
-            // a similar density to the bundled auto-generator output.
-            let count = max(40, min(200, pathPts.count / 4))
-            return resampleUniformBbox(pathPts, count: count)
-        }
-    }
-
-    private func bfsAlongSkeleton(from start: Int, to end: Int,
-                                  adj: [[Int]]) -> [Int] {
-        if start == end { return [start] }
-        var parent: [Int: Int] = [start: -1]
-        var queue: [Int] = [start]
-        var head = 0
-        while head < queue.count {
-            let cur = queue[head]; head += 1
-            if cur == end { break }
-            for n in adj[cur] where parent[n] == nil {
-                parent[n] = cur
-                queue.append(n)
-            }
-        }
-        guard parent[end] != nil else { return [] }
-        var path: [Int] = []
-        var cur = end
-        while cur != -1 {
-            path.append(cur)
-            cur = parent[cur] ?? -1
-        }
-        return path.reversed()
-    }
 
     /// Dashed red outline of the renderer's `normalizedGlyphRect`.
     /// Spot-check that the inner glyph bbox actually wraps the glyph —
@@ -429,16 +259,9 @@ struct StrokeCalibrationOverlay: View {
 
     @ViewBuilder
     private func strokePathsLayer(in size: CGSize) -> some View {
-        // Active stroke renders as a high-contrast cyan line with a
-        // black halo so it stays visible even where it overlaps the
-        // red anchor markers. A small triangle marks the end so
-        // direction is unambiguous in screenshots.
         if editableStrokes.indices.contains(activeStroke) {
             let stroke = editableStrokes[activeStroke]
             let pts = stroke.map { glyphToScreen($0, in: size) }
-            // Halo (drawn first, wider) — separates the line visually
-            // from anchor fills so the route is readable in a static
-            // screenshot regardless of stroke colour.
             Path { path in
                 guard let first = pts.first else { return }
                 path.move(to: first)
@@ -457,15 +280,12 @@ struct StrokeCalibrationOverlay: View {
                     style: StrokeStyle(lineWidth: 5,
                                        lineCap: .round,
                                        lineJoin: .round))
-            // Direction arrowhead at the last point.
             if pts.count >= 2 {
                 directionArrow(from: pts[pts.count - 2], to: pts[pts.count - 1])
             }
         }
     }
 
-    /// Small triangle pointing along the line's terminal segment so
-    /// stroke direction is obvious in a screenshot.
     @ViewBuilder
     private func directionArrow(from a: CGPoint, to b: CGPoint) -> some View {
         let dx = b.x - a.x, dy = b.y - a.y
@@ -500,54 +320,11 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    /// Anchor markers for `.points` mode — large numbered dots that
-    /// represent the user's BFS waypoints. Tap to delete; drag to
-    /// adjust position (rebuilds the path live as you drag). The
-    /// small ring overlay shows where the anchor resolved onto the
-    /// actual skeleton — when it sits visibly off the user's anchor,
-    /// the BFS picked a nearby branch and dragging slightly nudges
-    /// it onto the intended one.
+    /// Numbered control points the user places, drags, and deletes.
     @ViewBuilder
     private func anchorsLayer(in size: CGSize) -> some View {
         if let anchors = anchorsPerStroke[activeStroke], !anchors.isEmpty {
             let color = strokeColors[activeStroke % strokeColors.count]
-            let snapPts = snappedAnchorPoints()
-            // Drift lines — yellow line from anchor centre to its
-            // snapped skeleton position whenever the gap is bigger
-            // than ~5 % of the bbox. Without these, the snap ring
-            // sits under the 28 pt anchor marker and the offset is
-            // invisible in screenshots.
-            ForEach(Array(zip(anchors.indices, snapPts).enumerated()),
-                    id: \.offset) { _, pair in
-                let (i, snapped) = pair
-                let anchorScreen = glyphToScreen(anchors[i], in: size)
-                let snappedScreen = glyphToScreen(snapped, in: size)
-                let dx = anchorScreen.x - snappedScreen.x
-                let dy = anchorScreen.y - snappedScreen.y
-                let dist = (dx * dx + dy * dy).squareRoot()
-                if dist > 5 {
-                    Path { p in
-                        p.move(to: anchorScreen)
-                        p.addLine(to: snappedScreen)
-                    }
-                    .stroke(Color.yellow, style: StrokeStyle(lineWidth: 2,
-                                                              dash: [4, 3]))
-                    .allowsHitTesting(false)
-                }
-            }
-            // Snap-indicator dots — yellow with black outline at each
-            // snapped skeleton position, always rendered so static
-            // screenshots show exactly where the BFS resolved each
-            // anchor on the centerline.
-            ForEach(Array(snapPts.enumerated()), id: \.offset) { _, snapped in
-                let snappedScreen = glyphToScreen(snapped, in: size)
-                Circle()
-                    .fill(Color.yellow)
-                    .frame(width: 14, height: 14)
-                    .overlay(Circle().stroke(.black, lineWidth: 2))
-                    .position(snappedScreen)
-                    .allowsHitTesting(false)
-            }
             ForEach(Array(anchors.enumerated()), id: \.offset) { idx, pt in
                 let screenPt = glyphToScreen(pt, in: size)
                 Circle()
@@ -568,14 +345,6 @@ struct StrokeCalibrationOverlay: View {
                                     screenToGlyph(value.location, in: size)
                             }
                             .onEnded { value in
-                                // Keep the anchor at the user's drop
-                                // position — no auto-snap means two
-                                // close drags don't collapse onto
-                                // the same skeleton pixel. BFS uses
-                                // each anchor's nearest skel pixel
-                                // internally; the yellow drift line
-                                // shows how far the routing point
-                                // sits from the marker.
                                 let final = screenToGlyph(value.location, in: size)
                                 commitDragWithReorder(final, draggedIdx: idx)
                                 rebuildStrokeFromAnchors()
@@ -921,25 +690,14 @@ struct StrokeCalibrationOverlay: View {
     }
 
     private func applyToVM() {
-        let snapped = snappedToSkeleton(editableStrokes)
-        vm.applyCalibration(snapped)
-        // Replace the user's hand-placed checkpoints with the snapped
-        // result so the strokePathsLayer line redraws as the actual
-        // centerline that was applied — visual confirmation that the
-        // snap worked as intended.
-        editableStrokes = snapped
+        vm.applyCalibration(editableStrokes)
     }
 
-    /// Apply the edits to the live tracker AND persist per-script.
-    /// Primary save path; JSON export is the backup.
+    /// Persists per-script and applies to the live tracker.
     private func saveToVM() {
-        let snapped = snappedToSkeleton(editableStrokes)
-        vm.applyCalibration(snapped)
-        vm.persistCalibratedStrokes(snapped, for: vm.currentLetterName)
-        editableStrokes = snapped
+        vm.applyCalibration(editableStrokes)
+        vm.persistCalibratedStrokes(editableStrokes, for: vm.currentLetterName)
         savedFlashUntil = Date().addingTimeInterval(1.2)
-        // Clear the badge after the flash window so a second save can
-        // re-flash green instead of sticking.
         Task {
             try? await Task.sleep(for: .milliseconds(1300))
             if let until = savedFlashUntil, Date() >= until {
@@ -985,12 +743,11 @@ struct StrokeCalibrationOverlay: View {
     }
 
     private func generateJSON() -> String {
-        let snapped = snappedToSkeleton(editableStrokes)
         var dict: [String: Any] = [
             "letter": vm.currentLetterName,
             "checkpointRadius": 0.05
         ]
-        let strokesArr: [[String: Any]] = snapped.enumerated().compactMap { (i, pts) in
+        let strokesArr: [[String: Any]] = editableStrokes.enumerated().compactMap { (i, pts) in
             guard !pts.isEmpty else { return nil }
             return [
                 "id": i + 1,
