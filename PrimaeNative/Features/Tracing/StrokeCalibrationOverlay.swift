@@ -636,6 +636,14 @@ struct StrokeCalibrationOverlay: View {
             }
             .buttonStyle(.bordered)
             .tint(.orange)
+
+            Button("Alle") {
+                exportText = generateAllJSON()
+                showExport = true
+            }
+            .buttonStyle(.bordered)
+            .tint(.brown)
+            .accessibilityLabel("Alle gespeicherten Kalibrierungen exportieren")
         }
     }
 
@@ -779,6 +787,42 @@ struct StrokeCalibrationOverlay: View {
                 savedFlashUntil = nil
             }
         }
+    }
+
+    /// Bundle every persisted per-letter calibration for the active
+    /// SchriftArt into one JSON payload — the user pastes this once
+    /// to ship a whole calibration session instead of letter-by-letter.
+    private func generateAllJSON() -> String {
+        let all = vm.loadAllCalibrations()
+        var letters: [[String: Any]] = []
+        let sortedKeys = all.keys.sorted()
+        for letter in sortedKeys {
+            guard let strokes = all[letter] else { continue }
+            let strokesArr: [[String: Any]] = strokes.strokes.map { s in
+                [
+                    "id": s.id,
+                    "checkpoints": s.checkpoints.map {
+                        ["x": round($0.x * 1000) / 1000,
+                         "y": round($0.y * 1000) / 1000]
+                    }
+                ]
+            }
+            letters.append([
+                "letter": letter,
+                "checkpointRadius": strokes.checkpointRadius,
+                "strokes": strokesArr,
+            ])
+        }
+        let payload: [String: Any] = [
+            "schriftArt": vm.schriftArt.rawValue,
+            "letterCount": letters.count,
+            "letters": letters,
+        ]
+        guard let data = try? JSONSerialization.data(
+                withJSONObject: payload,
+                options: [.prettyPrinted, .sortedKeys]),
+              let str = String(data: data, encoding: .utf8) else { return "{}" }
+        return str
     }
 
     private func generateJSON() -> String {

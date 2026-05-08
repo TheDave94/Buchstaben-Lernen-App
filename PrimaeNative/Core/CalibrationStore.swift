@@ -87,4 +87,31 @@ final class CalibrationStore {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("PrimaeNative/CalibratedStrokes/\(letter).json")
     }
+
+    /// Returns every persisted per-letter calibration for `schriftArt`,
+    /// keyed by the letter character. Used by the "Alle JSON" export
+    /// button in the calibrator so a calibration session can be shipped
+    /// as one bundle instead of letter-by-letter copy/paste.
+    func loadAll(for schriftArt: SchriftArt) -> [String: LetterStrokes] {
+        guard let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return [:]
+        }
+        let dir = support.appendingPathComponent(
+            "PrimaeNative/CalibratedStrokes/\(schriftArt.rawValue)")
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil) else {
+            return [:]
+        }
+        var out: [String: LetterStrokes] = [:]
+        let decoder = JSONDecoder()
+        for url in entries where url.pathExtension == "json" {
+            let letter = url.deletingPathExtension().lastPathComponent
+            guard let data = try? Data(contentsOf: url),
+                  let decoded = try? decoder.decode(LetterStrokes.self, from: data)
+            else { continue }
+            out[letter] = decoded
+        }
+        return out
+    }
 }

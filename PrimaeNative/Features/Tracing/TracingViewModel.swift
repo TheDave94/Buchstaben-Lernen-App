@@ -1572,6 +1572,12 @@ public final class TracingViewModel {
         lastCheckpointKey = key
     }
 
+    /// Every persisted per-letter calibration for the active script,
+    /// keyed by letter. Used by the calibrator's "Alle JSON" export.
+    func loadAllCalibrations() -> [String: LetterStrokes] {
+        calibrationStore.loadAll(for: schriftArt)
+    }
+
     /// Persist calibrated glyph-relative checkpoints. Delegates to CalibrationStore
     /// and re-applies the new data to the tracker so the current letter reflects
     /// the calibration immediately without navigating away and back.
