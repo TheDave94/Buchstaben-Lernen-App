@@ -19,6 +19,7 @@ struct StrokeCalibrationOverlay: View {
     @State private var activeStroke = 0
     @State private var mode: CalibrationMode = .drag
     @State private var savedFlashUntil: Date? = nil
+    @State private var showResetConfirm = false
     /// (letter, schriftArt) of the last reload — both invalidate so a
     /// font switch picks up the other script's saved strokes.
     @State private var loadedKey: LoadKey? = nil
@@ -76,6 +77,21 @@ struct StrokeCalibrationOverlay: View {
         }
         .sheet(isPresented: $showExport) {
             ExportSheet(text: exportText, letterName: vm.currentLetterName)
+        }
+        .confirmationDialog(
+            "Alle Kalibrierungen löschen?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Löschen", role: .destructive) {
+                vm.clearAllCalibrations()
+                editableStrokes = []
+                loadedKey = nil
+                loaded = false
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Entfernt jede gespeicherte Kalibrierung für die aktive Schriftart. Das Bundle übernimmt anschließend.")
         }
     }
 
@@ -572,6 +588,16 @@ struct StrokeCalibrationOverlay: View {
             .buttonStyle(.bordered)
             .tint(.brown)
             .accessibilityLabel("Alle gespeicherten Kalibrierungen exportieren")
+
+            Button {
+                showResetConfirm = true
+            } label: {
+                Label("Reset", systemImage: "arrow.counterclockwise")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .tint(.gray)
+            .accessibilityLabel("Alle Kalibrierungen löschen, Bundle übernimmt")
         }
     }
 

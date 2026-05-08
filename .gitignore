@@ -42,3 +42,4 @@ vcpkg/
 # Python build artifacts
 __pycache__/
 *.pyc
+tmp_overlays/

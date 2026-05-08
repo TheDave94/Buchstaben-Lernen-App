@@ -118,7 +118,7 @@ struct LetterAnimationGuide {
     /// Build steps from a letter's stroke definition.
     /// Each consecutive checkpoint pair becomes one step with `baseSegmentDuration`.
     static func build(from strokes: LetterStrokes,
-                      baseSegmentDuration: TimeInterval = 0.1) -> LetterAnimationGuide {
+                      baseSegmentDuration: TimeInterval = 0.05) -> LetterAnimationGuide {
         var allSteps: [AnimationStep] = []
         for (strokeIdx, stroke) in strokes.strokes.enumerated() {
             for (cpIdx, checkpoint) in stroke.checkpoints.enumerated() {

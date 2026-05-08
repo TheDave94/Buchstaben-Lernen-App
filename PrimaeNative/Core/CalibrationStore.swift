@@ -88,6 +88,21 @@ final class CalibrationStore {
             .appendingPathComponent("PrimaeNative/CalibratedStrokes/\(letter).json")
     }
 
+    /// Wipes every per-letter calibration file for `schriftArt` from
+    /// disk and clears the in-memory cache so the next read falls
+    /// through to the bundled `strokes.json`. Used after shipping a
+    /// new bundle to discard stale on-device overrides.
+    func clearAll(for schriftArt: SchriftArt) {
+        guard let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let dir = support.appendingPathComponent(
+            "PrimaeNative/CalibratedStrokes/\(schriftArt.rawValue)")
+        try? FileManager.default.removeItem(at: dir)
+        cache = cache.filter { !$0.key.hasPrefix("\(schriftArt.rawValue)/") }
+    }
+
     /// Returns every persisted per-letter calibration for `schriftArt`,
     /// keyed by the letter character. Used by the "Alle JSON" export
     /// button in the calibrator so a calibration session can be shipped

@@ -1607,6 +1607,18 @@ public final class TracingViewModel {
         return out
     }
 
+    /// Wipes every persisted calibration for the active script and
+    /// reloads the current letter so the bundle takes over immediately.
+    /// Used after shipping a new bundle that supersedes the on-device
+    /// calibration set.
+    func clearAllCalibrations() {
+        calibrationStore.clearAll(for: schriftArt)
+        lastCheckpointKey = nil
+        if letters.indices.contains(letterIndex) {
+            reloadStrokeCheckpoints(for: letters[letterIndex])
+        }
+    }
+
     /// Persist calibrated glyph-relative checkpoints. Delegates to CalibrationStore
     /// and re-applies the new data to the tracker so the current letter reflects
     /// the calibration immediately without navigating away and back.
