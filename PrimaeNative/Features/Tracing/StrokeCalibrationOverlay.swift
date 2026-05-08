@@ -706,11 +706,12 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    /// Bundle every persisted per-letter calibration for the active
-    /// SchriftArt into one JSON payload — the user pastes this once
-    /// to ship a whole calibration session instead of letter-by-letter.
+    /// Bundle every letter's effective strokes (calibration if one
+    /// was Saved, bundle default otherwise) so a calibration session
+    /// can be exported even when individual letters were Applied but
+    /// not Saved.
     private func generateAllJSON() -> String {
-        let all = vm.loadAllCalibrations()
+        let all = vm.loadAllEffectiveStrokes()
         var letters: [[String: Any]] = []
         let sortedKeys = all.keys.sorted()
         for letter in sortedKeys {
@@ -770,6 +771,15 @@ private struct ExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
 
+    private func shareURL() -> URL {
+        let base = FileManager.default.temporaryDirectory
+        let filename = letterName.isEmpty ? "strokes.json"
+            : "\(letterName)_strokes.json"
+        let url = base.appendingPathComponent(filename)
+        try? text.data(using: .utf8)?.write(to: url, options: .atomic)
+        return url
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
@@ -790,12 +800,22 @@ private struct ExportSheet: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
 
-                Button(copied ? "Kopiert ✓" : "In Zwischenablage kopieren") {
-                    UIPasteboard.general.string = text
-                    copied = true
+                HStack(spacing: 12) {
+                    Button(copied ? "Kopiert ✓" : "Kopieren") {
+                        UIPasteboard.general.string = text
+                        copied = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(copied ? .green : .blue)
+
+                    ShareLink(
+                        item: shareURL(),
+                        preview: SharePreview("strokes.json")
+                    ) {
+                        Label("Teilen", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(copied ? .green : .blue)
             }
             .padding()
             .navigationTitle("Stroke-JSON")

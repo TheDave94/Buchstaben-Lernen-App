@@ -1591,6 +1591,22 @@ public final class TracingViewModel {
         calibrationStore.loadAll(for: schriftArt)
     }
 
+    /// The effective stroke definition for every loaded letter — the
+    /// calibration when one's been saved, the bundle default otherwise.
+    /// This is what the calibrator's "Alle" button ships so a session
+    /// can be exported even when the user hasn't tapped Speichern on
+    /// each individual letter.
+    func loadAllEffectiveStrokes() -> [String: LetterStrokes] {
+        var out: [String: LetterStrokes] = [:]
+        for letter in letters {
+            let resolved = calibrationStore.strokes(for: letter.name,
+                                                    schriftArt: schriftArt)
+                ?? letter.strokes
+            out[letter.name] = resolved
+        }
+        return out
+    }
+
     /// Persist calibrated glyph-relative checkpoints. Delegates to CalibrationStore
     /// and re-applies the new data to the tracker so the current letter reflects
     /// the calibration immediately without navigating away and back.
