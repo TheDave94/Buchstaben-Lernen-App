@@ -118,7 +118,8 @@ public final class TracingViewModel {
             )
         }
         return LetterStrokes(letter: raw.letter,
-                             checkpointRadius: raw.checkpointRadius,
+                             checkpointRadius: raw.checkpointRadius
+                                 * sqrt(gr.width * gr.height),
                              strokes: mapped)
     }
 
@@ -232,13 +233,15 @@ public final class TracingViewModel {
     /// through to bbox-relative when the cell hasn't laid out yet.
     var rawGlyphStrokes: LetterStrokes? {
         guard !letters.isEmpty, letterIndex < letters.count else { return nil }
+        let letter = letters[letterIndex]
         let bbox: LetterStrokes
         if showingVariant, let vs = variantStrokeCache {
             bbox = vs
         } else if let ss = activeScriptStrokes {
             bbox = ss
         } else {
-            bbox = letters[letterIndex].strokes
+            bbox = calibrationStore.strokes(for: letter.name, schriftArt: schriftArt)
+                ?? letter.strokes
         }
         let cellSize = grid.activeCell.frame.size
         guard cellSize.width > 0, cellSize.height > 0,
@@ -260,7 +263,8 @@ public final class TracingViewModel {
             )
         }
         return LetterStrokes(letter: bbox.letter,
-                             checkpointRadius: bbox.checkpointRadius,
+                             checkpointRadius: bbox.checkpointRadius
+                                 * sqrt(gr.width * gr.height),
                              strokes: mapped)
     }
 
@@ -1146,7 +1150,8 @@ public final class TracingViewModel {
             )
         }
         strokeTracker.load(LetterStrokes(letter: bboxStrokes.letter,
-                                         checkpointRadius: bboxStrokes.checkpointRadius,
+                                         checkpointRadius: bboxStrokes.checkpointRadius
+                                             * sqrt(gr.width * gr.height),
                                          strokes: mapped))
     }
 
@@ -1562,7 +1567,8 @@ public final class TracingViewModel {
                 }
                 cell.tracker.load(LetterStrokes(
                     letter: cellSource.letter,
-                    checkpointRadius: cellSource.checkpointRadius,
+                    checkpointRadius: cellSource.checkpointRadius
+                        * sqrt(gr.width * gr.height),
                     strokes: mappedStrokes
                 ))
             } else {

@@ -74,17 +74,19 @@ private struct CodableLetterAsset: Codable {
     let baseLetter: String?
     let letterCase: LetterAsset.LetterCase?
     let audioFiles: [String]
+    let phonemeAudioFiles: [String]?
     let strokes: LetterStrokes
     let variants: [String]?
 
     init(_ asset: LetterAsset) {
-        id         = asset.id
-        name       = asset.name
-        baseLetter = asset.baseLetter
-        letterCase = asset.letterCase
-        audioFiles = asset.audioFiles
-        strokes    = asset.strokes
-        variants   = asset.variants
+        id                = asset.id
+        name              = asset.name
+        baseLetter        = asset.baseLetter
+        letterCase        = asset.letterCase
+        audioFiles        = asset.audioFiles
+        phonemeAudioFiles = asset.phonemeAudioFiles
+        strokes           = asset.strokes
+        variants          = asset.variants
     }
 
     var asset: LetterAsset {
@@ -95,7 +97,8 @@ private struct CodableLetterAsset: Codable {
             letterCase: letterCase ?? .upper,
             audioFiles: audioFiles,
             strokes: strokes,
-            variants: variants
+            variants: variants,
+            phonemeAudioFiles: phonemeAudioFiles ?? []
         )
     }
 }
