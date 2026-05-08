@@ -43,7 +43,6 @@ struct ConfidenceCalibratorTests {
         let out = c.calibrate(
             rawConfidence: raw,
             predictedLetter: "A",
-            expectedLetter: "A",
             historicalFormScores: history
         )
         // 0.6 * 1.10 = 0.66
