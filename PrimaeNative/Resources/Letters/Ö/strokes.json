@@ -653,7 +653,7 @@
       "comment": "left dot",
       "checkpoints": [
         {
-          "x": 0.3,
+          "x": 0.41,
           "y": 0.05
         }
       ]
@@ -663,7 +663,7 @@
       "comment": "right dot",
       "checkpoints": [
         {
-          "x": 0.7,
+          "x": 0.75,
           "y": 0.05
         }
       ]
