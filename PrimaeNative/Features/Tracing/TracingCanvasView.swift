@@ -42,7 +42,9 @@ struct TracingCanvasView: View {
                 // mode — the whole-word image was drawn above.
                 if wordRendering == nil,
                    let glyph = PrimaeLetterRenderer.glyphPath(
-                       letter: cellLetter, size: cellSize, schriftArt: vm.schriftArt) {
+                       letter: cellLetter, size: cellSize, schriftArt: vm.schriftArt,
+                       openTypeFeatures: PrimaeLetterRenderer.openTypeFeatures(
+                           for: cellLetter, schriftArt: vm.schriftArt, variant: vm.showingVariant)) {
                     let positioned = glyph.applying(
                         CGAffineTransform(translationX: ox, y: oy))
                     context.fill(positioned, with: .color(.ink.opacity(0.78)))

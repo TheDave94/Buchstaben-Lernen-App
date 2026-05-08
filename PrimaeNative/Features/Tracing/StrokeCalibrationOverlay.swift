@@ -227,7 +227,8 @@ struct StrokeCalibrationOverlay: View {
         let gr = PrimaeLetterRenderer.normalizedGlyphRect(
             for: vm.currentLetterName,
             canvasSize: size,
-            schriftArt: vm.schriftArt) ?? CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+            schriftArt: vm.schriftArt,
+            openTypeFeatures: vm.currentGlyphFeatures) ?? CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
         let rect = CGRect(
             x: gr.minX * size.width,
             y: gr.minY * size.height,
@@ -530,7 +531,8 @@ struct StrokeCalibrationOverlay: View {
     /// stays aligned with the visible glyph at any cell aspect ratio.
     private func glyphToScreen(_ pt: CGPoint, in size: CGSize) -> CGPoint {
         guard let gr = PrimaeLetterRenderer.normalizedGlyphRect(
-            for: vm.currentLetterName, canvasSize: size, schriftArt: vm.schriftArt) else {
+            for: vm.currentLetterName, canvasSize: size, schriftArt: vm.schriftArt,
+            openTypeFeatures: vm.currentGlyphFeatures) else {
             return CGPoint(x: pt.x * size.width, y: pt.y * size.height)
         }
         return CGPoint(
@@ -541,7 +543,8 @@ struct StrokeCalibrationOverlay: View {
 
     private func screenToGlyph(_ pt: CGPoint, in size: CGSize) -> CGPoint {
         guard let gr = PrimaeLetterRenderer.normalizedGlyphRect(
-            for: vm.currentLetterName, canvasSize: size, schriftArt: vm.schriftArt),
+            for: vm.currentLetterName, canvasSize: size, schriftArt: vm.schriftArt,
+            openTypeFeatures: vm.currentGlyphFeatures),
               gr.width > 0, gr.height > 0 else {
             let x = pt.x / size.width
             let y = pt.y / size.height

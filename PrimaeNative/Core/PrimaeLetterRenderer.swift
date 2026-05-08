@@ -20,6 +20,9 @@ public enum PrimaeLetterRenderer {
         // schriftArt is part of the key so two scripts can coexist
         // in the cache without a race window after a script switch.
         let schriftArt: SchriftArt
+        // OpenType feature tags applied to the font (e.g. "ss02" for
+        // the curled-k variant). Sorted+joined so order doesn't churn.
+        let features:   String
     }
 
     private struct RectCacheKey: Hashable {
@@ -27,6 +30,7 @@ public enum PrimaeLetterRenderer {
         let width:      Int
         let height:     Int
         let schriftArt: SchriftArt
+        let features:   String
     }
 
     private static var cache: [CacheKey: UIImage] = [:]
@@ -35,16 +39,33 @@ public enum PrimaeLetterRenderer {
 
     // MARK: - Public API
 
-    public static func render(letter: String, size: CGSize, schriftArt: SchriftArt = .druckschrift) -> UIImage? {
+    /// Map a `(letter, schriftArt, variant)` triple to the OpenType
+    /// feature tags that swap in the alternate glyph. Today only the
+    /// Druckschrift lowercase k has an alternate (ss02 → curled-k).
+    public static func openTypeFeatures(for letter: String,
+                                        schriftArt: SchriftArt,
+                                        variant: Bool) -> [String] {
+        guard variant else { return [] }
+        if schriftArt == .druckschrift && letter == "k" { return ["ss02"] }
+        return []
+    }
+
+    public static func render(letter: String,
+                              size: CGSize,
+                              schriftArt: SchriftArt = .druckschrift,
+                              openTypeFeatures: [String] = []) -> UIImage? {
         guard size.width > 0, size.height > 0, !letter.isEmpty else { return nil }
         // CGDataProvider hangs in the test process — skip rendering.
         guard !isRunningTests else { return nil }
         let key = CacheKey(letter: letter,
                             width: Int(size.width),
                             height: Int(size.height),
-                            schriftArt: schriftArt)
+                            schriftArt: schriftArt,
+                            features: openTypeFeatures.sorted().joined(separator: ","))
         if let cached = cache[key] { return cached }
-        guard let image = draw(letter: letter, size: size, fontName: schriftArt.fontFileName) else { return nil }
+        guard let image = draw(letter: letter, size: size,
+                               fontName: schriftArt.fontFileName,
+                               openTypeFeatures: openTypeFeatures) else { return nil }
         // Full eviction when over cap — letters rarely change and the
         // next render repopulates the one entry that matters.
         if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
@@ -173,11 +194,13 @@ public enum PrimaeLetterRenderer {
     /// 10 % padding. Top-left origin so the caller can pass it straight
     /// to `Canvas` / `.fill(_:)` without transformation.
     public static func glyphPath(letter: String, size: CGSize,
-                                 schriftArt: SchriftArt = .druckschrift) -> Path? {
+                                 schriftArt: SchriftArt = .druckschrift,
+                                 openTypeFeatures: [String] = []) -> Path? {
         guard size.width > 0, size.height > 0, !letter.isEmpty,
               !isRunningTests else { return nil }
         let probe: CGFloat = 800
-        guard let font = makeFont(size: probe, fontName: schriftArt.fontFileName),
+        guard let font = makeFont(size: probe, fontName: schriftArt.fontFileName,
+                                  openTypeFeatures: openTypeFeatures),
               var glyph = getGlyph(for: letter, in: font) else { return nil }
         let bbox = CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, nil, 1)
         guard bbox.width > 0, bbox.height > 0,
@@ -213,16 +236,20 @@ public enum PrimaeLetterRenderer {
     /// Stroke JSON checkpoints are stored bbox-relative; the canvas maps
     /// them through this rect to get cell-fraction screen positions.
     /// Memoized — the canvas calls this 3× per 60 fps frame.
-    public static func normalizedGlyphRect(for letter: String, canvasSize: CGSize, schriftArt: SchriftArt = .druckschrift) -> CGRect? {
+    public static func normalizedGlyphRect(for letter: String, canvasSize: CGSize,
+                                           schriftArt: SchriftArt = .druckschrift,
+                                           openTypeFeatures: [String] = []) -> CGRect? {
         guard !isRunningTests, !letter.isEmpty,
               canvasSize.width > 0, canvasSize.height > 0 else { return nil }
         let key = RectCacheKey(letter: letter,
                                width: Int(canvasSize.width),
                                height: Int(canvasSize.height),
-                               schriftArt: schriftArt)
+                               schriftArt: schriftArt,
+                               features: openTypeFeatures.sorted().joined(separator: ","))
         if let cached = rectCache[key] { return cached }
         let probe: CGFloat = 800
-        guard let font = makeFont(size: probe, fontName: schriftArt.fontFileName),
+        guard let font = makeFont(size: probe, fontName: schriftArt.fontFileName,
+                                  openTypeFeatures: openTypeFeatures),
               var glyph = getGlyph(for: letter, in: font) else { return nil }
         let bbox = CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, nil, 1)
         guard bbox.width > 0, bbox.height > 0 else { return nil }
@@ -254,7 +281,8 @@ public enum PrimaeLetterRenderer {
         NSClassFromString("XCTestCase") != nil
     }
 
-    static func makeFont(size: CGFloat, fontName: String = "Primae-Regular") -> CTFont? {
+    static func makeFont(size: CGFloat, fontName: String = "Primae-Regular",
+                         openTypeFeatures: [String] = []) -> CTFont? {
         let bundles: [Bundle] = [.module, .main]
         // Try root, then SPM .copy("Resources") nested paths, then flat Fonts/.
         let subdirs: [String?] = [nil, "Resources/Fonts", "Fonts"]
@@ -273,11 +301,31 @@ public enum PrimaeLetterRenderer {
                     guard let url,
                           let dataProvider = CGDataProvider(url: url as CFURL),
                           let cgFont       = CGFont(dataProvider) else { continue }
-                    return CTFontCreateWithGraphicsFont(cgFont, size, nil, nil)
+                    let baseFont = CTFontCreateWithGraphicsFont(cgFont, size, nil, nil)
+                    return applyOpenTypeFeatures(to: baseFont, tags: openTypeFeatures)
                 }
             }
         }
         return nil
+    }
+
+    /// Returns a CTFont with the given OpenType feature tags enabled.
+    /// `kCTFontOpenTypeFeatureTag` accepts modern 4-char tags like
+    /// `"ss02"`; selector value `1` enables the feature.
+    private static func applyOpenTypeFeatures(to font: CTFont, tags: [String]) -> CTFont {
+        guard !tags.isEmpty else { return font }
+        let settings: [[String: Any]] = tags.map {
+            [kCTFontOpenTypeFeatureTag as String: $0,
+             kCTFontOpenTypeFeatureValue as String: 1]
+        }
+        let attributes: [String: Any] = [
+            kCTFontFeatureSettingsAttribute as String: settings
+        ]
+        let descriptor = CTFontDescriptorCreateCopyWithAttributes(
+            CTFontCopyFontDescriptor(font),
+            attributes as CFDictionary
+        )
+        return CTFontCreateWithFontDescriptor(descriptor, CTFontGetSize(font), nil)
     }
 
     static func getGlyph(for letter: String, in font: CTFont) -> CGGlyph? {
@@ -295,13 +343,15 @@ public enum PrimaeLetterRenderer {
         return nil
     }
 
-    private static func draw(letter: String, size: CGSize, fontName: String = "Primae-Regular") -> UIImage? {
+    private static func draw(letter: String, size: CGSize, fontName: String = "Primae-Regular",
+                             openTypeFeatures: [String] = []) -> UIImage? {
         let scale: CGFloat = 2.0
         let px = CGSize(width: size.width * scale, height: size.height * scale)
 
         // Probe at large size to compute scale factor
         let probe: CGFloat = 800
-        guard let probeFont = makeFont(size: probe, fontName: fontName),
+        guard let probeFont = makeFont(size: probe, fontName: fontName,
+                                       openTypeFeatures: openTypeFeatures),
               var probeGlyph = getGlyph(for: letter, in: probeFont) else { return nil }
 
         let probeBBox = CTFontGetBoundingRectsForGlyphs(probeFont, .default, &probeGlyph, nil, 1)
@@ -312,7 +362,8 @@ public enum PrimaeLetterRenderer {
         let availH    = px.height * (1 - 2 * pad)
         let finalSize = probe * min(availW / probeBBox.width, availH / probeBBox.height)
 
-        guard let font = makeFont(size: finalSize, fontName: fontName),
+        guard let font = makeFont(size: finalSize, fontName: fontName,
+                                  openTypeFeatures: openTypeFeatures),
               var glyph = getGlyph(for: letter, in: font) else { return nil }
 
         let bbox = CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, nil, 1)
