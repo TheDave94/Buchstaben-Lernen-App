@@ -823,6 +823,81 @@ def _uniform_resample(seg: list[tuple[int, int]],
     return [_interp_pixel(seg, cum, total * k / (n - 1)) for k in range(n)]
 
 
+def prune_retraces(seg: list[tuple[int, int]],
+                   near_thr_px: float = 4.0
+                   ) -> list[tuple[int, int]]:
+    """Detect and elide out-and-back excursions in a sampled path.
+
+    BFS through skeleton branches with stubs of more than one pixel
+    can produce a multi-pixel detour: the path goes out to a peak and
+    retraces nearly identical positions on the way back. Single-point
+    spike pruning misses these because each consecutive triple has a
+    valid sub-150° angle. Here we walk forward and, whenever a later
+    point is within `near_thr_px` of an earlier one, drop everything
+    strictly between them.
+    """
+    if len(seg) < 4:
+        return seg
+    keep = [True] * len(seg)
+    i = 0
+    while i < len(seg) - 2:
+        if not keep[i]:
+            i += 1
+            continue
+        match_j = -1
+        for j in range(i + 2, len(seg)):
+            if not keep[j]:
+                continue
+            dx = seg[j][0] - seg[i][0]
+            dy = seg[j][1] - seg[i][1]
+            if math.hypot(dx, dy) < near_thr_px:
+                match_j = j
+        if match_j > i + 1:
+            for k in range(i + 1, match_j):
+                keep[k] = False
+            i = match_j
+        else:
+            i += 1
+    return [seg[k] for k in range(len(seg)) if keep[k]]
+
+
+def prune_spikes(seg: list[tuple[int, int]],
+                 angle_deg: float = 150.0,
+                 max_iters: int = 6
+                 ) -> list[tuple[int, int]]:
+    """Iteratively drop checkpoints that form a near-180° kink with
+    their neighbours. Skeleton spurs at sharp corners (M valley, V
+    apex, B bump-stem junction, …) leave multi-pixel out-and-back
+    chains; pruning one tip exposes another. Up to `max_iters`
+    passes converge in practice for the bundled strokes.
+    """
+    cos_thr = math.cos(math.radians(angle_deg))
+    cur = seg
+    for _ in range(max_iters):
+        if len(cur) < 3:
+            return cur
+        out = [cur[0]]
+        for i in range(1, len(cur) - 1):
+            ax, ay = cur[i - 1]
+            bx, by = cur[i]
+            cx, cy = cur[i + 1]
+            v1x, v1y = bx - ax, by - ay
+            v2x, v2y = cx - bx, cy - by
+            n1 = math.hypot(v1x, v1y)
+            n2 = math.hypot(v2x, v2y)
+            if n1 == 0 or n2 == 0:
+                continue
+            cos_a = (v1x * v2x + v1y * v2y) / (n1 * n2)
+            if cos_a < cos_thr:
+                continue
+            out.append(cur[i])
+        out.append(cur[-1])
+        if len(out) == len(cur):
+            return out
+        cur = out
+    return cur
+
+
 def resample(seg: list[tuple[int, int]],
              base: float = BASE_SPACING_PX,
              curve: float = CURVE_SPACING_PX,
@@ -1125,7 +1200,7 @@ def generate_for_letter(letter: str, font_path: Path,
         raw_strokes = order_strokes(raw_strokes)
         raw_strokes = [order_stroke(s) for s in raw_strokes]
 
-    sampled = [resample(s) for s in raw_strokes]
+    sampled = [prune_spikes(prune_retraces(resample(s))) for s in raw_strokes]
 
     json_strokes = []
     for i, s in enumerate(sampled, start=1):
