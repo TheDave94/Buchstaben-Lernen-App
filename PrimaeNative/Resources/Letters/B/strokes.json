@@ -1,6 +1,6 @@
 {
   "letter": "B",
-  "checkpointRadius": 0.05,
+  "checkpointRadius": 0.1,
   "strokes": [
     {
       "id": 1,

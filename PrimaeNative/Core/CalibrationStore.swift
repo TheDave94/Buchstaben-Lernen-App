@@ -60,7 +60,7 @@ final class CalibrationStore {
                            y: (($0.y * 1000).rounded() / 1000))
             })
         }
-        let ls = LetterStrokes(letter: letter, checkpointRadius: 0.05, strokes: defs)
+        let ls = LetterStrokes(letter: letter, checkpointRadius: 0.10, strokes: defs)
         guard let url = fontSpecificURL(letter: letter, schriftArt: schriftArt),
               let data = try? JSONEncoder().encode(ls) else { return }
         let dir = url.deletingLastPathComponent()
