@@ -164,7 +164,7 @@ final class LetterRepository {
     /// generator's output convention changes (dev builds reuse
     /// `CFBundleVersion` between commits, so a JSON-shape refactor
     /// would otherwise keep serving the old cached strokes).
-    private static let cacheBundleVersionKey = "PrimaeNative.LetterCache.bundleVersion.v16"
+    private static let cacheBundleVersionKey = "PrimaeNative.LetterCache.bundleVersion.v17"
 
     /// Build identifier — `CFBundleShortVersionString-CFBundleVersion`.
     /// Returns nil in unit-test hosts so the fast path defers to the
