@@ -260,12 +260,40 @@ struct SchuleWorldView: View {
     private var topRow: some View {
         HStack {
             letterPill
+            if vm.currentLetterHasVariants {
+                variantToggle
+            }
             Spacer()
             if totalStars > 0 {
                 starCountBadge(count: totalStars)
             }
         }
         .padding(.horizontal, 16)
+    }
+
+    /// Toggle between the standard glyph and its alternate form
+    /// (currently only Druckschrift k via OpenType `ss02`).
+    private var variantToggle: some View {
+        Button {
+            vm.toggleVariant()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: vm.showingVariant ? "arrow.left.arrow.right.circle.fill"
+                                                    : "arrow.left.arrow.right.circle")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(AppSurface.prompt)
+                Text(vm.showingVariant ? "Variante" : "Standard")
+                    .font(.body(FontSize.sm, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(AppSurface.card, in: Capsule())
+            .overlay(Capsule().stroke(AppSurface.cardEdge, lineWidth: 1))
+            .shadow(color: Color.ink.opacity(0.08), radius: 5, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Buchstaben-Variante umschalten")
+        .accessibilityValue(vm.showingVariant ? "Variante" : "Standard")
     }
 
     /// Total stars across all letters — same computation as the

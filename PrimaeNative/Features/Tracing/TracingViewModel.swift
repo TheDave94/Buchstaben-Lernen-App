@@ -100,7 +100,10 @@ public final class TracingViewModel {
         let cellSize = grid.cells[index].frame.size
         guard cellSize.width > 0, cellSize.height > 0,
               let gr = PrimaeLetterRenderer.normalizedGlyphRect(
-                for: cellLetter, canvasSize: cellSize, schriftArt: schriftArt) else {
+                for: cellLetter, canvasSize: cellSize,
+                schriftArt: schriftArt,
+                openTypeFeatures: PrimaeLetterRenderer.openTypeFeatures(
+                    for: cellLetter, schriftArt: schriftArt, variant: showingVariant)) else {
             return raw
         }
         let mapped = raw.strokes.map { def in
@@ -240,7 +243,9 @@ public final class TracingViewModel {
         let cellSize = grid.activeCell.frame.size
         guard cellSize.width > 0, cellSize.height > 0,
               let gr = PrimaeLetterRenderer.normalizedGlyphRect(
-                for: currentLetterName, canvasSize: cellSize, schriftArt: schriftArt) else {
+                for: currentLetterName, canvasSize: cellSize,
+                schriftArt: schriftArt,
+                openTypeFeatures: currentGlyphFeatures) else {
             return bbox
         }
         let mapped = bbox.strokes.map { def in
@@ -267,6 +272,17 @@ public final class TracingViewModel {
         guard !letters.isEmpty, letterIndex < letters.count,
               schriftArt == .druckschrift else { return false }
         return !(letters[letterIndex].variants?.isEmpty ?? true)
+    }
+
+    /// OpenType feature tags to apply when rendering the current
+    /// letter — pulls the alternate glyph (e.g. curled-k via `ss02`)
+    /// when `showingVariant` is on. Empty otherwise.
+    var currentGlyphFeatures: [String] {
+        guard !letters.isEmpty, letterIndex < letters.count else { return [] }
+        let name = letters[letterIndex].name
+        return PrimaeLetterRenderer.openTypeFeatures(for: name,
+                                                    schriftArt: schriftArt,
+                                                    variant: showingVariant)
     }
     /// Stars earned in the current session (0-3).
     var starsEarned: Int { phaseController.starsEarned }
@@ -1112,7 +1128,9 @@ public final class TracingViewModel {
         let cellSize = grid.activeCell.frame.size
         guard cellSize.width > 0, cellSize.height > 0,
               let gr = PrimaeLetterRenderer.normalizedGlyphRect(
-                for: currentLetterName, canvasSize: cellSize, schriftArt: schriftArt) else {
+                for: currentLetterName, canvasSize: cellSize,
+                schriftArt: schriftArt,
+                openTypeFeatures: currentGlyphFeatures) else {
             strokeTracker.load(bboxStrokes)
             return
         }
@@ -1527,7 +1545,10 @@ public final class TracingViewModel {
             // at least has a definition; pre-layout passes also fall
             // through this branch.
             if let gr = PrimaeLetterRenderer.normalizedGlyphRect(
-                for: cellLetter, canvasSize: cellSize, schriftArt: schriftArt) {
+                for: cellLetter, canvasSize: cellSize,
+                schriftArt: schriftArt,
+                openTypeFeatures: PrimaeLetterRenderer.openTypeFeatures(
+                    for: cellLetter, schriftArt: schriftArt, variant: showingVariant)) {
                 let mappedStrokes = cellSource.strokes.map { def in
                     StrokeDefinition(
                         id: def.id,
