@@ -332,17 +332,18 @@ struct StrokeCalibrationOverlay: View {
     }
 
     /// Symmetric moving-average smoother for raster-walked polylines.
-    /// `window` points on each side averaged with the center; ends use a
-    /// shrinking window so endpoints stay anchored. Cheap and removes
-    /// pixel staircase without distorting macro shape.
+    /// First and last points are pinned (the user's raw anchors), so
+    /// smoothing doesn't pull stroke endpoints inward off the corners.
+    /// Interior points blend with `window` neighbors on each side.
     private func movingAverageSmooth(_ path: [CGPoint],
                                      window: Int) -> [CGPoint] {
         guard path.count > 2 * window + 1, window > 0 else { return path }
         var out: [CGPoint] = []
         out.reserveCapacity(path.count)
-        for i in 0..<path.count {
-            let lo = max(0, i - window)
-            let hi = min(path.count - 1, i + window)
+        out.append(path[0])
+        for i in 1..<(path.count - 1) {
+            let lo = max(1, i - window)
+            let hi = min(path.count - 2, i + window)
             var sx: CGFloat = 0
             var sy: CGFloat = 0
             for j in lo...hi {
@@ -352,6 +353,7 @@ struct StrokeCalibrationOverlay: View {
             let n = CGFloat(hi - lo + 1)
             out.append(CGPoint(x: sx / n, y: sy / n))
         }
+        out.append(path[path.count - 1])
         return out
     }
 
