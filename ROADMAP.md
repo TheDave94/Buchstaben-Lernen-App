@@ -1,6 +1,6 @@
 # Roadmap — Primae
 
-_Single forward-looking work log. Last updated 2026-04-29 against `main`. Only items still requiring work appear here — every shipped item has been removed. Shipped items live in commit history._
+_Single forward-looking work log. Last updated 2026-05-09 against `main`. Only items still requiring work appear here — every shipped item has been removed. Shipped items live in commit history._
 
 ---
 
@@ -10,7 +10,6 @@ _Single forward-looking work log. Last updated 2026-04-29 against `main`. Only i
 
 | Item | Owner action | Why it matters | Effort |
 |---|---|---|---|
-| **T1** lowercase strokes for `a f i k l m o` | Author stroke definitions on iPad via the calibration overlay; record name audio (3 takes/letter); export to `Resources/Letters/<x>/` | Thesis-floor — the four-phase pedagogy currently doesn't run for lowercase, and a reviewer who picks `q` lands on the empty-strokes fallback | **14–21 hours** |
 | **P6** phoneme audio recordings | Generate 90 phoneme recordings via ElevenLabs (3 takes × 30 letters) using the prompt template + IPA table in Appendix C of `docs/APP_DOCUMENTATION.md`; drop into `Resources/Letters/<base>/` as `<base>_phoneme<n>.mp3` | Phonemic awareness ↔ reading acquisition (Adams 1990); the "Lautwert wiedergeben" toggle is already shipped — without recordings it falls back silently | **XL** (recording-time-bound) |
 | **U5** Pencil 2 squeeze validation | iPad with Apple Pencil 2 — confirm squeeze + double-tap fire `replayAudio()` and don't double-fire with finger taps | Code is shipped; just needs verifying the gesture lands as intended on real hardware | **0–1 days on device** |
 | **U10** VoiceOver walkthrough | iPad with VoiceOver enabled — walk every screen, watch for skipped elements / misordered focus / Switch Control routing / Dynamic Type clipping | Required before submitting the thesis externally; the partial in-code audit shipped, but the device walkthrough is the load-bearing part | **2–3 hours on device** |
@@ -44,33 +43,6 @@ Detail sections follow with effort, file list, citations, failure modes per item
 ---
 
 ## 1. THESIS-CRITICAL
-
-### T1 — Lowercase letter coverage *(asset work + on-device authoring)*
-**Effort:** XL · **Priority:** P1
-
-`Resources/Letters/` has 56 directories (26 upper + 26 lower + Ä Ö Ü ß). 25 have non-empty `strokes.json`; 31 have **empty** stroke arrays as placeholders. The empty-stroke fallback path is correct (`LearningPhaseController` skips observe + direct phases when strokes are empty), but it means the four-phase pedagogy that the thesis demonstrates **does not actually run** for 31 of 56 letters. The thesis claim "Vier-Phasen-Pädagogik for Volksschule 1. Klasse" is exposed: a reviewer who picks `q` gets the empty-strokes fallback.
-
-**What's needed per letter.**
-1. **Stroke definition.** 1–3 strokes per letter, each with 5–15 checkpoints in 0–1 cell-local coordinates. Author by:
-   - Open the app in Debug mode (long-press the phase indicator on SchuleWorldView)
-   - Open the calibration overlay (long-press again)
-   - Drag-place each checkpoint visually over the rendered glyph
-   - The calibration store writes to `Application Support/PrimaeNative/calibration/`
-   - Export the calibrated checkpoints into the bundle's `Resources/Letters/<x>/strokes.json`
-2. **Audio takes.** 3 mp3 recordings of the letter name (`<x>1.mp3`, `<x>2.mp3`, `<x>3.mp3`).
-3. **Phoneme audio.** P6 infrastructure is in place; you need 3 phoneme takes per letter. See Appendix C in `docs/APP_DOCUMENTATION.md` for the convention and ElevenLabs prompt template.
-
-**Per-letter budget.** ~2–3 hours, mostly the calibration session + audio editing.
-
-**Two viable scopes.**
-- **Demo lowercase set** (`a f i k l m o`): 7 letters × 2–3 hours = 14–21 hours. **Thesis-floor minimum.**
-- **Full alphabet** (26 lowercase + 19 missing uppercase + 4 umlauts/ß = 49 letters): ~100–150 hours. Post-thesis or a multi-week dedicated authoring sprint.
-
-**What you can do without a device.** Pre-generate stroke definitions from CoreText measurements run on macOS (small `swift run` script that loads Primae, renders each glyph, samples the path). Won't be perfect (Primae's glyph metrics depend on font-loading order) but gets you 80% of the way as a starting point for device calibration. Audio generation via ElevenLabs is fully offline-able.
-
-**Citation.** Berninger et al. 2006 (*Developmental Neuropsychology* 29(1)) — early instruction benefits from grouped upper- and lowercase exposure.
-
----
 
 ### P6 — Phoneme audio recordings *(infrastructure on main; audio assets pending)*
 **Effort:** XL (recording + voice direction work) · **Priority:** P1
@@ -209,11 +181,10 @@ For motor-impaired children, expose the direct-phase dot tap as a Switch Control
 
 The at-a-glance table at the top of this file is the authoritative version. Repeated here as a flow:
 
-1. **T1 demo lowercase set** — block out an iPad session: open the calibration overlay (long-press phase indicator → long-press again), author stroke checkpoints for `a f i k l m o`, export to `Resources/Letters/<x>/strokes.json`. ElevenLabs the matching audio in parallel.
-2. **P6 phoneme recordings** — runs in parallel with T1 since it's pure ElevenLabs work + drop-into-bundle.
-3. **U5 + U10 device validation** — same iPad session: 30 minutes for the Pencil 2 squeeze check, 2–3 hours for the VoiceOver walkthrough. Get these out of the way before a thesis reviewer ever opens the app.
+1. **P6 phoneme recordings** — pure ElevenLabs work + drop-into-bundle; no device needed.
+2. **U5 + U10 device validation** — single iPad session: 30 minutes for the Pencil 2 squeeze check, 2–3 hours for the VoiceOver walkthrough. Get these out of the way before a thesis reviewer ever opens the app.
 
-**D8 canvas redraw profile** is post-thesis polish — schedule once the demo set ships and there's classroom-data evidence of a need (or an Instruments hint of a problem). **F1–F10** are post-thesis full features.
+**D8 canvas redraw profile** is post-thesis polish — schedule once there's classroom-data evidence of a need (or an Instruments hint of a problem). **F1–F10** are post-thesis full features.
 
 ---
 
