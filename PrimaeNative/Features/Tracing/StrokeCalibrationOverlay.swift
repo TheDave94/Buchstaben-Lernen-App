@@ -218,9 +218,11 @@ struct StrokeCalibrationOverlay: View {
         if strokeIdx == activeStroke { rebuildStrokeFromAnchors() }
     }
 
-    /// Densify the active stroke as a polyline through the user's
+    /// Densify the active stroke as a smooth curve through the user's
     /// anchors in list order. ≤1 anchor leaves the existing line
-    /// alone so mid-edit work isn't wiped.
+    /// alone so mid-edit work isn't wiped. 3+ anchors get a centripetal
+    /// Catmull-Rom spline so curves like `o`/`g`/`a` need ~4 anchors
+    /// instead of ~10.
     private func rebuildStrokeFromAnchors() {
         let anchors = anchorsPerStroke[activeStroke] ?? []
         while editableStrokes.count <= activeStroke {
@@ -229,8 +231,67 @@ struct StrokeCalibrationOverlay: View {
         guard anchors.count >= 2 else { return }
         let segments = anchors.count - 1
         let denseCount = max(40, min(200, segments * 8))
-        editableStrokes[activeStroke] = resampleUniformBbox(anchors,
+        let smoothed = anchors.count >= 3
+            ? catmullRomSpline(anchors)
+            : anchors
+        editableStrokes[activeStroke] = resampleUniformBbox(smoothed,
                                                             count: denseCount)
+    }
+
+    /// Centripetal Catmull-Rom (α=0.5) through every anchor with mirrored
+    /// phantom endpoints. Centripetal parameterization avoids the overshoot
+    /// uniform CR gets on tight turns (e.g. the bottom of `g`).
+    private func catmullRomSpline(_ anchors: [CGPoint],
+                                  samplesPerSegment: Int = 20) -> [CGPoint] {
+        guard anchors.count >= 3 else { return anchors }
+        let last = anchors.count - 1
+        let ghost0 = CGPoint(x: 2 * anchors[0].x - anchors[1].x,
+                             y: 2 * anchors[0].y - anchors[1].y)
+        let ghostN = CGPoint(x: 2 * anchors[last].x - anchors[last - 1].x,
+                             y: 2 * anchors[last].y - anchors[last - 1].y)
+        let padded = [ghost0] + anchors + [ghostN]
+        var out: [CGPoint] = [anchors[0]]
+        for i in 0..<(padded.count - 3) {
+            let p0 = padded[i], p1 = padded[i + 1]
+            let p2 = padded[i + 2], p3 = padded[i + 3]
+            let t0: CGFloat = 0
+            let t1 = t0 + crKnot(p0, p1)
+            let t2 = t1 + crKnot(p1, p2)
+            let t3 = t2 + crKnot(p2, p3)
+            for j in 1...samplesPerSegment {
+                let t = t1 + (t2 - t1) * CGFloat(j) / CGFloat(samplesPerSegment)
+                out.append(crEvaluate(p0, p1, p2, p3, t0, t1, t2, t3, t))
+            }
+        }
+        return out
+    }
+
+    private func crKnot(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let d = (dx * dx + dy * dy).squareRoot()
+        // sqrt of distance ⇒ alpha=0.5 (centripetal); floor avoids /0.
+        return d > 0 ? d.squareRoot() : 0.0001
+    }
+
+    private func crEvaluate(_ p0: CGPoint, _ p1: CGPoint,
+                            _ p2: CGPoint, _ p3: CGPoint,
+                            _ t0: CGFloat, _ t1: CGFloat,
+                            _ t2: CGFloat, _ t3: CGFloat,
+                            _ t: CGFloat) -> CGPoint {
+        func lerp(_ a: CGPoint, _ b: CGPoint,
+                  _ ta: CGFloat, _ tb: CGFloat, _ t: CGFloat) -> CGPoint {
+            let denom = tb - ta
+            if denom == 0 { return a }
+            let u = (tb - t) / denom
+            let v = (t - ta) / denom
+            return CGPoint(x: u * a.x + v * b.x, y: u * a.y + v * b.y)
+        }
+        let A1 = lerp(p0, p1, t0, t1, t)
+        let A2 = lerp(p1, p2, t1, t2, t)
+        let A3 = lerp(p2, p3, t2, t3, t)
+        let B1 = lerp(A1, A2, t0, t2, t)
+        let B2 = lerp(A2, A3, t1, t3, t)
+        return lerp(B1, B2, t1, t2, t)
     }
 
     /// Seed `anchorsPerStroke` from existing checkpoint chains so a
