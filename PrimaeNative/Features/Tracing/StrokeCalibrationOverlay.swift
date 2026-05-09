@@ -39,7 +39,20 @@ struct StrokeCalibrationOverlay: View {
     /// The committed `editableStrokes[i]` is rebuilt from these anchors
     /// by BFS-walking the glyph skeleton between consecutive points.
     @State private var anchorsPerStroke: [Int: [CGPoint]] = [:]
+    /// Glyph centerline graph for the current (letter, schriftArt).
+    /// nil while loading or when extraction fails (anchors then fall
+    /// back to pure spline interpolation).
+    @State private var skeleton: GlyphSkeleton? = nil
 
+    /// Snap threshold (bbox units): anchors within this distance of the
+    /// skeleton snap to it on placement / drag-end. ~5% is generous
+    /// enough for finger placement on iPad.
+    private let snapThreshold: CGFloat = 0.05
+    /// Distance gate for BFS-walking the skeleton between two anchors.
+    /// Stricter than `snapThreshold` so a deliberately-off-glyph anchor
+    /// (e.g. mid-air sweep on single-stroke `b`) isn't pulled onto the
+    /// ink.
+    private let bfsGate: CGFloat = 0.03
 
     private let strokeColors: [Color] = [.red, .blue, .green, .orange, .purple, .pink, .cyan, .yellow]
 
@@ -62,14 +75,17 @@ struct StrokeCalibrationOverlay: View {
             .onAppear {
                 loadFromVM()
                 bootstrapAnchorsFromExistingStrokes()
+                refreshSkeleton()
             }
             .onChange(of: vm.currentLetterName) {
                 loadFromVM()
                 bootstrapAnchorsFromExistingStrokes()
+                refreshSkeleton()
             }
             .onChange(of: vm.schriftArt) {
                 loadFromVM(force: true)
                 bootstrapAnchorsFromExistingStrokes()
+                refreshSkeleton()
             }
             .onChange(of: mode) {
                 if mode == .points { bootstrapAnchorsFromExistingStrokes() }
@@ -143,7 +159,8 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    private func addAnchor(_ pt: CGPoint) {
+    private func addAnchor(_ rawPt: CGPoint) {
+        let pt = snapToSkeleton(rawPt)
         var anchors = anchorsPerStroke[activeStroke] ?? []
         if let insertIdx = closestSegmentInsertIndex(for: pt, in: anchors,
                                                      threshold: 0.04) {
@@ -153,6 +170,27 @@ struct StrokeCalibrationOverlay: View {
         }
         anchorsPerStroke[activeStroke] = anchors
         rebuildStrokeFromAnchors()
+    }
+
+    /// Pull `pt` onto the glyph centerline if within `snapThreshold`.
+    /// Lets the user tap roughly at the right spot and trust the
+    /// calibrator to land on the ink.
+    private func snapToSkeleton(_ pt: CGPoint) -> CGPoint {
+        guard let sk = skeleton,
+              let idx = sk.nearestIndex(to: pt,
+                                        maxDistance: snapThreshold) else {
+            return pt
+        }
+        return sk.points[idx]
+    }
+
+    /// (Re)build the skeleton on letter / script change. Synchronous —
+    /// extraction is hundreds of ms cold, instant on cached letters,
+    /// and the calibrator is a Debug-mode tool so a brief stall is OK.
+    private func refreshSkeleton() {
+        skeleton = GlyphSkeleton.make(letter: vm.currentLetterName,
+                                      schriftArt: vm.schriftArt,
+                                      openTypeFeatures: vm.currentGlyphFeatures)
     }
 
     /// Commit a dragged anchor and re-insert it at the spatially-
@@ -220,20 +258,54 @@ struct StrokeCalibrationOverlay: View {
 
     /// Densify the active stroke as a smooth curve through the user's
     /// anchors in list order. ≤1 anchor leaves the existing line
-    /// alone so mid-edit work isn't wiped. 3+ anchors get a centripetal
-    /// Catmull-Rom spline so curves like `o`/`g`/`a` need ~4 anchors
-    /// instead of ~10.
+    /// alone so mid-edit work isn't wiped.
+    ///
+    /// For each consecutive anchor pair: if both anchors land on the
+    /// glyph centerline, BFS-walk the skeleton between them so the
+    /// stroke follows the actual ink. Off-skeleton segments fall back
+    /// to centripetal Catmull-Rom (e.g. user-intended air sweep on a
+    /// single-stroke `b`). 2 anchors on a curved letter now produce a
+    /// glyph-faithful path.
     private func rebuildStrokeFromAnchors() {
         let anchors = anchorsPerStroke[activeStroke] ?? []
         while editableStrokes.count <= activeStroke {
             editableStrokes.append([])
         }
         guard anchors.count >= 2 else { return }
+
+        var path: [CGPoint] = [anchors[0]]
+        var bfsFilledSegments = 0
+        for i in 0..<(anchors.count - 1) {
+            let a = anchors[i], b = anchors[i + 1]
+            if let sk = skeleton,
+               let aIdx = sk.nearestIndex(to: a, maxDistance: bfsGate),
+               let bIdx = sk.nearestIndex(to: b, maxDistance: bfsGate),
+               let walked = sk.bfsPath(from: aIdx, to: bIdx),
+               walked.count >= 2 {
+                path.append(contentsOf: walked.dropFirst())
+                bfsFilledSegments += 1
+            } else {
+                path.append(b)
+            }
+        }
+
+        // Skeleton-walked output is already at pixel resolution; spline
+        // smoothing only helps when most of the path is straight-line
+        // segments between user anchors.
+        let mostlyBfs = bfsFilledSegments * 2 >= (anchors.count - 1)
+        let smoothed: [CGPoint]
+        if mostlyBfs {
+            smoothed = path
+        } else if path.count >= 3 {
+            smoothed = catmullRomSpline(path)
+        } else {
+            smoothed = path
+        }
+
         let segments = anchors.count - 1
-        let denseCount = max(40, min(200, segments * 8))
-        let smoothed = anchors.count >= 3
-            ? catmullRomSpline(anchors)
-            : anchors
+        let denseCount = mostlyBfs
+            ? min(200, max(60, path.count))
+            : max(40, min(200, segments * 8))
         editableStrokes[activeStroke] = resampleUniformBbox(smoothed,
                                                             count: denseCount)
     }
@@ -296,18 +368,21 @@ struct StrokeCalibrationOverlay: View {
 
     /// Seed `anchorsPerStroke` from existing checkpoint chains so a
     /// user opening the calibrator can refine instead of starting
-    /// from zero.
+    /// from zero. Bootstrap anchors snap to skeleton so re-opening a
+    /// previously-calibrated letter immediately benefits from BFS-fill.
     private func bootstrapAnchorsFromExistingStrokes() {
         for (i, cps) in editableStrokes.enumerated() {
             guard !cps.isEmpty else { continue }
             if let existing = anchorsPerStroke[i], !existing.isEmpty { continue }
             let n = cps.count
+            let raw: [CGPoint]
             if n <= 5 {
-                anchorsPerStroke[i] = cps
+                raw = cps
             } else {
                 let indices = [0, n / 4, n / 2, 3 * n / 4, n - 1]
-                anchorsPerStroke[i] = indices.map { cps[$0] }
+                raw = indices.map { cps[$0] }
             }
+            anchorsPerStroke[i] = raw.map(snapToSkeleton)
         }
     }
 
@@ -422,7 +497,8 @@ struct StrokeCalibrationOverlay: View {
                                     screenToGlyph(value.location, in: size)
                             }
                             .onEnded { value in
-                                let final = screenToGlyph(value.location, in: size)
+                                let raw = screenToGlyph(value.location, in: size)
+                                let final = snapToSkeleton(raw)
                                 commitDragWithReorder(final, draggedIdx: idx)
                                 rebuildStrokeFromAnchors()
                             }
