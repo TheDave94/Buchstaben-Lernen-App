@@ -174,13 +174,16 @@ struct GlyphSkeleton {
             var prev = -1
             var cur = tip
             var chain: [Int] = []
-            while chain.count <= maxSpurLen {
+            // Walk up to `maxSpurLen` nodes from the tip toward a junction.
+            // If we reach a junction within the budget, the chain is a spur
+            // (chain.count ≤ maxSpurLen). Beyond that we exit without
+            // pruning and the branch is preserved.
+            while chain.count < maxSpurLen {
                 chain.append(cur)
                 let next = sk.adjacency[cur].filter { $0 != prev }
                 if next.count != 1 { break }      // dead end or branched chain
                 let nxt = next[0]
                 if sk.adjacency[nxt].count >= 3 {
-                    // Walked into a junction — short branch is a spur.
                     prune.formUnion(chain)
                     break
                 }

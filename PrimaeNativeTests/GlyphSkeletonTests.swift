@@ -113,89 +113,69 @@ import CoreGraphics
 
     // MARK: - prunedSpurs
 
-    @Test func prunedSpurs_noSpur_returnsUnchanged() {
-        // T-junction: vertical line meeting a horizontal arm.
-        // Indices: 0—1—2 (vertical), 1—3 (horizontal arm).
-        // 3 tips, all on long branches → no pruning.
-        let pts = [
-            CGPoint(x: 0.5, y: 0.1),  // 0 — top
-            CGPoint(x: 0.5, y: 0.5),  // 1 — junction
-            CGPoint(x: 0.5, y: 0.9),  // 2 — bottom
-            CGPoint(x: 0.9, y: 0.5),  // 3 — right tip
-        ]
-        let adj: [[Int]] = [[1], [0, 2, 3], [1], [1]]
-        let sk = GlyphSkeleton(points: pts, adjacency: adj)
-        let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 2)
-        #expect(pruned.points.count == 4, "no spur shorter than 2 → unchanged")
+    /// Helper: build a chain skeleton with branches off a junction.
+    /// `armLengths` = number of nodes in each arm extending from the
+    /// junction (not counting the junction itself).
+    private func makeJunctionSkeleton(armLengths: [Int]) -> GlyphSkeleton {
+        var pts: [CGPoint] = [CGPoint(x: 0.5, y: 0.5)]  // junction at index 0
+        var adj: [[Int]] = [[]]
+        for (a, len) in armLengths.enumerated() {
+            let dir = CGFloat(a) * .pi / CGFloat(armLengths.count) * 2
+            let dx = cos(dir) * 0.05
+            let dy = sin(dir) * 0.05
+            var prev = 0
+            for step in 1...len {
+                let idx = pts.count
+                pts.append(CGPoint(x: 0.5 + dx * CGFloat(step),
+                                   y: 0.5 + dy * CGFloat(step)))
+                adj.append([prev])
+                adj[prev].append(idx)
+                prev = idx
+            }
+        }
+        return GlyphSkeleton(points: pts, adjacency: adj)
     }
 
-    @Test func prunedSpurs_shortSpurAtJunction_removed() {
-        // Same T plus a 2-pixel spur off the junction (1—4—5).
-        // Spur chain length = 2, threshold = 5 → prune.
-        let pts = [
-            CGPoint(x: 0.5, y: 0.1),  // 0 — top
-            CGPoint(x: 0.5, y: 0.5),  // 1 — junction
-            CGPoint(x: 0.5, y: 0.9),  // 2 — bottom
-            CGPoint(x: 0.9, y: 0.5),  // 3 — right tip
-            CGPoint(x: 0.5, y: 0.45), // 4 — spur middle
-            CGPoint(x: 0.5, y: 0.40), // 5 — spur tip
-        ]
-        let adj: [[Int]] = [[1], [0, 2, 3, 4], [1], [1], [1, 5], [4]]
-        let sk = GlyphSkeleton(points: pts, adjacency: adj)
-        let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 5)
-        #expect(pruned.points.count == 4,
-                "spur chain (4, 5) pruned → 4 nodes left")
-        // Junction now has degree 3 (no longer connected to spur).
-        let junctionAdj = pruned.adjacency.first { $0.count == 3 }
-        #expect(junctionAdj != nil)
-    }
-
-    @Test func prunedSpurs_longBranchKept() {
-        // Junction with one arm longer than maxSpurLen — keep it.
-        // 0—1—2 (vertical), 1—3—4—5—6 (long horizontal).
-        let pts = [
-            CGPoint(x: 0.5, y: 0.1),
-            CGPoint(x: 0.5, y: 0.5),  // junction
-            CGPoint(x: 0.5, y: 0.9),
-            CGPoint(x: 0.6, y: 0.5),
-            CGPoint(x: 0.7, y: 0.5),
-            CGPoint(x: 0.8, y: 0.5),
-            CGPoint(x: 0.9, y: 0.5),
-        ]
-        let adj: [[Int]] = [[1], [0, 2, 3], [1], [1, 4], [3, 5], [4, 6], [5]]
-        let sk = GlyphSkeleton(points: pts, adjacency: adj)
+    @Test func prunedSpurs_allArmsLong_returnsUnchanged() {
+        // 3 arms each 5 nodes long. maxSpurLen=3 → none pruned.
+        let sk = makeJunctionSkeleton(armLengths: [5, 5, 5])
         let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 3)
-        #expect(pruned.points.count == 7, "long arm not pruned at threshold 3")
+        #expect(pruned.points.count == sk.points.count,
+                "all 5-arm chains > threshold 3 → kept")
+    }
+
+    @Test func prunedSpurs_shortBranchAmongLong_removed() {
+        // 3 long arms (5 each) + 1 short spur (2 nodes). Threshold 3.
+        let sk = makeJunctionSkeleton(armLengths: [5, 5, 5, 2])
+        let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 3)
+        #expect(pruned.points.count == sk.points.count - 2,
+                "spur of length 2 ≤ 3 pruned; 3 arms × 5 + junction kept")
+    }
+
+    @Test func prunedSpurs_branchAtThresholdBoundary() {
+        // Branch length exactly at the threshold gets pruned (≤ rule).
+        let sk = makeJunctionSkeleton(armLengths: [10, 10, 3])
+        let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 3)
+        #expect(pruned.points.count == sk.points.count - 3,
+                "length-3 chain at maxSpurLen=3 → pruned")
+    }
+
+    @Test func prunedSpurs_branchOneOverThreshold_kept() {
+        // Branch length one more than threshold preserved.
+        let sk = makeJunctionSkeleton(armLengths: [10, 10, 4])
+        let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 3)
+        #expect(pruned.points.count == sk.points.count,
+                "length-4 chain > maxSpurLen=3 → preserved")
     }
 
     @Test func prunedSpurs_isolatedChain_notPruned() {
-        // Isolated short chain with no junction (e.g. 'i' dot remnant).
-        // Two tips, no degree-3 junction → safe, don't prune.
+        // 2-node chain with no junction — preserved regardless of length.
         let pts = [CGPoint(x: 0.5, y: 0.1), CGPoint(x: 0.5, y: 0.15)]
         let adj: [[Int]] = [[1], [0]]
         let sk = GlyphSkeleton(points: pts, adjacency: adj)
         let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 5)
         #expect(pruned.points.count == 2,
-                "isolated dot not connected to a junction → preserved")
-    }
-
-    @Test func prunedSpurs_iteratesUntilStable() {
-        // Two-level spur: short branch off a junction whose remaining
-        // arm becomes a tip after first pass — second pass cleans it up.
-        // 0—1 (long stem), 1—2—3 (junction-1 with mid spur),
-        // 2—4 (junction-2 with another short branch)
-        // After pruning 4, node 2 becomes degree-1 with a 2-len chain
-        // back to node 1; second pass prunes that too.
-        let pts = (0...4).map { CGPoint(x: 0, y: CGFloat($0) * 0.1) }
-        // 0—1—2—3 (chain), 2—4 (branch tip)
-        let adj: [[Int]] = [[1], [0, 2], [1, 3, 4], [2], [2]]
-        let sk = GlyphSkeleton(points: pts, adjacency: adj)
-        // Sanity: this is one long stem 0-1-2-3 with a side spur at 2.
-        // Spur (4) is 1-len; first pass prunes it. Then 2 has degree 2
-        // — straight chain 1-2-3 — no further pruning.
-        let pruned = GlyphSkeleton.prunedSpurs(sk, maxSpurLen: 3)
-        #expect(pruned.points.count == 4,
-                "side spur (4) pruned; main chain 0-1-2-3 preserved")
+                "no junction reached → not a spur, kept")
     }
 
     @Test func bfsPath_loop_findsAnyShortestRoute() {

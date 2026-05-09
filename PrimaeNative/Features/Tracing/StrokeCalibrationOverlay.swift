@@ -486,9 +486,13 @@ struct StrokeCalibrationOverlay: View {
                 path.move(to: first)
                 for pt in pts.dropFirst() { path.addLine(to: pt) }
             }
+            // butt cap so two strokes meeting at a corner converge to a
+            // sharp point — round caps overlap into a blob and look like
+            // the strokes "merge along a line" rather than meet at one
+            // point.
             .stroke(Color.black.opacity(0.55),
                     style: StrokeStyle(lineWidth: 9,
-                                       lineCap: .round,
+                                       lineCap: .butt,
                                        lineJoin: .round))
             Path { path in
                 guard let first = pts.first else { return }
@@ -497,7 +501,7 @@ struct StrokeCalibrationOverlay: View {
             }
             .stroke(Color.cyan,
                     style: StrokeStyle(lineWidth: 5,
-                                       lineCap: .round,
+                                       lineCap: .butt,
                                        lineJoin: .round))
             if pts.count >= 2 {
                 directionArrow(from: pts[pts.count - 2], to: pts[pts.count - 1])
