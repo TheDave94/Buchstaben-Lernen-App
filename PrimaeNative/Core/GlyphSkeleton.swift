@@ -77,24 +77,15 @@ struct GlyphSkeleton {
 
     // MARK: - Construction
 
-    /// Memoized per (letter, schriftArt, features) key — extraction is
-    /// hundreds of ms on a cold call, instantaneous on warm.
-    private static var cache: [String: GlyphSkeleton] = [:]
-    private static let cacheQueue = DispatchQueue(label: "GlyphSkeleton.cache")
-
+    /// No memoization — at 256² resolution each rebuild is ~150ms, only
+    /// fires on letter/script change in the calibrator, and removing
+    /// the cache eliminates a class of "stale skeleton survives an
+    /// algorithm change" bugs during iteration.
     static func make(letter: String, schriftArt: SchriftArt,
                      openTypeFeatures: [String] = []) -> GlyphSkeleton? {
         guard !letter.isEmpty else { return nil }
-        let key = "\(letter)|\(schriftArt.rawValue)|\(openTypeFeatures.sorted().joined(separator: ","))"
-        if let hit = cacheQueue.sync(execute: { cache[key] }) {
-            return hit
-        }
-        guard let built = build(letter: letter, schriftArt: schriftArt,
-                                openTypeFeatures: openTypeFeatures) else {
-            return nil
-        }
-        cacheQueue.sync { cache[key] = built }
-        return built
+        return build(letter: letter, schriftArt: schriftArt,
+                     openTypeFeatures: openTypeFeatures)
     }
 
     private static func build(letter: String, schriftArt: SchriftArt,
