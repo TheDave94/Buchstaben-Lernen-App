@@ -44,15 +44,11 @@ struct StrokeCalibrationOverlay: View {
     /// back to pure spline interpolation).
     @State private var skeleton: GlyphSkeleton? = nil
 
-    /// Snap threshold (bbox units): anchors within this distance of the
-    /// skeleton snap to it on placement / drag-end. ~5% is generous
-    /// enough for finger placement on iPad.
-    private let snapThreshold: CGFloat = 0.05
     /// Distance gate for BFS-walking the skeleton between two anchors.
-    /// Stricter than `snapThreshold` so a deliberately-off-glyph anchor
-    /// (e.g. mid-air sweep on single-stroke `b`) isn't pulled onto the
-    /// ink.
-    private let bfsGate: CGFloat = 0.03
+    /// An anchor placed farther than this from the centerline is treated
+    /// as deliberately off-glyph (e.g. air-sweep on single-stroke `b`)
+    /// and that segment falls back to the spline path.
+    private let bfsGate: CGFloat = 0.08
 
     private let strokeColors: [Color] = [.red, .blue, .green, .orange, .purple, .pink, .cyan, .yellow]
 
@@ -160,8 +156,12 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    private func addAnchor(_ rawPt: CGPoint) {
-        let pt = snapToSkeleton(rawPt)
+    private func addAnchor(_ pt: CGPoint) {
+        // Anchors are kept at the user's raw tap (corners, baseline,
+        // wherever they intend) — snapping happens only inside
+        // rebuildStrokeFromAnchors when we look up BFS endpoints, so
+        // the rendered path actually reaches the user's anchor instead
+        // of stopping at the medial-axis terminus.
         var anchors = anchorsPerStroke[activeStroke] ?? []
         if let insertIdx = closestSegmentInsertIndex(for: pt, in: anchors,
                                                      threshold: 0.04) {
@@ -171,18 +171,6 @@ struct StrokeCalibrationOverlay: View {
         }
         anchorsPerStroke[activeStroke] = anchors
         rebuildStrokeFromAnchors()
-    }
-
-    /// Pull `pt` onto the glyph centerline if within `snapThreshold`.
-    /// Lets the user tap roughly at the right spot and trust the
-    /// calibrator to land on the ink.
-    private func snapToSkeleton(_ pt: CGPoint) -> CGPoint {
-        guard let sk = skeleton,
-              let idx = sk.nearestIndex(to: pt,
-                                        maxDistance: snapThreshold) else {
-            return pt
-        }
-        return sk.points[idx]
     }
 
     /// (Re)build the skeleton on letter / script change. Synchronous —
@@ -283,7 +271,12 @@ struct StrokeCalibrationOverlay: View {
                let bIdx = sk.nearestIndex(to: b, maxDistance: bfsGate),
                let walked = sk.bfsPath(from: aIdx, to: bIdx),
                walked.count >= 2 {
-                path.append(contentsOf: walked.dropFirst())
+                // Stitch raw a → snapped a → ... walked ... → snapped b → raw b.
+                // The path begins at the user's anchor (a corner, baseline,
+                // wherever they tapped), runs into the centerline, walks the
+                // ink, then exits back out to the next anchor.
+                path.append(contentsOf: walked)
+                path.append(b)
                 bfsFilledSegments += 1
             } else {
                 path.append(b)
@@ -408,7 +401,7 @@ struct StrokeCalibrationOverlay: View {
                 let indices = [0, n / 4, n / 2, 3 * n / 4, n - 1]
                 raw = indices.map { cps[$0] }
             }
-            anchorsPerStroke[i] = raw.map(snapToSkeleton)
+            anchorsPerStroke[i] = raw
         }
     }
 
@@ -543,8 +536,7 @@ struct StrokeCalibrationOverlay: View {
                                     screenToGlyph(value.location, in: size)
                             }
                             .onEnded { value in
-                                let raw = screenToGlyph(value.location, in: size)
-                                let final = snapToSkeleton(raw)
+                                let final = screenToGlyph(value.location, in: size)
                                 commitDragWithReorder(final, draggedIdx: idx)
                                 rebuildStrokeFromAnchors()
                             }
