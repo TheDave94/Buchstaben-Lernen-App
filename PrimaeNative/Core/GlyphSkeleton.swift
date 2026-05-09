@@ -133,14 +133,23 @@ struct GlyphSkeleton {
         let stride = ctx.bytesPerRow
 
         // Bool grid; row = CG-y (BL origin); col = CG-x.
-        var mask = [[Bool]](repeating: [Bool](repeating: false, count: res),
-                            count: res)
+        var glyphMask = [[Bool]](repeating: [Bool](repeating: false, count: res),
+                                 count: res)
         for r in 0..<res {
             for c in 0..<res {
-                mask[r][c] = buf[r * stride + c] > 127
+                glyphMask[r][c] = buf[r * stride + c] > 127
             }
         }
+        var mask = glyphMask  // mutable thinning copy; glyphMask kept as the
+                              // reference shape so tip-extension knows when
+                              // it has walked out of the ink.
         zhangSuenThin(&mask, rows: res, cols: res)
+        // Zhang-Suen terminates the medial axis ~half-stroke-width before
+        // the actual stroke end (the user's "skeleton stops short" arrows
+        // on `k`'s top + bottom). Walk each tip along its direction
+        // inside the glyph mask until it exits the ink.
+        extendTipsToOutline(&mask, glyphMask: glyphMask,
+                            rows: res, cols: res, maxExtension: 25)
         guard let raw = extractGraph(from: mask, res: res, inset: inset,
                                      drawable: drawable) else { return nil }
         // Spur threshold at ~3% bbox (8 pixels at 256 res). Catches the
@@ -148,6 +157,47 @@ struct GlyphSkeleton {
         // vertex) without eating into legitimate stroke arms which are
         // 50+ pixels even on the smallest glyph.
         return prunedSpurs(raw, maxSpurLen: 8)
+    }
+
+    /// For every degree-1 pixel in the thinned skeleton, walk along the
+    /// direction (tip — its sole neighbor) and add pixels back into the
+    /// skeleton as long as they stay inside the original glyph mask.
+    /// Bounded by `maxExtension` so a runaway tip in an open shape can't
+    /// march off the glyph indefinitely.
+    private static func extendTipsToOutline(_ skeleton: inout [[Bool]],
+                                            glyphMask: [[Bool]],
+                                            rows: Int, cols: Int,
+                                            maxExtension: Int) {
+        var tips: [(r: Int, c: Int, dr: Int, dc: Int)] = []
+        for r in 1..<(rows - 1) {
+            for c in 1..<(cols - 1) where skeleton[r][c] {
+                var count = 0
+                var nr = 0, nc = 0
+                for dr in -1...1 {
+                    for dc in -1...1 where !(dr == 0 && dc == 0) {
+                        if skeleton[r + dr][c + dc] {
+                            count += 1
+                            nr = r + dr
+                            nc = c + dc
+                        }
+                    }
+                }
+                if count == 1 {
+                    // Direction = tip - neighbor (unit vector in {-1,0,1}²).
+                    tips.append((r, c, r - nr, c - nc))
+                }
+            }
+        }
+        for tip in tips {
+            var r = tip.r, c = tip.c
+            for _ in 0..<maxExtension {
+                r += tip.dr
+                c += tip.dc
+                if r < 0 || r >= rows || c < 0 || c >= cols { break }
+                if !glyphMask[r][c] { break }
+                skeleton[r][c] = true
+            }
+        }
     }
 
     /// Remove short dead-end branches (degree-1 chains shorter than
