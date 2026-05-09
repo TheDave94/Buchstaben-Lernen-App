@@ -17,8 +17,11 @@ struct GlyphSkeleton {
     /// `points[i]` and `points[j]` are 1-pixel-distant on the raster.
     let adjacency: [[Int]]
 
-    private static let rasterResolution = 256
-    private static let rasterInset = 2
+    /// 512² thins in ~1s cold on iPad and gives ~2px-per-bbox-percent
+    /// resolution; 256 was visibly squiggly through the BFS-walked
+    /// path on curved letters like `C` / `o`.
+    private static let rasterResolution = 512
+    private static let rasterInset = 4
 
     /// Returns the index of the skeleton point closest to `bboxPoint`,
     /// or nil if the closest is farther than `maxDistance` (bbox units,

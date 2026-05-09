@@ -290,13 +290,14 @@ struct StrokeCalibrationOverlay: View {
             }
         }
 
-        // Skeleton-walked output is already at pixel resolution; spline
-        // smoothing only helps when most of the path is straight-line
-        // segments between user anchors.
+        // Skeleton-walked paths come in at raster pixel resolution and
+        // visibly staircase through BFS — a moving-average pass de-
+        // jaggies them. Pure-anchor paths get Catmull-Rom for the
+        // off-skeleton spline case.
         let mostlyBfs = bfsFilledSegments * 2 >= (anchors.count - 1)
         let smoothed: [CGPoint]
         if mostlyBfs {
-            smoothed = path
+            smoothed = movingAverageSmooth(path, window: 4)
         } else if path.count >= 3 {
             smoothed = catmullRomSpline(path)
         } else {
@@ -309,6 +310,30 @@ struct StrokeCalibrationOverlay: View {
             : max(40, min(200, segments * 8))
         editableStrokes[activeStroke] = resampleUniformBbox(smoothed,
                                                             count: denseCount)
+    }
+
+    /// Symmetric moving-average smoother for raster-walked polylines.
+    /// `window` points on each side averaged with the center; ends use a
+    /// shrinking window so endpoints stay anchored. Cheap and removes
+    /// pixel staircase without distorting macro shape.
+    private func movingAverageSmooth(_ path: [CGPoint],
+                                     window: Int) -> [CGPoint] {
+        guard path.count > 2 * window + 1, window > 0 else { return path }
+        var out: [CGPoint] = []
+        out.reserveCapacity(path.count)
+        for i in 0..<path.count {
+            let lo = max(0, i - window)
+            let hi = min(path.count - 1, i + window)
+            var sx: CGFloat = 0
+            var sy: CGFloat = 0
+            for j in lo...hi {
+                sx += path[j].x
+                sy += path[j].y
+            }
+            let n = CGFloat(hi - lo + 1)
+            out.append(CGPoint(x: sx / n, y: sy / n))
+        }
+        return out
     }
 
     /// Centripetal Catmull-Rom (α=0.5) through every anchor with mirrored
