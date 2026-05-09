@@ -262,25 +262,43 @@ struct StrokeCalibrationOverlay: View {
         }
         guard anchors.count >= 2 else { return }
 
+        // Stitching rule: the path begins at the first raw anchor, walks
+        // BFS-filled segments through the centerline, and ends at the
+        // last raw anchor. Intermediate anchors are routing waypoints —
+        // BFS routes through their nearest skeleton point, but the path
+        // doesn't visit raw-middle so we don't get a snap-out / snap-in
+        // spike at each interior anchor (the bug on multi-line letters
+        // like A / K).
         var path: [CGPoint] = [anchors[0]]
         var bfsFilledSegments = 0
-        for i in 0..<(anchors.count - 1) {
+        let lastIdx = anchors.count - 1
+        for i in 0..<lastIdx {
             let a = anchors[i], b = anchors[i + 1]
             if let sk = skeleton,
                let aIdx = sk.nearestIndex(to: a, maxDistance: bfsGate),
                let bIdx = sk.nearestIndex(to: b, maxDistance: bfsGate),
                let walked = sk.bfsPath(from: aIdx, to: bIdx),
                walked.count >= 2 {
-                // Stitch raw a → snapped a → ... walked ... → snapped b → raw b.
-                // The path begins at the user's anchor (a corner, baseline,
-                // wherever they tapped), runs into the centerline, walks the
-                // ink, then exits back out to the next anchor.
-                path.append(contentsOf: walked)
-                path.append(b)
+                // walked[0] is snapped(a). If it duplicates the current
+                // path tail (i.e. previous segment also BFS-filled, ending
+                // at the same skeleton point), drop it; otherwise keep it
+                // so the path lines from path-tail into the centerline.
+                if let tail = path.last,
+                   approxEqual(tail, walked[0]) {
+                    path.append(contentsOf: walked.dropFirst())
+                } else {
+                    path.append(contentsOf: walked)
+                }
                 bfsFilledSegments += 1
             } else {
                 path.append(b)
             }
+        }
+        // Snap-out: if the final segment was BFS-filled, path now ends at
+        // snapped(last anchor). Reach out to the user's actual last
+        // anchor so the stroke terminates where they tapped.
+        if let tail = path.last, !approxEqual(tail, anchors[lastIdx]) {
+            path.append(anchors[lastIdx])
         }
 
         // Skeleton-walked paths come in at raster pixel resolution and
@@ -303,6 +321,14 @@ struct StrokeCalibrationOverlay: View {
             : max(40, min(200, segments * 8))
         editableStrokes[activeStroke] = resampleUniformBbox(smoothed,
                                                             count: denseCount)
+    }
+
+    /// Two bbox-relative points are within ~0.01 of each other.
+    /// Used to drop duplicate walked-path endpoints when chaining BFS
+    /// segments through a multi-anchor stroke.
+    private func approxEqual(_ a: CGPoint, _ b: CGPoint) -> Bool {
+        let dx = a.x - b.x, dy = a.y - b.y
+        return dx * dx + dy * dy < 0.0001
     }
 
     /// Symmetric moving-average smoother for raster-walked polylines.
