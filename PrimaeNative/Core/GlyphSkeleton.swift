@@ -154,8 +154,9 @@ struct GlyphSkeleton {
     /// vertex) and BFS would otherwise route through them, producing a
     /// hook off the rendered stroke. Iterates until stable so a junction
     /// that turns into a tip after the first pass also gets cleaned up.
-    private static func prunedSpurs(_ sk: GlyphSkeleton,
-                                    maxSpurLen: Int) -> GlyphSkeleton {
+    /// Internal-not-private so tests can drive it with synthetic skeletons.
+    static func prunedSpurs(_ sk: GlyphSkeleton,
+                            maxSpurLen: Int) -> GlyphSkeleton {
         var current = sk
         while true {
             let next = pruneOnce(current, maxSpurLen: maxSpurLen)
