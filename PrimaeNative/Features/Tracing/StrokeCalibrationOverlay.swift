@@ -434,20 +434,25 @@ struct StrokeCalibrationOverlay: View {
     }
 
 
-    /// Subtle dots at every skeleton pixel so the user can see what
-    /// will snap. Canvas (single-pass draw) over ForEach because the
-    /// skeleton can have hundreds of points.
+    /// Skeleton-pixel dots so the user can see what will snap. Canvas
+    /// (single-pass draw) over ForEach because the skeleton can have
+    /// hundreds of points. Dots are color-graded by bbox-y (red=top,
+    /// blue=bottom) so a mirrored skeleton is immediately obvious.
     @ViewBuilder
     private func skeletonLayer(in size: CGSize) -> some View {
         if let sk = skeleton, !sk.points.isEmpty {
             Canvas { context, canvasSize in
                 for pt in sk.points {
                     let screenPt = glyphToScreen(pt, in: canvasSize)
-                    let rect = CGRect(x: screenPt.x - 1.0,
-                                      y: screenPt.y - 1.0,
-                                      width: 2.0, height: 2.0)
+                    let rect = CGRect(x: screenPt.x - 1.5,
+                                      y: screenPt.y - 1.5,
+                                      width: 3.0, height: 3.0)
+                    let topness = 1.0 - max(0, min(1, pt.y))
+                    let color = Color(red: topness,
+                                      green: 0.2,
+                                      blue: 1 - topness)
                     context.fill(Path(ellipseIn: rect),
-                                 with: .color(.gray.opacity(0.45)))
+                                 with: .color(color.opacity(0.75)))
                 }
             }
             .allowsHitTesting(false)
@@ -676,6 +681,19 @@ struct StrokeCalibrationOverlay: View {
                     .padding(.vertical, 7)
                     .background(.ultraThinMaterial, in: Capsule())
             }
+
+            // Skeleton diagnostics: count + orientation legend so we can
+            // verify the centerline extracted at the right position.
+            let skLabel: String = {
+                guard let sk = skeleton else { return "Skelett: nil" }
+                return "Skelett: \(sk.points.count) Punkte (rot=oben, blau=unten)"
+            }()
+            Text(skLabel)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
 
             Spacer()
 

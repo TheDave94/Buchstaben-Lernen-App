@@ -116,9 +116,14 @@ struct GlyphSkeleton {
         let res = rasterResolution
         let inset = rasterInset
         let drawable = CGFloat(res - 2 * inset)
+        // bytesPerRow: 0 lets CG pick the system-preferred stride. Hardcoding
+        // res silently fails on iOS when the value doesn't match the
+        // platform's alignment; CGContext returns nil and the whole skeleton
+        // build aborts. Read the actual stride back via `ctx.bytesPerRow`
+        // for buffer indexing — it can exceed `res` if CG adds padding.
         guard let ctx = CGContext(
                 data: nil, width: res, height: res,
-                bitsPerComponent: 8, bytesPerRow: res,
+                bitsPerComponent: 8, bytesPerRow: 0,
                 space: CGColorSpaceCreateDeviceGray(),
                 bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
         ctx.setFillColor(gray: 0, alpha: 1)
@@ -133,13 +138,14 @@ struct GlyphSkeleton {
         ctx.fillPath()
         guard let data = ctx.data else { return nil }
         let buf = data.assumingMemoryBound(to: UInt8.self)
+        let stride = ctx.bytesPerRow
 
         // Bool grid; row = CG-y (BL origin); col = CG-x.
         var mask = [[Bool]](repeating: [Bool](repeating: false, count: res),
                             count: res)
         for r in 0..<res {
             for c in 0..<res {
-                mask[r][c] = buf[r * res + c] > 127
+                mask[r][c] = buf[r * stride + c] > 127
             }
         }
         zhangSuenThin(&mask, rows: res, cols: res)
