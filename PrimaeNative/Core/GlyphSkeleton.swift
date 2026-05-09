@@ -143,7 +143,65 @@ struct GlyphSkeleton {
             }
         }
         zhangSuenThin(&mask, rows: res, cols: res)
-        return extractGraph(from: mask, res: res, inset: inset, drawable: drawable)
+        guard let raw = extractGraph(from: mask, res: res, inset: inset,
+                                     drawable: drawable) else { return nil }
+        return prunedSpurs(raw, maxSpurLen: 12)
+    }
+
+    /// Remove short dead-end branches (degree-1 chains shorter than
+    /// `maxSpurLen` that terminate at a junction). Zhang-Suen thinning
+    /// leaves these at corners (the apex of `A`, the inside of `K`'s
+    /// vertex) and BFS would otherwise route through them, producing a
+    /// hook off the rendered stroke. Iterates until stable so a junction
+    /// that turns into a tip after the first pass also gets cleaned up.
+    private static func prunedSpurs(_ sk: GlyphSkeleton,
+                                    maxSpurLen: Int) -> GlyphSkeleton {
+        var current = sk
+        while true {
+            let next = pruneOnce(current, maxSpurLen: maxSpurLen)
+            if next.points.count == current.points.count { return current }
+            current = next
+        }
+    }
+
+    private static func pruneOnce(_ sk: GlyphSkeleton,
+                                  maxSpurLen: Int) -> GlyphSkeleton {
+        let n = sk.points.count
+        var prune = Set<Int>()
+        for tip in 0..<n where sk.adjacency[tip].count == 1 {
+            if prune.contains(tip) { continue }
+            var prev = -1
+            var cur = tip
+            var chain: [Int] = []
+            while chain.count <= maxSpurLen {
+                chain.append(cur)
+                let next = sk.adjacency[cur].filter { $0 != prev }
+                if next.count != 1 { break }      // dead end or branched chain
+                let nxt = next[0]
+                if sk.adjacency[nxt].count >= 3 {
+                    // Walked into a junction — short branch is a spur.
+                    prune.formUnion(chain)
+                    break
+                }
+                prev = cur
+                cur = nxt
+            }
+        }
+        if prune.isEmpty { return sk }
+        var remap = [Int](repeating: -1, count: n)
+        var newPts: [CGPoint] = []
+        for i in 0..<n where !prune.contains(i) {
+            remap[i] = newPts.count
+            newPts.append(sk.points[i])
+        }
+        var newAdj = Array(repeating: [Int](), count: newPts.count)
+        for i in 0..<n where !prune.contains(i) {
+            let ni = remap[i]
+            for j in sk.adjacency[i] where !prune.contains(j) {
+                newAdj[ni].append(remap[j])
+            }
+        }
+        return GlyphSkeleton(points: newPts, adjacency: newAdj)
     }
 
     /// Zhang-Suen thinning to 1-pixel-wide skeleton. Two sub-iterations
