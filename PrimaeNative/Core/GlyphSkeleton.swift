@@ -17,11 +17,12 @@ struct GlyphSkeleton {
     /// `points[i]` and `points[j]` are 1-pixel-distant on the raster.
     let adjacency: [[Int]]
 
-    /// 512² thins in ~1s cold on iPad and gives ~2px-per-bbox-percent
-    /// resolution; 256 was visibly squiggly through the BFS-walked
-    /// path on curved letters like `C` / `o`.
-    private static let rasterResolution = 512
-    private static let rasterInset = 4
+    /// 256² thins in ~150ms cold and renders ~600 skeleton points,
+    /// vs 512² which produced ~2400 points and pushed Canvas redraw
+    /// past the frame budget. Combined with the moving-average
+    /// smoothing in the calibrator, 256 is plenty smooth on curves.
+    private static let rasterResolution = 256
+    private static let rasterInset = 2
 
     /// Returns the index of the skeleton point closest to `bboxPoint`,
     /// or nil if the closest is farther than `maxDistance` (bbox units,
@@ -151,7 +152,11 @@ struct GlyphSkeleton {
         zhangSuenThin(&mask, rows: res, cols: res)
         guard let raw = extractGraph(from: mask, res: res, inset: inset,
                                      drawable: drawable) else { return nil }
-        return prunedSpurs(raw, maxSpurLen: 12)
+        // Spur threshold at ~3% bbox (8 pixels at 256 res). Catches the
+        // typical Zhang-Suen artifact tails at corners (apex of A, K
+        // vertex) without eating into legitimate stroke arms which are
+        // 50+ pixels even on the smallest glyph.
+        return prunedSpurs(raw, maxSpurLen: 8)
     }
 
     /// Remove short dead-end branches (degree-1 chains shorter than

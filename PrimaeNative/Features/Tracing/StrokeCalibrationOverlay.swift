@@ -434,26 +434,22 @@ struct StrokeCalibrationOverlay: View {
     }
 
 
-    /// Skeleton-pixel dots so the user can see what will snap. Canvas
-    /// (single-pass draw) over ForEach because the skeleton can have
-    /// hundreds of points. Dots are color-graded by bbox-y (red=top,
-    /// blue=bottom) so a mirrored skeleton is immediately obvious.
+    /// Skeleton centerline dots. Builds ONE Path with every dot as a
+    /// subpath and fills in a single call — drawing N circles
+    /// individually pushed Canvas past the frame budget on letters
+    /// with hundreds of skeleton points (the lag the user reported).
     @ViewBuilder
     private func skeletonLayer(in size: CGSize) -> some View {
         if let sk = skeleton, !sk.points.isEmpty {
             Canvas { context, canvasSize in
+                var path = Path()
                 for pt in sk.points {
                     let screenPt = glyphToScreen(pt, in: canvasSize)
-                    let rect = CGRect(x: screenPt.x - 1.5,
-                                      y: screenPt.y - 1.5,
-                                      width: 3.0, height: 3.0)
-                    let topness = 1.0 - max(0, min(1, pt.y))
-                    let color = Color(red: topness,
-                                      green: 0.2,
-                                      blue: 1 - topness)
-                    context.fill(Path(ellipseIn: rect),
-                                 with: .color(color.opacity(0.75)))
+                    path.addEllipse(in: CGRect(x: screenPt.x - 1.0,
+                                               y: screenPt.y - 1.0,
+                                               width: 2.0, height: 2.0))
                 }
+                context.fill(path, with: .color(.gray.opacity(0.55)))
             }
             .allowsHitTesting(false)
         }
