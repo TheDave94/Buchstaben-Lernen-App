@@ -181,6 +181,12 @@ public final class TracingViewModel {
     var progress: CGFloat   = 0
     var isPlaying           = false
     var activePath: [CGPoint] = []
+    /// Snapshot of the just-completed activePath so the child can still
+    /// see what they wrote for ~5 s after the phase transition clears
+    /// `activePath`. Cleared by a delayed task scheduled in
+    /// `resetForPhaseTransition`, or immediately on the next touch.
+    var lingeringInk: [CGPoint] = []
+    private var lingeringInkClearTask: Task<Void, Never>? = nil
     /// Updated by `PhaseTransitionCoordinator.commitCompletion`.
     var currentDifficultyTier: DifficultyTier = .standard
 
@@ -1252,6 +1258,18 @@ public final class TracingViewModel {
         guard letters.indices.contains(letterIndex) else { return }
         reloadStrokeCheckpoints(for: letters[letterIndex])
         progress = 0
+        // Snapshot the just-finished trace so the canvas keeps showing
+        // it for ~5 s while the next phase comes up — child sees their
+        // own ink survive the transition rather than blink away.
+        if !activePath.isEmpty {
+            lingeringInk = activePath
+            lingeringInkClearTask?.cancel()
+            lingeringInkClearTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self else { return }
+                self.lingeringInk = []
+            }
+        }
         activePath.removeAll(keepingCapacity: true)
         lastRecognitionResult = nil
         recognitionTokens.cancel()

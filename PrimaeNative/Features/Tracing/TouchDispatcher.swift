@@ -68,6 +68,9 @@ final class TouchDispatcher {
         lastPoint                      = p
         lastTimestamp                  = t
         vm.activePath                  = [p]
+        // New touch supersedes any lingering snapshot from the
+        // previous phase — clear so the two paths don't overlay.
+        vm.lingeringInk = []
         wasInBounds                    = true
         // Stroke-boundary marker so the CoreML rasterizer breaks the
         // polyline at lifts (F→P confusion otherwise).

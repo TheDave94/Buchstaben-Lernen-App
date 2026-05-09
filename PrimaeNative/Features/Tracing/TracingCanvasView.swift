@@ -101,7 +101,7 @@ struct TracingCanvasView: View {
                     var path = Path()
                     path.addLines(retainedInk)
                     context.stroke(path, with: .color(.canvasInkStroke.opacity(0.9)),
-                                   style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                                   style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
                 }
 
                 // Active ink — only drawn on the active cell pass so
@@ -110,9 +110,19 @@ struct TracingCanvasView: View {
                 if isActiveCell, vm.activePath.count > 1 {
                     var path = Path()
                     path.addLines(vm.activePath)
-                    let inkWidth: CGFloat = vm.pencilPressure.map { 4 + $0 * 10 } ?? 8
+                    let inkWidth: CGFloat = vm.pencilPressure.map { 8 + $0 * 14 } ?? 14
                     context.stroke(path, with: .color(.canvasInkStroke),
                                    style: StrokeStyle(lineWidth: inkWidth, lineCap: .round, lineJoin: .round))
+                }
+
+                // Lingering ink — snapshot of the just-completed trace
+                // held visible for ~5 s after the phase transition so
+                // the child sees their own work before it clears.
+                if isActiveCell, vm.lingeringInk.count > 1 {
+                    var path = Path()
+                    path.addLines(vm.lingeringInk)
+                    context.stroke(path, with: .color(.canvasInkStroke.opacity(0.85)),
+                                   style: StrokeStyle(lineWidth: 14, lineCap: .round, lineJoin: .round))
                 }
 
                 // Animation guide dot — active cell only; suppressed
