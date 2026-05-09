@@ -204,9 +204,12 @@ struct GlyphSkeleton {
         for r in 0..<res {
             for c in 0..<res where mask[r][c] {
                 indexAt[r][c] = pts.count
-                // CG row is BL-origin → flip to top-down for bbox coords.
+                // CGBitmapContext memory: row 0 is visual top of image;
+                // we drew the CT glyph with its CT.maxY landing at high
+                // CG-y (= low memory row). So memory row r maps directly
+                // to bbox top-down y, no flip needed.
                 let bx = (CGFloat(c) - insetF + 0.5) / drawableF
-                let by = 1.0 - (CGFloat(r) - insetF + 0.5) / drawableF
+                let by = (CGFloat(r) - insetF + 0.5) / drawableF
                 pts.append(CGPoint(x: bx, y: by))
             }
         }
