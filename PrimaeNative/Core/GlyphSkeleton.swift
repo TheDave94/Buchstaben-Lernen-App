@@ -156,7 +156,97 @@ struct GlyphSkeleton {
         // typical Zhang-Suen artifact tails at corners (apex of A, K
         // vertex) without eating into legitimate stroke arms which are
         // 50+ pixels even on the smallest glyph.
-        return prunedSpurs(raw, maxSpurLen: 8)
+        let pruned = prunedSpurs(raw, maxSpurLen: 8)
+        // Zhang-Suen near a stroke junction often produces a small
+        // cluster of degree-3+ pixels (a few-pixel "junction zone"
+        // instead of a clean intersection). Collapse 8-connected
+        // junction clusters to a single node so two strokes that meet
+        // visually meet at one point in the graph too.
+        return mergedAdjacentJunctions(pruned)
+    }
+
+    /// Merge junction nodes (degree-3+) that are direct neighbors in
+    /// the graph into a single representative — the cluster's centroid.
+    /// Eliminates the multi-pixel "junction zone" Zhang-Suen leaves
+    /// where two strokes meet (the user's K-vertex, R-stem-meets-leg,
+    /// A-crossbar-joint arrows). Edges from the cluster to the rest of
+    /// the skeleton are redirected to the representative.
+    static func mergedAdjacentJunctions(_ sk: GlyphSkeleton) -> GlyphSkeleton {
+        let n = sk.points.count
+        // Union-find over node indices, unioning junction nodes that
+        // share an edge.
+        var parent = Array(0..<n)
+        func find(_ x: Int) -> Int {
+            var r = x
+            while parent[r] != r { r = parent[r] }
+            var c = x
+            while parent[c] != c {
+                let nx = parent[c]
+                parent[c] = r
+                c = nx
+            }
+            return r
+        }
+        func union(_ a: Int, _ b: Int) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+        var didMerge = false
+        for i in 0..<n where sk.adjacency[i].count >= 3 {
+            for j in sk.adjacency[i] where j > i && sk.adjacency[j].count >= 3 {
+                union(i, j)
+                didMerge = true
+            }
+        }
+        if !didMerge { return sk }
+        // Group by cluster root.
+        var clusters: [Int: [Int]] = [:]
+        for i in 0..<n where sk.adjacency[i].count >= 3 {
+            clusters[find(i), default: []].append(i)
+        }
+        // For each multi-node cluster, pick the centroid member.
+        var remap = Array(0..<n)
+        for members in clusters.values where members.count > 1 {
+            var mx: CGFloat = 0, my: CGFloat = 0
+            for m in members {
+                mx += sk.points[m].x
+                my += sk.points[m].y
+            }
+            mx /= CGFloat(members.count)
+            my /= CGFloat(members.count)
+            var best = members[0]
+            var bestSq = CGFloat.infinity
+            for m in members {
+                let dx = sk.points[m].x - mx
+                let dy = sk.points[m].y - my
+                let sq = dx * dx + dy * dy
+                if sq < bestSq { bestSq = sq; best = m }
+            }
+            for m in members where m != best {
+                remap[m] = best
+            }
+        }
+        // Build the compacted graph.
+        var newIdx = [Int](repeating: -1, count: n)
+        var newPts: [CGPoint] = []
+        for i in 0..<n where remap[i] == i {
+            newIdx[i] = newPts.count
+            newPts.append(sk.points[i])
+        }
+        var newAdj = Array(repeating: [Int](), count: newPts.count)
+        for i in 0..<n {
+            let srcRoot = remap[i]
+            let srcNew = newIdx[srcRoot]
+            for j in sk.adjacency[i] {
+                let dstRoot = remap[j]
+                let dstNew = newIdx[dstRoot]
+                if srcNew == dstNew { continue }
+                if !newAdj[srcNew].contains(dstNew) {
+                    newAdj[srcNew].append(dstNew)
+                }
+            }
+        }
+        return GlyphSkeleton(points: newPts, adjacency: newAdj)
     }
 
     /// For every degree-1 pixel in the thinned skeleton, walk along the
