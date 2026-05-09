@@ -67,6 +67,7 @@ struct StrokeCalibrationOverlay: View {
             ZStack {
                 addTapLayer(in: size)
                 glyphRectDebugLayer(in: size)
+                skeletonLayer(in: size)
                 strokePathsLayer(in: size)
                 if mode != .points { dotsLayer(in: size) }
                 if mode == .points { anchorsLayer(in: size) }
@@ -386,6 +387,26 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
+
+    /// Subtle dots at every skeleton pixel so the user can see what
+    /// will snap. Canvas (single-pass draw) over ForEach because the
+    /// skeleton can have hundreds of points.
+    @ViewBuilder
+    private func skeletonLayer(in size: CGSize) -> some View {
+        if let sk = skeleton, !sk.points.isEmpty {
+            Canvas { context, canvasSize in
+                for pt in sk.points {
+                    let screenPt = glyphToScreen(pt, in: canvasSize)
+                    let rect = CGRect(x: screenPt.x - 1.0,
+                                      y: screenPt.y - 1.0,
+                                      width: 2.0, height: 2.0)
+                    context.fill(Path(ellipseIn: rect),
+                                 with: .color(.gray.opacity(0.45)))
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
 
     /// Dashed red outline of the renderer's `normalizedGlyphRect`.
     /// Spot-check that the inner glyph bbox actually wraps the glyph —
