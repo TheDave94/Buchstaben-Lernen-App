@@ -61,9 +61,13 @@ import CoreGraphics
         let sk = GlyphSkeleton(points: pts, adjacency: adj)
         let path = sk.bfsPath(from: 0, to: 4)
         #expect(path?.count == 5)
-        // Check end-to-end x-progression.
+        #expect(path?.first == pts[0])
+        #expect(path?.last == pts[4])
+        // Strictly increasing x — avoids float-equality flakiness on
+        // 0.1*3 == 0.30000000000000004 etc.
         let xs = (path ?? []).map(\.x)
-        #expect(xs == [0, 0.1, 0.2, 0.3, 0.4])
+        let monotonic = zip(xs, xs.dropFirst()).allSatisfy { $0 < $1 }
+        #expect(monotonic)
     }
 
     @Test func bfsPath_takesShortcutOverDetour() {
