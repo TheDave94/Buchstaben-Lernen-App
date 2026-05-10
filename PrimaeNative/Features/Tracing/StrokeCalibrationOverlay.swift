@@ -466,25 +466,16 @@ struct StrokeCalibrationOverlay: View {
 
     @ViewBuilder
     private func skeletonLayer(in size: CGSize) -> some View {
-        if let sk = skeleton, !sk.points.isEmpty {
+        if let sk = skeleton, !sk.vizPixels.isEmpty {
             Canvas { context, canvasSize in
-                // Two paths bucketed by bbox-y so red=top / blue=bottom
-                // is preserved (mirrored skeletons stand out) while
-                // keeping the N→2 fill-call collapse from e40c37f.
-                var topPath = Path()
-                var bottomPath = Path()
-                for pt in sk.points {
+                var path = Path()
+                for pt in sk.vizPixels {
                     let screenPt = glyphToScreen(pt, in: canvasSize)
-                    let r = CGRect(x: screenPt.x - 1.5,
-                                   y: screenPt.y - 1.5,
-                                   width: 3.0, height: 3.0)
-                    if pt.y < 0.5 { topPath.addEllipse(in: r) }
-                    else { bottomPath.addEllipse(in: r) }
+                    path.addEllipse(in: CGRect(x: screenPt.x - 1.5,
+                                               y: screenPt.y - 1.5,
+                                               width: 3.0, height: 3.0))
                 }
-                context.fill(topPath,
-                             with: .color(.red.opacity(0.9)))
-                context.fill(bottomPath,
-                             with: .color(.blue.opacity(0.9)))
+                context.fill(path, with: .color(.red.opacity(0.9)))
             }
             .allowsHitTesting(false)
         }

@@ -11,11 +11,20 @@ import CoreText
 import UIKit
 
 struct GlyphSkeleton {
-    /// Skeleton points in bbox-relative coordinates (0..1, top-down y).
     let points: [CGPoint]
-    /// 8-neighbor adjacency: `adjacency[i]` lists indices j where
-    /// `points[i]` and `points[j]` are 1-pixel-distant on the raster.
     let adjacency: [[Int]]
+    /// Pre-merge thinned pixels for the dot viz — junction merge eats `points`.
+    let vizPixels: [CGPoint]
+
+    init(points: [CGPoint], adjacency: [[Int]], vizPixels: [CGPoint]) {
+        self.points = points
+        self.adjacency = adjacency
+        self.vizPixels = vizPixels
+    }
+
+    init(points: [CGPoint], adjacency: [[Int]]) {
+        self.init(points: points, adjacency: adjacency, vizPixels: points)
+    }
 
     /// 256² thins in ~150ms cold and renders ~600 skeleton points,
     /// vs 512² which produced ~2400 points and pushed Canvas redraw
@@ -157,12 +166,10 @@ struct GlyphSkeleton {
         // vertex) without eating into legitimate stroke arms which are
         // 50+ pixels even on the smallest glyph.
         let pruned = prunedSpurs(raw, maxSpurLen: 8)
-        // Zhang-Suen near a stroke junction often produces a small
-        // cluster of degree-3+ pixels (a few-pixel "junction zone"
-        // instead of a clean intersection). Collapse 8-connected
-        // junction clusters to a single node so two strokes that meet
-        // visually meet at one point in the graph too.
-        return mergedAdjacentJunctions(pruned)
+        let merged = mergedAdjacentJunctions(pruned)
+        return GlyphSkeleton(points: merged.points,
+                             adjacency: merged.adjacency,
+                             vizPixels: pruned.points)
     }
 
     /// Merge junction nodes (degree-3+) that are direct neighbors in
