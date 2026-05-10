@@ -63,6 +63,10 @@ MIN_CHECKPOINTS_PER_STROKE = 3
 DOT_LENGTH_THRESHOLD_PX = 30
 MERGE_ANGLE_THRESHOLD_DEG = 35  # segments within 35° of collinear get merged
 
+NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
+                ( 0, -1),          ( 0, 1),
+                ( 1, -1), ( 1, 0), ( 1, 1))
+
 # Lowercase folder suffix dodges APFS / HFS+ case-insensitive collision
 # with their uppercase counterparts.
 LOWERCASE_SUFFIX = "_l"
@@ -431,10 +435,6 @@ def rasterize(letter: str, font_path: Path,
 # -----------------------------------------------------------------------------
 # Skeleton graph: nodes = pixels, edges = 8-connected neighbours
 # -----------------------------------------------------------------------------
-
-NEIGHBOURS_8 = [(-1, -1), (-1, 0), (-1, 1),
-                (0, -1),           (0, 1),
-                (1, -1),  (1, 0),  (1, 1)]
 
 
 def build_adjacency(skel_pixels: set[tuple[int, int]]
@@ -1267,39 +1267,31 @@ def generate_for_letter(letter: str, font_path: Path,
                             for (x, y) in rel],
             "comment": comment,
         })
-    # Skeleton point cloud in glyph-bbox coords + adjacency. Subsampled
-    # every 2 px so the JSON stays small. iOS uses the cloud for snap
-    # and the adjacency for BFS-along-skeleton between calibrator
-    # anchor points.
-    sk_rows_full = sk_cols_full = None
+    # 8-neighbour adjacency, no subsample. The previous bake used [::2]
+    # subsampling + a 3.5-px all-pairs adjacency; on letters with parallel
+    # stroke arms close together (M, V, W, Ä, etc.) this cross-linked the
+    # medial-axis chains, producing degree-5/6 nodes that BFS could shortcut
+    # through stroke boundaries. Strict 8-neighbour preserves true chain
+    # topology and matches the convention the iOS-side calibrator's runtime
+    # fallback already uses.
     sk_rows_full, sk_cols_full = np.where(skel)
-    sk_rows = sk_rows_full.tolist()[::2]
-    sk_cols = sk_cols_full.tolist()[::2]
     bbox_w = max(1, bbox[2] - bbox[0])
     bbox_h = max(1, bbox[3] - bbox[1])
     skeleton_pts = []
-    for r, c in zip(sk_rows, sk_cols):
+    pixel_to_idx: dict[tuple[int, int], int] = {}
+    for i, (r, c) in enumerate(zip(sk_rows_full.tolist(),
+                                   sk_cols_full.tolist())):
         skeleton_pts.append({
             "x": round((c - bbox[0]) / bbox_w, 4),
             "y": round((r - bbox[1]) / bbox_h, 4),
         })
-    # Adjacency among subsampled points: a point's neighbours are the
-    # other subsampled points within a small generator-pixel radius.
-    # Three-pixel threshold matches the 2-px subsample stride plus a
-    # one-pixel slack so a sample can still find its successor when
-    # skeleton walks include a diagonal step.
-    adj_threshold_sq = 3.5 * 3.5
-    sk_xy = np.array(list(zip(sk_cols, sk_rows)), dtype=np.float64)
+        pixel_to_idx[(r, c)] = i
     skeleton_adj: list[list[int]] = []
-    if len(sk_xy) > 0:
-        for i in range(len(sk_xy)):
-            d = sk_xy - sk_xy[i]
-            d2 = (d * d).sum(axis=1)
-            d2[i] = np.inf  # exclude self
-            idx = np.where(d2 <= adj_threshold_sq)[0]
-            skeleton_adj.append(idx.tolist())
-    else:
-        skeleton_adj = []
+    for r, c in zip(sk_rows_full.tolist(), sk_cols_full.tolist()):
+        nbrs = [pixel_to_idx[(r + dr, c + dc)]
+                for dr, dc in NEIGHBOURS_8
+                if (r + dr, c + dc) in pixel_to_idx]
+        skeleton_adj.append(nbrs)
 
     data = {
         "letter": letter,

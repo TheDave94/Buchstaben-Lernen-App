@@ -173,13 +173,39 @@ struct StrokeCalibrationOverlay: View {
         rebuildStrokeFromAnchors()
     }
 
-    /// (Re)build the skeleton on letter / script change. Synchronous —
-    /// extraction is hundreds of ms cold, instant on cached letters,
-    /// and the calibrator is a Debug-mode tool so a brief stall is OK.
+    /// (Re)build the skeleton on letter / script change. Prefers the
+    /// baked centerline from `strokes.json` (clean topology, generated
+    /// offline by the Python pipeline); falls through to runtime
+    /// extraction only when the bundle predates the bake.
     private func refreshSkeleton() {
+        if let baked = makeBakedSkeleton() {
+            #if DEBUG
+            print("[StrokeCalibrationOverlay] baked skeleton for "
+                  + "\(vm.currentLetterName) (\(baked.points.count) pts)")
+            #endif
+            skeleton = baked
+            return
+        }
+        #if DEBUG
+        print("[StrokeCalibrationOverlay] FALLBACK to runtime "
+              + "GlyphSkeleton.make for \(vm.currentLetterName)")
+        #endif
         skeleton = GlyphSkeleton.make(letter: vm.currentLetterName,
                                       schriftArt: vm.schriftArt,
                                       openTypeFeatures: vm.currentGlyphFeatures)
+    }
+
+    /// Lift the baked centerline + adjacency from the active letter's
+    /// LetterStrokes into the GlyphSkeleton shape the calibrator expects.
+    private func makeBakedSkeleton() -> GlyphSkeleton? {
+        guard let strokes = vm.glyphRelativeStrokes,
+              let skel = strokes.skeleton,
+              let adj = strokes.skeletonAdj,
+              !skel.isEmpty,
+              skel.count == adj.count else { return nil }
+        let points = skel.map { CGPoint(x: $0.x, y: $0.y) }
+        return GlyphSkeleton(points: points, adjacency: adj,
+                             vizPixels: points)
     }
 
     /// Commit a dragged anchor and re-insert it at the spatially-

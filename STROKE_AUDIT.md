@@ -1,6 +1,94 @@
 # Stroke Audit — Authoritative Synthesis
 *Generated 2026-05-08. Synthesised from four parallel audit agents; all critical claims verified against source files.*
 
+<!--
+═══════════════════════════════════════════════════════════════════════
+PHASE 2 WORKING NOTES — 2026-05-10 (after Phase 1 bake fix)
+HTML-comment block; renders invisibly. Tracks Phase-2 scope and the
+gate Phase-1 needs to clear in the simulator before Phase 2 starts.
+Author: pair-debug session @ ab37b4d → Phase-1 landed.
+
+Phase 1 (bake skimage.skeletonize centerlines + Swift loader prefer
+baked) shipped clean skeletons: every letter now has max degree ≤ 4
+and the false cross-edges from the previous [::2] + 3.5-px adjacency
+are gone. 5 audit FAILs survive because they're override-table bugs,
+not skeleton bugs.
+
+0. SIMULATOR VERIFICATION GATE (do FIRST tomorrow before any code change):
+   - Build and launch in iPad Simulator (debug build).
+   - Open calibrator on letter I — skeleton dots should be vertical line
+     down stem center (NOT diagonal). The saved stroke preview will still
+     be diagonal because override unfixed; that's expected and confirms
+     Phase 2 scope is the override table.
+   - Open M — skeleton should be clean centerline through 4 arms, no
+     hatching mesh.
+   - Open O — skeleton should form a clean closed ellipse.
+   - Open K — two disconnected dot chains expected (stem + diagonals);
+     this is correct geometry, not a bug.
+   - Cycle all 59 letters via picker. Console should show 59 lines of
+     "[StrokeCalibrationOverlay] baked skeleton for X (N pts)" and ZERO
+     "FALLBACK" lines.
+   - If any letter shows FALLBACK or hatching mesh: STOP. Don't fix in
+     simulator. Take screenshot, note console output, return to Claude
+     for diagnosis before touching code.
+
+   Only after this gate clears: proceed to Phase 2 work-list below.
+
+Phase 2 work-list:
+
+1. Surviving audit FAILs (override-table edits in LETTER_OVERRIDES):
+   - I (C1)   — `T`/`B` anchors land on serif edges, producing a
+                diagonal slash (x_range 0.425). Fix: explicit
+                (0.5, 0.05) → (0.5, 0.95) coordinates.
+   - Z (C2)   — top-bar `TL` resolves to bar-diagonal junction
+                (first.x = 0.213). Fix: explicit (0.05, 0.05) start
+                + (0.95, 0.95) end on bottom bar.
+   - U (C3)   — currently 2 strokes per the override; should be 1
+                continuous bowl. Fix: collapse to a single
+                {kind: continuous, anchors: [TL, BL, BR, TR]} with
+                the descender stroke removed (or move the outer
+                vertical into the same continuous walk).
+   - M (H1)   — reversal at cp 75/120 (~129°). Either spike-prune
+                threshold tightening (currently 150°) or override
+                anchors that route BFS away from the valley spur.
+   - i_l (H6) — stem `B` resolves to bottom-left of stem base
+                (last.x = 0.256). Fix: explicit (0.5, 0.95) coords
+                on stroke-1 end.
+
+2. Expanded reversal issues (likely same class as H1):
+   - M cp 75/120 (128.8° / 129.0°)
+   - W cp 79     (133.8°)
+   - u_l cp 42   (134.9°)
+   Investigate prune_spikes threshold (currently 150°). Tightening
+   to 130° may catch all four with one knob; verify it doesn't
+   over-prune legitimate sharp corners (e.g. K's stem-arm joint).
+
+3. Q-class topology: bowl-with-attached-tail letters where the
+   loop walker now correctly traverses bowl + tail as one component
+   (no more fake-shortcut closure via cross-edges). Override either
+   needs to (a) block the tail edge from the loop walk, or
+   (b) accept the connected walk and split into per-stroke output.
+   Affected letters (first==last in stroke 1 indicates pure bowl
+   loop succeeded, but other strokes overlap it):
+   - Q       — bowl + diagonal tail; current stroke 1 walks both
+   - a_l, ä_l    — bowl + descender stem
+   - g_l, q_l   — bowl + descender
+   - o_l, ö_l   — pure bowl (probably fine; double-check)
+   - ü_l       — same as ö plus dots stroke
+
+   Recommended approach: extend the loop walker with an optional
+   "stop_at" parameter (a node whose edge to the loop entry is
+   blocked) so the bowl-only loop terminates at the bowl/tail
+   junction. Phase 2 stretch goal.
+
+4. Hygiene (Phase 3 territory but related):
+   - Document override-table conventions for the new clean-skeleton
+     world.
+   - Add anchor-drift CI gate (skeleton_audit.py --anchor-drift-pct).
+   - Wire font hash check in LetterRepository.
+═══════════════════════════════════════════════════════════════════════
+-->
+
 ---
 
 ## Executive Summary
