@@ -149,14 +149,16 @@ struct GlyphSkeleton {
                 glyphMask[r][c] = buf[r * stride + c] > 127
             }
         }
-        // DT-strict-local-max ridge → Zhang-Suen post-thin (handles 2-px
-        // plateaus on even-width strokes) → DT-guided tip walk to ink end.
-        let dt = chamferDistanceTransform(glyphMask, rows: res, cols: res)
-        var mask = strictLocalMaxRidge(dt: dt, glyphMask: glyphMask,
-                                       rows: res, cols: res)
+        var mask = glyphMask  // mutable thinning copy; glyphMask kept as the
+                              // reference shape so tip-extension knows when
+                              // it has walked out of the ink.
         zhangSuenThin(&mask, rows: res, cols: res)
-        extendTipsAlongDT(&mask, glyphMask: glyphMask, dt: dt,
-                          rows: res, cols: res, maxExtension: 60)
+        // Zhang-Suen terminates the medial axis ~half-stroke-width before
+        // the actual stroke end (the user's "skeleton stops short" arrows
+        // on `k`'s top + bottom). Walk each tip along its direction
+        // inside the glyph mask until it exits the ink.
+        extendTipsToOutline(&mask, glyphMask: glyphMask,
+                            rows: res, cols: res, maxExtension: 25)
         guard let raw = extractGraph(from: mask, res: res, inset: inset,
                                      drawable: drawable) else { return nil }
         // Spur threshold at ~3% bbox (8 pixels at 256 res). Catches the
@@ -254,76 +256,15 @@ struct GlyphSkeleton {
         return GlyphSkeleton(points: newPts, adjacency: newAdj)
     }
 
-    /// Two-pass 3-4 chamfer DT (interior pixel → distance to boundary).
-    static func chamferDistanceTransform(_ glyphMask: [[Bool]],
-                                         rows: Int,
-                                         cols: Int) -> [[Int]] {
-        let LARGE = (rows + cols) * 4
-        var dt = [[Int]](repeating: [Int](repeating: 0, count: cols),
-                         count: rows)
-        for r in 0..<rows {
-            for c in 0..<cols {
-                dt[r][c] = glyphMask[r][c] ? LARGE : 0
-            }
-        }
-        for r in 0..<rows {
-            for c in 0..<cols where glyphMask[r][c] {
-                var d = dt[r][c]
-                if r > 0 {
-                    d = min(d, dt[r - 1][c] + 3)
-                    if c > 0 { d = min(d, dt[r - 1][c - 1] + 4) }
-                    if c < cols - 1 { d = min(d, dt[r - 1][c + 1] + 4) }
-                }
-                if c > 0 { d = min(d, dt[r][c - 1] + 3) }
-                dt[r][c] = d
-            }
-        }
-        for r in stride(from: rows - 1, through: 0, by: -1) {
-            for c in stride(from: cols - 1, through: 0, by: -1)
-                where glyphMask[r][c] {
-                var d = dt[r][c]
-                if r < rows - 1 {
-                    d = min(d, dt[r + 1][c] + 3)
-                    if c > 0 { d = min(d, dt[r + 1][c - 1] + 4) }
-                    if c < cols - 1 { d = min(d, dt[r + 1][c + 1] + 4) }
-                }
-                if c < cols - 1 { d = min(d, dt[r][c + 1] + 3) }
-                dt[r][c] = d
-            }
-        }
-        return dt
-    }
-
-    /// Pixel is on the medial axis if no 8-neighbor's DT is strictly greater.
-    static func strictLocalMaxRidge(dt: [[Int]], glyphMask: [[Bool]],
-                                    rows: Int, cols: Int) -> [[Bool]] {
-        var sk = [[Bool]](repeating: [Bool](repeating: false, count: cols),
-                          count: rows)
-        for r in 1..<(rows - 1) {
-            for c in 1..<(cols - 1) where glyphMask[r][c] {
-                let here = dt[r][c]
-                var isMax = true
-                outer: for dr in -1...1 {
-                    for dc in -1...1 where !(dr == 0 && dc == 0) {
-                        if dt[r + dr][c + dc] > here {
-                            isMax = false
-                            break outer
-                        }
-                    }
-                }
-                if isMax { sk[r][c] = true }
-            }
-        }
-        return sk
-    }
-
-    /// Walk each degree-1 tip toward the boundary, picking the forward
-    /// in-mask neighbor with the lowest DT at each step (curls around tips).
-    private static func extendTipsAlongDT(_ skeleton: inout [[Bool]],
-                                          glyphMask: [[Bool]],
-                                          dt: [[Int]],
-                                          rows: Int, cols: Int,
-                                          maxExtension: Int) {
+    /// For every degree-1 pixel in the thinned skeleton, walk along the
+    /// direction (tip — its sole neighbor) and add pixels back into the
+    /// skeleton as long as they stay inside the original glyph mask.
+    /// Bounded by `maxExtension` so a runaway tip in an open shape can't
+    /// march off the glyph indefinitely.
+    private static func extendTipsToOutline(_ skeleton: inout [[Bool]],
+                                            glyphMask: [[Bool]],
+                                            rows: Int, cols: Int,
+                                            maxExtension: Int) {
         var tips: [(r: Int, c: Int, dr: Int, dc: Int)] = []
         for r in 1..<(rows - 1) {
             for c in 1..<(cols - 1) where skeleton[r][c] {
@@ -339,34 +280,19 @@ struct GlyphSkeleton {
                     }
                 }
                 if count == 1 {
+                    // Direction = tip - neighbor (unit vector in {-1,0,1}²).
                     tips.append((r, c, r - nr, c - nc))
                 }
             }
         }
         for tip in tips {
             var r = tip.r, c = tip.c
-            var dr = tip.dr, dc = tip.dc
             for _ in 0..<maxExtension {
-                var best: (Int, Int)? = nil
-                var bestDT = Int.max
-                for ndr in -1...1 {
-                    for ndc in -1...1 where !(ndr == 0 && ndc == 0) {
-                        if ndr * dr + ndc * dc <= 0 { continue }
-                        let nr2 = r + ndr, nc2 = c + ndc
-                        if nr2 < 0 || nr2 >= rows
-                            || nc2 < 0 || nc2 >= cols { continue }
-                        if !glyphMask[nr2][nc2] { continue }
-                        let d = dt[nr2][nc2]
-                        if d < bestDT { bestDT = d; best = (nr2, nc2) }
-                    }
-                }
-                guard let step = best else { break }
-                dr = step.0 - r
-                dc = step.1 - c
-                r = step.0
-                c = step.1
+                r += tip.dr
+                c += tip.dc
+                if r < 0 || r >= rows || c < 0 || c >= cols { break }
+                if !glyphMask[r][c] { break }
                 skeleton[r][c] = true
-                if bestDT == 0 { break }
             }
         }
     }
