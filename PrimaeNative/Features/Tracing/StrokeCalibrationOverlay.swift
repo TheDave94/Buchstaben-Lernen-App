@@ -464,22 +464,27 @@ struct StrokeCalibrationOverlay: View {
     }
 
 
-    /// Skeleton centerline dots. Builds ONE Path with every dot as a
-    /// subpath and fills in a single call — drawing N circles
-    /// individually pushed Canvas past the frame budget on letters
-    /// with hundreds of skeleton points (the lag the user reported).
     @ViewBuilder
     private func skeletonLayer(in size: CGSize) -> some View {
         if let sk = skeleton, !sk.points.isEmpty {
             Canvas { context, canvasSize in
-                var path = Path()
+                // Two paths bucketed by bbox-y so red=top / blue=bottom
+                // is preserved (mirrored skeletons stand out) while
+                // keeping the N→2 fill-call collapse from e40c37f.
+                var topPath = Path()
+                var bottomPath = Path()
                 for pt in sk.points {
                     let screenPt = glyphToScreen(pt, in: canvasSize)
-                    path.addEllipse(in: CGRect(x: screenPt.x - 1.0,
-                                               y: screenPt.y - 1.0,
-                                               width: 2.0, height: 2.0))
+                    let r = CGRect(x: screenPt.x - 1.5,
+                                   y: screenPt.y - 1.5,
+                                   width: 3.0, height: 3.0)
+                    if pt.y < 0.5 { topPath.addEllipse(in: r) }
+                    else { bottomPath.addEllipse(in: r) }
                 }
-                context.fill(path, with: .color(.gray.opacity(0.55)))
+                context.fill(topPath,
+                             with: .color(.red.opacity(0.9)))
+                context.fill(bottomPath,
+                             with: .color(.blue.opacity(0.9)))
             }
             .allowsHitTesting(false)
         }
