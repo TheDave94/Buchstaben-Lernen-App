@@ -86,6 +86,79 @@ Phase 2 work-list:
      world.
    - Add anchor-drift CI gate (skeleton_audit.py --anchor-drift-pct).
    - Wire font hash check in LetterRepository.
+
+5. Phase 2 Option A applied — spur prune at max_spur_length=24 (2026-05-10):
+
+   Mirrored the Swift runtime's prunedSpurs in the Python bake. Walk
+   each degree-1 tip; chains hitting a junction within 24 raster pixels
+   are removed. Iterative until stable. Isolated chains (i/j tittles,
+   umlaut dots) are inherently safe — they never reach a junction.
+
+   Audit movement: M (H1) FAIL → PASS. Reversal scan from 4 entries
+   to 1 (M cp 75/120 + W cp 79 all gone; u_l cp 42 remains).
+
+   Letters with non-zero pixel reduction (all consistent with chain-
+   length distribution measured pre-prune):
+     - M  Δ51 (target — 10/20/21-px spurs all gone)
+     - A  Δ20 (target — 20-px spur gone)
+     - W  Δ55 (12/21/22-px spurs at multi-valley)
+     - V  Δ17 (similar valley spur to M)
+     - Ä  Δ20 (body inherits A's spur)
+     - w  Δ12 (similar valley to W lowercase)
+     - y  Δ8  (1/2/5-px jitter at junctions)
+
+   Letters NOT fixed by this approach (Phase 2.5 territory):
+     - R, G, U, b, d, h, p, u, c, B, D, etc. — visible artifacts on
+       these are not short tip-to-junction chains. They're either
+       loop-spurs (small loops not connected to a tip) or junction-
+       zone fuzz (multi-pixel medial-axis at oblique meetings).
+
+   Letters deferred (calibration data ambiguous between spur and
+   feature; awaiting iPad verification at t=24 to decide whether to
+   bump threshold):
+     - a (J=[29, 131]), g (J=[27]), q (J=[29])
+     - At t=24 these are untouched. If iPad shows they still have
+       visible spurs, bump to t=29 or t=32 in a follow-up.
+
+   Phase 2.5 plan sketch:
+   - Investigate morph.medial_axis as alternative to morph.skeletonize.
+     medial_axis preserves Euclidean distance to boundary at each
+     skeleton pixel and uses different thinning rules; it may produce
+     cleaner junction zones on thick-stroke meetings.
+   - Diagnostic: re-run /tmp/diag.py and /tmp/calibrate.py against
+     morph.medial_axis output for the 8 unfixed letters
+     (R, G, U, b, d, h, p, u). Compare:
+       (a) tip count — should match topology (R=2, G=3, etc.)
+       (b) chain length distribution — should NOT show short J chains
+           on letters that currently show fuzz
+       (c) total skeleton point count — should be similar order of
+           magnitude (medial_axis often produces slightly more pixels
+           than skeletonize)
+       (d) visual: render skeleton overlay PNG via the existing debug
+           harness for at least R and G; eyeball whether the junction
+           zones look clean.
+   - Decision: if medial_axis is cleaner on R/G/U/b/d/h/p/u without
+     degrading the already-clean letters, swap. Otherwise these
+     letters stay in the override-table-edit pile (Phase 3).
+
+6. skeleton_audit.py CI gate fix needed (discovered during Phase 1 prep):
+   The script currently measures anchor drift on every named anchor in
+   LETTER_OVERRIDES regardless of whether each letter's override actually
+   uses that anchor. False positives result on letters where unused anchors
+   land in empty space (r BR=50.7%, F BR=44.5%, T BR=33.5%, etc).
+
+   Phase 3 CI gate work:
+   (a) Modify skeleton_audit.py to filter the drift measurement to only
+       anchors actually referenced in LETTER_OVERRIDES[letter] (parse the
+       walk/chord/dot primitives, collect the union of their from/to/via
+       anchor names, drift-check only those).
+   (b) Verify the fixed script reports drift on REAL bug letters before
+       it can serve as a CI gate. Specifically: I, Z, U, M, i_l should
+       all show drift > 10% on their used anchors (this is what the audit
+       said would be true). If they don't, the script doesn't measure
+       what we think it does and needs a deeper rewrite.
+   (c) Only after (a) and (b) verify clean: add the gate to CI as a
+       blocking step.
 ═══════════════════════════════════════════════════════════════════════
 -->
 

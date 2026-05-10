@@ -67,6 +67,16 @@ NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
                 ( 0, -1),          ( 0, 1),
                 ( 1, -1), ( 1, 0), ( 1, 1))
 
+# Spur-pruning post-process for the baked skeleton.
+# morph.skeletonize produces small T-junction branches at thick-stroke
+# meeting points (visible on M, A in the Primae font). The Swift runtime
+# uses 8 nodes at 256² (~32 px equivalent at 1024²); we use 24 here as
+# a conservative threshold confirmed by empirical calibration to cleanly
+# remove M's 10/20/21-px artifacts and A's 20-px artifact while leaving
+# Q's 95-px tail, F's 158-px crossbar, t's 51-px crossbar, and i/j/ä
+# tittle components untouched.
+MAX_SPUR_LENGTH = 24
+
 # Lowercase folder suffix dodges APFS / HFS+ case-insensitive collision
 # with their uppercase counterparts.
 LOWERCASE_SUFFIX = "_l"
@@ -450,6 +460,62 @@ def build_adjacency(skel_pixels: set[tuple[int, int]]
                 nbrs.append(n)
         adj[(c, r)] = nbrs
     return adj
+
+
+def prune_skeleton_spurs(skel_mask: np.ndarray,
+                         max_spur_length: int = MAX_SPUR_LENGTH
+                         ) -> np.ndarray:
+    """Remove tip-to-junction chains of length ≤ `max_spur_length`
+    pixels. Iterative — re-runs until no chains qualify. Isolated
+    components (degree-1 → degree-2 chain → degree-1, no junction)
+    are never pruned, so i/j tittles and umlaut dots survive."""
+    mask = skel_mask.copy()
+    while True:
+        rows, cols = np.where(mask)
+        if len(rows) == 0:
+            return mask
+        pixels = set(zip(rows.tolist(), cols.tolist()))
+        deg: dict[tuple[int, int], int] = {}
+        for (r, c) in pixels:
+            d = 0
+            for dr, dc in NEIGHBOURS_8:
+                if (r + dr, c + dc) in pixels:
+                    d += 1
+            deg[(r, c)] = d
+
+        to_remove: set[tuple[int, int]] = set()
+        for tip in pixels:
+            if deg[tip] != 1:
+                continue
+            if tip in to_remove:
+                continue
+            chain: list[tuple[int, int]] = []
+            prev = None
+            cur = tip
+            while len(chain) < max_spur_length:
+                chain.append(cur)
+                nbrs = [
+                    (cur[0] + dr, cur[1] + dc)
+                    for dr, dc in NEIGHBOURS_8
+                    if (cur[0] + dr, cur[1] + dc) in pixels
+                ]
+                if prev is None:
+                    nbrs_excl = nbrs
+                else:
+                    nbrs_excl = [n for n in nbrs if n != prev]
+                if len(nbrs_excl) != 1:
+                    break
+                nxt = nbrs_excl[0]
+                if deg[nxt] >= 3:
+                    to_remove.update(chain)
+                    break
+                prev = cur
+                cur = nxt
+
+        if not to_remove:
+            return mask
+        for (r, c) in to_remove:
+            mask[r, c] = False
 
 
 def _walk_cycle_ccw(seed: tuple[int, int],
@@ -1234,6 +1300,7 @@ def generate_for_letter(letter: str, font_path: Path,
     override is absent or its walker fails on this font's geometry."""
     mask = rasterize(letter, font_path)
     skel = morph.skeletonize(mask)
+    skel = prune_skeleton_spurs(skel, max_spur_length=MAX_SPUR_LENGTH)
 
     rows, cols = np.where(mask)
     if len(rows) == 0:
