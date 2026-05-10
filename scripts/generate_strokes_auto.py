@@ -78,12 +78,12 @@ NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
 MAX_SPUR_LENGTH = 24
 
 # Tip-extension parameters. Mirror of the Swift runtime's
-# extendTipsToOutline. At 1024² the Swift-equivalent 25-px cap at 256²
-# is ~100 px; we use 60 — bounded by hitting the ink boundary in
-# practice, so the cap is a runaway-walk guard for tangent-parallel-
-# to-edge geometry rather than a routine limit. Tangent window 8
-# smooths the direction estimate over the 4× higher resolution; Swift
-# used 1-back which would be jitter-sensitive at 1024².
+# extendTipsToOutline. 60 raster pixels at 1024² is the practical
+# cap — empirically no in-the-bundle tip extension reaches it, so
+# it's a runaway-walk guard rather than a routine limit. Tangent
+# window 8 smooths the direction estimate over the 4× higher
+# resolution; Swift used 1-back which would be jitter-sensitive at
+# 1024².
 MAX_TIP_EXTENSION = 60
 TANGENT_WINDOW = 8
 
@@ -562,7 +562,6 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
         deg[(r, c)] = d
 
     extensions: list[tuple[tuple[int, int], float, float]] = []
-    isolation_cap = 200    # safety cap past tangent_window
 
     for tip in pixels:
         if deg[tip] != 1:
@@ -587,9 +586,15 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
             cur = nbrs[0]
             chain.append(cur)
 
+        # Continue walking until we hit a junction or another tip.
+        # No safety cap: a degree-2 chain on a 1-pixel skeleton can't
+        # loop (the walk has one non-prev neighbour at every step;
+        # cycles require a junction which terminates the walk), and
+        # the chain length is bounded by raster size. Earlier 200-step
+        # cap fired on Z's ~267-px bars and incorrectly defaulted them
+        # to isolated, suppressing extension on Z/z/T/t tips.
         if not is_isolated and not junction_hit:
-            steps = 0
-            while steps < isolation_cap:
+            while True:
                 cands = [(cur[0] + dr, cur[1] + dc) for dr, dc in NEIGHBOURS_8]
                 nbrs = [n for n in cands if n in pixels and n != prev]
                 if len(nbrs) == 0:
@@ -600,9 +605,6 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
                     break
                 prev = cur
                 cur = nbrs[0]
-                steps += 1
-            if not junction_hit and not is_isolated:
-                is_isolated = True
 
         if is_isolated:
             continue

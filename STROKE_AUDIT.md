@@ -166,13 +166,38 @@ Phase 2 work-list:
    sub-MAX_SPUR_LENGTH branch the pruner removed; accepted.
 
    Phase 2.6 work-list:
-   - m, n, r, g need override endpoint anchors for fanning-stem
+   - m, n, r, g, y_l need override endpoint anchors for fanning-stem
      endings (medial axis genuinely terminates as a single tip;
-     can't be fixed at the skeleton level).
+     can't be fixed at the skeleton level). y_l added 2026-05-10 after
+     iPad verification surfaced same mechanism as m/n/r/g.
    - r_l `continuous: TL→BL→TR` override walks the vertical stem
      twice; Phase 2.5 made the retrace U-turn at the bottom tighter
      (174.8° in raster, captured by the refined audit). Override
      restructure to avoid the double-walk.
+
+   Phase 2.5 residual artifacts surfaced by iPad verification
+   (not blocking, queued for future iteration):
+
+   Class B — tangent-doesn't-follow-curvature at sharp apexes
+   (N TL+BR, V valley, W ×3 places, v_l valley, w_l ×3). The
+   skeleton tip reaches the local ink boundary but stops 10-30
+   raster px short of the geometric corner because the extension
+   walk is a fixed Chebyshev-normalised tangent that can't curve
+   along a narrowing wedge. Fix would require tangent re-estimation
+   per step — non-trivial.
+
+   Class C — isolation-guard cap too small for long bars
+   (Z, z_l, T, t_l). The 200-step isolation safety cap fires
+   on Z's ~267-px bars before the walk reaches the bar/diagonal
+   junction; guard defaults to isolated → skips extension. Fix:
+   raise cap to ~5000 or remove it (the walk on a 1-pixel
+   skeleton can't loop). Plus bump MAX_TIP_EXTENSION to ~80 so
+   Z's longest bar can reach the geometric corner.
+
+   Class D — center-crossing letters render H-bar (X, x_l).
+   Same mechanism family as r_l's retrace from the
+   `continuous` override walking through a junction twice.
+   Override-table restructure territory.
 
 7. Audit refinement — chain-revisit reversal predicate (2026-05-10):
 
