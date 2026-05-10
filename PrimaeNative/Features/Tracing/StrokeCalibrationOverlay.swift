@@ -301,14 +301,10 @@ struct StrokeCalibrationOverlay: View {
             path.append(anchors[lastIdx])
         }
 
-        // Skeleton-walked paths come in at raster pixel resolution and
-        // visibly staircase through BFS — a moving-average pass de-
-        // jaggies them. Pure-anchor paths get Catmull-Rom for the
-        // off-skeleton spline case.
         let mostlyBfs = bfsFilledSegments * 2 >= (anchors.count - 1)
         let smoothed: [CGPoint]
         if mostlyBfs {
-            smoothed = movingAverageSmooth(path, window: 4)
+            smoothed = straightenedAndSmoothed(path)
         } else if path.count >= 3 {
             smoothed = catmullRomSpline(path)
         } else {
@@ -331,30 +327,88 @@ struct StrokeCalibrationOverlay: View {
         return dx * dx + dy * dy < 0.0001
     }
 
-    /// Symmetric moving-average smoother for raster-walked polylines.
-    /// First and last points are pinned (the user's raw anchors), so
-    /// smoothing doesn't pull stroke endpoints inward off the corners.
-    /// Interior points blend with `window` neighbors on each side.
-    private func movingAverageSmooth(_ path: [CGPoint],
-                                     window: Int) -> [CGPoint] {
-        guard path.count > 2 * window + 1, window > 0 else { return path }
-        var out: [CGPoint] = []
-        out.reserveCapacity(path.count)
-        out.append(path[0])
-        for i in 1..<(path.count - 1) {
-            let lo = max(1, i - window)
-            let hi = min(path.count - 2, i + window)
-            var sx: CGFloat = 0
-            var sy: CGFloat = 0
-            for j in lo...hi {
-                sx += path[j].x
-                sy += path[j].y
-            }
-            let n = CGFloat(hi - lo + 1)
-            out.append(CGPoint(x: sx / n, y: sy / n))
+    private func straightenedAndSmoothed(_ path: [CGPoint]) -> [CGPoint] {
+        guard path.count >= 3 else { return path }
+        // eps≈3px at 256² raster — tuned to swallow Zhang-Suen lateral
+        // jitter so straight strokes collapse to a 2-point chord.
+        let key = Self.rdpSimplify(path, eps: 0.012)
+        if key.count == 2 {
+            return [path[0], path[path.count - 1]]
         }
-        out.append(path[path.count - 1])
+        let breaks = Self.sharpTurnIndices(in: key,
+                                           deflectionAtLeast: .pi / 3)
+        let bps = [0] + breaks + [key.count - 1]
+        var out: [CGPoint] = [key[0]]
+        for k in 0..<(bps.count - 1) {
+            let lo = bps[k], hi = bps[k + 1]
+            if hi - lo == 1 {
+                out.append(key[hi])
+            } else {
+                let sub = Array(key[lo...hi])
+                let curve = catmullRomSpline(sub, samplesPerSegment: 16)
+                out.append(contentsOf: curve.dropFirst())
+            }
+        }
         return out
+    }
+
+    static func rdpSimplify(_ pts: [CGPoint], eps: CGFloat) -> [CGPoint] {
+        guard pts.count >= 3 else { return pts }
+        var keep = [Bool](repeating: false, count: pts.count)
+        keep[0] = true
+        keep[pts.count - 1] = true
+        rdpRecurse(pts, lo: 0, hi: pts.count - 1, eps: eps, keep: &keep)
+        return pts.indices.compactMap { keep[$0] ? pts[$0] : nil }
+    }
+
+    private static func rdpRecurse(_ pts: [CGPoint], lo: Int, hi: Int,
+                                   eps: CGFloat, keep: inout [Bool]) {
+        if hi - lo < 2 { return }
+        let a = pts[lo], b = pts[hi]
+        let dx = b.x - a.x, dy = b.y - a.y
+        let lenSq = dx * dx + dy * dy
+        var maxD: CGFloat = 0
+        var maxI = lo
+        if lenSq < 1e-12 {
+            for i in (lo + 1)..<hi {
+                let ex = pts[i].x - a.x, ey = pts[i].y - a.y
+                let d = (ex * ex + ey * ey).squareRoot()
+                if d > maxD { maxD = d; maxI = i }
+            }
+        } else {
+            let len = lenSq.squareRoot()
+            for i in (lo + 1)..<hi {
+                let cross = (pts[i].x - a.x) * dy - (pts[i].y - a.y) * dx
+                let d = abs(cross) / len
+                if d > maxD { maxD = d; maxI = i }
+            }
+        }
+        if maxD > eps {
+            keep[maxI] = true
+            rdpRecurse(pts, lo: lo, hi: maxI, eps: eps, keep: &keep)
+            rdpRecurse(pts, lo: maxI, hi: hi, eps: eps, keep: &keep)
+        }
+    }
+
+    static func sharpTurnIndices(in key: [CGPoint],
+                                 deflectionAtLeast threshold: CGFloat) -> [Int] {
+        guard key.count >= 3 else { return [] }
+        var breaks: [Int] = []
+        for i in 1..<(key.count - 1) {
+            let a = key[i - 1], b = key[i], c = key[i + 1]
+            let v1x = b.x - a.x, v1y = b.y - a.y
+            let v2x = c.x - b.x, v2y = c.y - b.y
+            let m1Sq = v1x * v1x + v1y * v1y
+            let m2Sq = v2x * v2x + v2y * v2y
+            if m1Sq < 1e-12 || m2Sq < 1e-12 { continue }
+            let cosA = (v1x * v2x + v1y * v2y) / (m1Sq * m2Sq).squareRoot()
+            let clamped = max(-1, min(1, cosA))
+            let deflection = acos(clamped)
+            if deflection >= threshold {
+                breaks.append(i)
+            }
+        }
+        return breaks
     }
 
     /// Centripetal Catmull-Rom (α=0.5) through every anchor with mirrored
