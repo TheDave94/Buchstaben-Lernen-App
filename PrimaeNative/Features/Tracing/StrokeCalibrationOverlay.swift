@@ -245,16 +245,6 @@ struct StrokeCalibrationOverlay: View {
         if strokeIdx == activeStroke { rebuildStrokeFromAnchors() }
     }
 
-    /// Densify the active stroke as a smooth curve through the user's
-    /// anchors in list order. ≤1 anchor leaves the existing line
-    /// alone so mid-edit work isn't wiped.
-    ///
-    /// For each consecutive anchor pair: if both anchors land on the
-    /// glyph centerline, BFS-walk the skeleton between them so the
-    /// stroke follows the actual ink. Off-skeleton segments fall back
-    /// to centripetal Catmull-Rom (e.g. user-intended air sweep on a
-    /// single-stroke `b`). 2 anchors on a curved letter now produce a
-    /// glyph-faithful path.
     private func rebuildStrokeFromAnchors() {
         let anchors = anchorsPerStroke[activeStroke] ?? []
         while editableStrokes.count <= activeStroke {
@@ -262,13 +252,8 @@ struct StrokeCalibrationOverlay: View {
         }
         guard anchors.count >= 2 else { return }
 
-        // Stitching rule: the path begins at the first raw anchor, walks
-        // BFS-filled segments through the centerline, and ends at the
-        // last raw anchor. Intermediate anchors are routing waypoints —
-        // BFS routes through their nearest skeleton point, but the path
-        // doesn't visit raw-middle so we don't get a snap-out / snap-in
-        // spike at each interior anchor (the bug on multi-line letters
-        // like A / K).
+        // Interior anchors are routing waypoints only — visiting them as raw
+        // points produces a snap-out/snap-in spike at each junction.
         var path: [CGPoint] = [anchors[0]]
         var bfsFilledSegments = 0
         let lastIdx = anchors.count - 1
@@ -279,10 +264,6 @@ struct StrokeCalibrationOverlay: View {
                let bIdx = sk.nearestIndex(to: b, maxDistance: bfsGate),
                let walked = sk.bfsPath(from: aIdx, to: bIdx),
                walked.count >= 2 {
-                // walked[0] is snapped(a). If it duplicates the current
-                // path tail (i.e. previous segment also BFS-filled, ending
-                // at the same skeleton point), drop it; otherwise keep it
-                // so the path lines from path-tail into the centerline.
                 if let tail = path.last,
                    approxEqual(tail, walked[0]) {
                     path.append(contentsOf: walked.dropFirst())
@@ -294,9 +275,7 @@ struct StrokeCalibrationOverlay: View {
                 path.append(b)
             }
         }
-        // Snap-out: if the final segment was BFS-filled, path now ends at
-        // snapped(last anchor). Reach out to the user's actual last
-        // anchor so the stroke terminates where they tapped.
+        // BFS ends on a snapped skeleton point; reach out to the raw anchor.
         if let tail = path.last, !approxEqual(tail, anchors[lastIdx]) {
             path.append(anchors[lastIdx])
         }
@@ -319,9 +298,6 @@ struct StrokeCalibrationOverlay: View {
                                                             count: denseCount)
     }
 
-    /// Two bbox-relative points are within ~0.01 of each other.
-    /// Used to drop duplicate walked-path endpoints when chaining BFS
-    /// segments through a multi-anchor stroke.
     private func approxEqual(_ a: CGPoint, _ b: CGPoint) -> Bool {
         let dx = a.x - b.x, dy = a.y - b.y
         return dx * dx + dy * dy < 0.0001

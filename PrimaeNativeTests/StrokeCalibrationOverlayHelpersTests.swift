@@ -105,7 +105,7 @@ import CoreGraphics
         let key: [CGPoint] = [
             CGPoint(x: 0, y: 0),
             CGPoint(x: 1, y: 0),
-            CGPoint(x: 1 + cos(.pi / 6), y: sin(.pi / 6)),
+            CGPoint(x: 1 + cos(CGFloat.pi / 6), y: sin(CGFloat.pi / 6)),
         ]
         let breaks = Calib.sharpTurnIndices(in: key,
                                             deflectionAtLeast: .pi / 3)
