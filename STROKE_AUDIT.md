@@ -141,7 +141,65 @@ Phase 2 work-list:
      degrading the already-clean letters, swap. Otherwise these
      letters stay in the override-table-edit pile (Phase 3).
 
-6. skeleton_audit.py CI gate fix needed (discovered during Phase 1 prep):
+6. Phase 2.5 applied — tip extension to ink boundary (2026-05-10):
+
+   Mirror Swift's extendTipsToOutline. For each degree-1 tip, smooth
+   tangent over last 8 chain pixels (Swift uses 1-back; we smooth at
+   1024² to dampen jitter), walk Chebyshev-normalised along tangent
+   until ink boundary or 60 raster px. Run BEFORE prune; spur-prune
+   pass cleans any new short branches the extension creates.
+
+   Isolation-skip guard added (departure from Swift): components with
+   no junction are skipped entirely. Preserves i/j tittles, umlaut
+   dots, isolated chains I/L. Swift's behaviour would visibly grow
+   tittle centerlines at 1024².
+
+   32 letters extended (avg per-letter Δ ~30 px): 10 from the
+   original AFFECTED list (A, M, N, V, W, x, Y, Q, F, t) plus 22
+   with the same medial-axis-stops-short class (E, G, P, R, T, U,
+   Ä, Ü, ä, ü, a, d, f, g, h, m, n, p, q, r, u, w).
+
+   X, Z, z: 0 extension. Skeleton already at boundary; their iPad-
+   visible artifacts are override-anchor issues → Phase 3.
+
+   y net -8 px (extension +49 → prune -57): extension created a
+   sub-MAX_SPUR_LENGTH branch the pruner removed; accepted.
+
+   Phase 2.6 work-list:
+   - m, n, r, g need override endpoint anchors for fanning-stem
+     endings (medial axis genuinely terminates as a single tip;
+     can't be fixed at the skeleton level).
+   - r_l `continuous: TL→BL→TR` override walks the vertical stem
+     twice; Phase 2.5 made the retrace U-turn at the bottom tighter
+     (174.8° in raster, captured by the refined audit). Override
+     restructure to avoid the double-walk.
+
+7. Audit refinement — chain-revisit reversal predicate (2026-05-10):
+
+   Pre-refinement: reversal scan flagged any checkpoint with turn
+   angle >120°. This caught both artifact spurs (Phase 2's M-valley
+   targets) AND natural sharp corners (M/V/W apexes 121-143°, u_l's
+   bowl-to-vertical 134.9°). The threshold-alone predicate was
+   misclassifying natural corners as defects even pre-Phase-2.5; the
+   issue was hidden because the unextended skeleton rarely reached
+   the absolute apex pixel where the deflection peaks.
+
+   Refined predicate: a reversal counts as a defect only when
+   angle > 120° AND some non-adjacent checkpoint pair within ±8 cps
+   lies within 8 raster pixels of each other. The second condition
+   is structural evidence of retrace (BFS path returns to same chain
+   region). Lives in scripts/skeleton_audit.py
+   stroke_reversal_defects() — see the comment block there for
+   diagnostic-trail references.
+
+   Under refined predicate:
+   - Phase 2 backup: 0 reversal defects (u_l cp 42 cleared as
+     natural bowl corner — no chain revisit).
+   - Phase 2.5 production: 1 reversal defect (r_l cp 13 = 174.8°
+     with 4 revisit pairs — the override-induced retrace).
+   - 4 surviving override audit FAILs (I, Z, U, i_l) unchanged.
+
+8. skeleton_audit.py CI gate fix needed (discovered during Phase 1 prep):
    The script currently measures anchor drift on every named anchor in
    LETTER_OVERRIDES regardless of whether each letter's override actually
    uses that anchor. False positives result on letters where unused anchors

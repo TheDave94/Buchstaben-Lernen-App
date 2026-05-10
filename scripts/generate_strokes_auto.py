@@ -77,6 +77,16 @@ NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
 # tittle components untouched.
 MAX_SPUR_LENGTH = 24
 
+# Tip-extension parameters. Mirror of the Swift runtime's
+# extendTipsToOutline. At 1024² the Swift-equivalent 25-px cap at 256²
+# is ~100 px; we use 60 — bounded by hitting the ink boundary in
+# practice, so the cap is a runaway-walk guard for tangent-parallel-
+# to-edge geometry rather than a routine limit. Tangent window 8
+# smooths the direction estimate over the 4× higher resolution; Swift
+# used 1-back which would be jitter-sensitive at 1024².
+MAX_TIP_EXTENSION = 60
+TANGENT_WINDOW = 8
+
 # Lowercase folder suffix dodges APFS / HFS+ case-insensitive collision
 # with their uppercase counterparts.
 LOWERCASE_SUFFIX = "_l"
@@ -516,6 +526,121 @@ def prune_skeleton_spurs(skel_mask: np.ndarray,
             return mask
         for (r, c) in to_remove:
             mask[r, c] = False
+
+
+def extend_tips_to_outline(skel_mask: np.ndarray,
+                           ink_mask: np.ndarray,
+                           max_extension: int = MAX_TIP_EXTENSION,
+                           tangent_window: int = TANGENT_WINDOW
+                           ) -> np.ndarray:
+    """Walk each degree-1 tip toward the ink boundary along its local
+    tangent. Tangent = (tip - back-pixel) where back-pixel is the
+    tangent_window-th chain pixel back from the tip; the walk stops
+    earlier if a junction (deg≥3) is reached. Chebyshev-normalised
+    tangent so each forward step adds exactly 1 pixel.
+
+    Isolation-skip guard: tips on chains that never reach a junction
+    are skipped entirely. Preserves i/j tittles, umlaut dots, and any
+    isolated linear component (I, L) — all degree-1-to-degree-1.
+    """
+    mask = skel_mask.copy()
+    if mask.size == 0:
+        return mask
+    rows_max, cols_max = mask.shape
+
+    pa = np.where(mask)
+    pixels = set(zip(pa[0].tolist(), pa[1].tolist()))
+    if not pixels:
+        return mask
+
+    deg: dict[tuple[int, int], int] = {}
+    for (r, c) in pixels:
+        d = 0
+        for dr, dc in NEIGHBOURS_8:
+            if (r + dr, c + dc) in pixels:
+                d += 1
+        deg[(r, c)] = d
+
+    extensions: list[tuple[tuple[int, int], float, float]] = []
+    isolation_cap = 200    # safety cap past tangent_window
+
+    for tip in pixels:
+        if deg[tip] != 1:
+            continue
+
+        chain = [tip]
+        prev = None
+        cur = tip
+        is_isolated = False
+        junction_hit = False
+
+        for _ in range(tangent_window):
+            cands = [(cur[0] + dr, cur[1] + dc) for dr, dc in NEIGHBOURS_8]
+            nbrs = [n for n in cands if n in pixels and n != prev]
+            if len(nbrs) == 0:
+                is_isolated = True
+                break
+            if len(nbrs) > 1:
+                junction_hit = True
+                break
+            prev = cur
+            cur = nbrs[0]
+            chain.append(cur)
+
+        if not is_isolated and not junction_hit:
+            steps = 0
+            while steps < isolation_cap:
+                cands = [(cur[0] + dr, cur[1] + dc) for dr, dc in NEIGHBOURS_8]
+                nbrs = [n for n in cands if n in pixels and n != prev]
+                if len(nbrs) == 0:
+                    is_isolated = True
+                    break
+                if len(nbrs) > 1:
+                    junction_hit = True
+                    break
+                prev = cur
+                cur = nbrs[0]
+                steps += 1
+            if not junction_hit and not is_isolated:
+                is_isolated = True
+
+        if is_isolated:
+            continue
+
+        back = chain[-1]
+        if back == tip:
+            continue
+        tdr = tip[0] - back[0]
+        tdc = tip[1] - back[1]
+        chev = max(abs(tdr), abs(tdc))
+        if chev == 0:
+            continue
+        tdr_step = tdr / chev
+        tdc_step = tdc / chev
+        extensions.append((tip, tdr_step, tdc_step))
+
+    for (tip, tdr_step, tdc_step) in extensions:
+        rf = float(tip[0]) + 0.5
+        cf = float(tip[1]) + 0.5
+        prev_pos = tip
+        steps_added = 0
+        for _ in range(max_extension * 2):
+            if steps_added >= max_extension:
+                break
+            rf += tdr_step
+            cf += tdc_step
+            ri, ci = int(rf), int(cf)
+            if (ri, ci) == prev_pos:
+                continue
+            if not (0 <= ri < rows_max and 0 <= ci < cols_max):
+                break
+            if not ink_mask[ri, ci]:
+                break
+            mask[ri, ci] = True
+            prev_pos = (ri, ci)
+            steps_added += 1
+
+    return mask
 
 
 def _walk_cycle_ccw(seed: tuple[int, int],
@@ -1300,6 +1425,9 @@ def generate_for_letter(letter: str, font_path: Path,
     override is absent or its walker fails on this font's geometry."""
     mask = rasterize(letter, font_path)
     skel = morph.skeletonize(mask)
+    skel = extend_tips_to_outline(skel, ink_mask=mask,
+                                  max_extension=MAX_TIP_EXTENSION,
+                                  tangent_window=TANGENT_WINDOW)
     skel = prune_skeleton_spurs(skel, max_spur_length=MAX_SPUR_LENGTH)
 
     rows, cols = np.where(mask)

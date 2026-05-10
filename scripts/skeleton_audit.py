@@ -52,8 +52,12 @@ from generate_strokes_auto import (  # noqa: E402
     ANCHOR_POSITIONS,
     DEFAULT_FONT,
     build_adjacency,
+    output_dir_for,
     rasterize,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_BUNDLE = REPO_ROOT / "PrimaeNative/Resources/Letters"
 
 
 def degrees(adj: dict) -> dict:
@@ -118,7 +122,79 @@ def anchor_drifts(skel_pixels: list[tuple[int, int]],
     return out
 
 
-def audit_letter(letter: str, font_path: Path, spur_len: int) -> dict | None:
+# Reversal-defect predicate. Angle-only thresholds (used before
+# Phase 2.5) misclassify natural sharp corners — M/V/W apexes, u_l's
+# bowl-to-vertical transition — as defects, because the geometric
+# truth of the glyph involves 120-145° corners that the resampled
+# checkpoint chain faithfully captures.
+#
+# The refined predicate flags a reversal as a defect only when the
+# turn angle exceeds the threshold AND some pair of non-adjacent
+# checkpoints within a ±window of the kink lies within `revisit_px`
+# raster pixels of each other. The second condition is structural
+# evidence that the BFS path revisited the same chain region — the
+# textbook retrace pattern. Natural apex corners walk monotonically
+# along the chain; only true retraces (e.g. r_l from the
+# `continuous: TL→BL→TR` override walking the vertical stem twice)
+# pair up in raster space.
+def stroke_reversal_defects(strokes_data: dict,
+                            bbox: tuple[int, int, int, int],
+                            angle_thr_deg: float = 120.0,
+                            window: int = 8,
+                            revisit_px: float = 8.0) -> list[dict]:
+    """Defects = sharp-turn checkpoints that also show chain-revisit
+    in their ±window neighbourhood. Returns one entry per defect."""
+    from itertools import combinations
+    x_min, y_min, x_max, y_max = bbox
+    bw = max(1, x_max - x_min)
+    bh = max(1, y_max - y_min)
+    angle_thr_rad = math.radians(angle_thr_deg)
+    revisit_sq = revisit_px * revisit_px
+
+    out: list[dict] = []
+    for stroke in strokes_data.get("strokes", []):
+        sidx = stroke.get("id", 0)
+        cps = stroke.get("checkpoints") or []
+        if len(cps) < 3:
+            continue
+        raster = [(x_min + c["x"] * bw, y_min + c["y"] * bh) for c in cps]
+        for i in range(1, len(cps) - 1):
+            ax, ay = raster[i - 1]
+            bx, by = raster[i]
+            cx, cy = raster[i + 1]
+            v1x, v1y = bx - ax, by - ay
+            v2x, v2y = cx - bx, cy - by
+            n1 = math.hypot(v1x, v1y)
+            n2 = math.hypot(v2x, v2y)
+            if n1 < 1e-9 or n2 < 1e-9:
+                continue
+            dot = (v1x * v2x + v1y * v2y) / (n1 * n2)
+            dot = max(-1.0, min(1.0, dot))
+            ang = math.acos(dot)
+            if ang <= angle_thr_rad:
+                continue
+            lo = max(0, i - window)
+            hi = min(len(raster), i + window + 1)
+            revisits = []
+            for (ia, ib) in combinations(range(lo, hi), 2):
+                if abs(ia - ib) < 3:
+                    continue
+                rax, ray = raster[ia]
+                rbx, rby = raster[ib]
+                if (rax - rbx) ** 2 + (ray - rby) ** 2 <= revisit_sq:
+                    revisits.append((ia, ib))
+            if revisits:
+                out.append({
+                    "stroke": sidx,
+                    "cp": i,
+                    "angle_deg": math.degrees(ang),
+                    "revisits": revisits,
+                })
+    return out
+
+
+def audit_letter(letter: str, font_path: Path, spur_len: int,
+                 bundle_dir: Path | None = None) -> dict | None:
     try:
         mask = rasterize(letter, font_path)
     except Exception as e:
@@ -141,6 +217,17 @@ def audit_letter(letter: str, font_path: Path, spur_len: int) -> dict | None:
     spurs = spur_lengths(adj, deg)
     short_spurs = [(p, n) for p, n in spurs if n < spur_len]
     drift = anchor_drifts(sk_pixels, bbox)
+
+    reversal_defects: list[dict] = []
+    if bundle_dir is not None:
+        strokes_file = bundle_dir / output_dir_for(letter).name / "strokes.json"
+        if strokes_file.exists():
+            try:
+                reversal_defects = stroke_reversal_defects(
+                    json.loads(strokes_file.read_text()), bbox)
+            except Exception as e:
+                reversal_defects = [{"error": str(e)}]
+
     return {
         "letter": letter,
         "skel_size": len(sk_pixels),
@@ -154,6 +241,7 @@ def audit_letter(letter: str, font_path: Path, spur_len: int) -> dict | None:
         "max_anchor_drift_pct": max(drift.values()) * 100,
         "anchor_drifts_pct": {k: round(v * 100, 1) for k, v in drift.items()},
         "bbox": list(bbox),
+        "reversal_defects": reversal_defects,
     }
 
 
@@ -170,6 +258,10 @@ def main() -> int:
     parser.add_argument("--anchor-drift-pct", type=float, default=8.0,
                         help="Anchor-drift % above which a letter is "
                              "flagged for 'corner mismatch'. Default 8.")
+    parser.add_argument("--bundle-dir", default=str(DEFAULT_BUNDLE),
+                        help="Directory of strokes.json bundles to "
+                             "scan for reversal defects. Default: "
+                             "PrimaeNative/Resources/Letters.")
     parser.add_argument("--verbose", action="store_true",
                         help="Print per-letter detail in addition to the "
                              "global ranked summary.")
@@ -177,10 +269,11 @@ def main() -> int:
                         help="Write the full audit as JSON to this path.")
     args = parser.parse_args()
 
+    bundle_dir = Path(args.bundle_dir) if args.bundle_dir else None
     letters = args.letters or ALL_LETTERS
     results = []
     for L in letters:
-        r = audit_letter(L, Path(args.font), args.spur_len)
+        r = audit_letter(L, Path(args.font), args.spur_len, bundle_dir)
         if r is not None:
             results.append(r)
 
@@ -226,6 +319,22 @@ def main() -> int:
         worst_str = ", ".join(f"{k}={v}%" for k, v in worst)
         print(f"  {r['letter']!r}: max {r['max_anchor_drift_pct']:.1f}% "
               f"(worst: {worst_str})")
+
+    print()
+    print("=== Letters with stroke-checkpoint reversal defects "
+          "(>120° turn AND chain-revisit within ±8 cps / ≤8 raster px) ===")
+    with_defects = [r for r in results if r.get("reversal_defects")]
+    with_defects.sort(key=lambda r: r["letter"])
+    for r in with_defects:
+        for d in r["reversal_defects"]:
+            if "error" in d:
+                print(f"  {r['letter']!r}: ERROR {d['error']}")
+                continue
+            print(f"  {r['letter']!r}: stroke {d['stroke']} "
+                  f"cp[{d['cp']}] = {d['angle_deg']:.1f}° "
+                  f"({len(d['revisits'])} revisit pair(s))")
+    if not with_defects:
+        print("  (none — no chain-revisit retrace defects detected)")
 
     return 0
 
