@@ -192,16 +192,13 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "continuous", "anchors": ["BL", "TL", "BC", "TR", "BR"]},
     ],
     "N": [
-        # Phase 3 starter. Each stroke's CENTERLINE covers only its
-        # own arm; the meeting corners are filled by stroke-width
-        # overlap at iPad render time, not by shared centerline pixels.
-        # Diagonal is inset 8 % at each end so its centerline doesn't
-        # share endpoints with the verticals (which would draw a "Y stem"
-        # in the corner region from the overlapping centerlines).
-        # All anchors verified in-ink at raster resolution.
-        {"kind": "through", "from": (0.14, 0.00), "to": (0.05, 1.00)},
-        {"kind": "through", "from": (0.22, 0.08), "to": (0.78, 0.92)},
-        {"kind": "through", "from": (0.95, 0.00), "to": (0.86, 1.00)},
+        # Phase 3 final. Verticals walk the post-split skeleton chains
+        # via named anchors (TL/BL/TR/BR skel-snap to per-arm tips).
+        # Diagonal uses `through` with TL/BR ink-snap — robust across
+        # fonts whose bbox corners may lie outside the ink. Zero tuples.
+        {"kind": "walk",    "from": "TL", "to": "BL"},
+        {"kind": "through", "from": "TL", "to": "BR"},
+        {"kind": "walk",    "from": "TR", "to": "BR"},
     ],
     "O": [
         {"kind": "loop", "start": "T", "direction": "ccw"},
@@ -231,18 +228,13 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "V": [
-        # Phase 3 starter. Both diagonals end ABOVE the apex; the
-        # unstroked region between the stroke ends and the apex is
-        # filled by stroke-width overlap at render time. Endpoints
-        # land in distinct arms (no shared pixel ⇒ no "Y stem").
-        # x of the right endpoint is 0.46, not symmetric 0.58: this
-        # font's V is asymmetric (right arm has steeper slope), so the
-        # right arm's centerline at y=0.84 is at rel x ≈ 0.50, not 0.58.
-        # y=0.84 is the lowest row where the two arms are still
-        # separated (~7 px gap); at y=0.88 they've merged into one ink
-        # column. All anchors verified in-ink.
-        {"kind": "through", "from": (0.08, 0.00), "to": (0.42, 0.84)},
-        {"kind": "through", "from": (0.93, 0.00), "to": (0.46, 0.84)},
+        # Phase 3 final. Both diagonals `through` with TL/TR/BC
+        # ink-snap. Tangents inferred from endpoints. Both strokes
+        # share the BC apex pixel — kids' renderer fills the apex
+        # geometry via stroke-width overlap, not via shared centerline
+        # path. Zero tuples.
+        {"kind": "through", "from": "TL", "to": "BC"},
+        {"kind": "through", "from": "TR", "to": "BC"},
     ],
     "W": [
         {"kind": "continuous", "anchors": ["TL", "BL", "TC", "BR", "TR"]},
@@ -267,28 +259,25 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "b": [
-        # Phase 3 starter. Stem traces a strict-tangent vertical from
-        # stem-top centerline (rel x=0.19, raster x=444 — well inside
-        # the stem ink at y=0) down to (0.18, 0.66), terminating at
-        # the bowl/stem junction row. "T" cannot be used here because
-        # `through` resolves anchors raw against the bbox: "T" = (0.5, 0)
-        # would land at the bbox-center-top (518, 221), in the
-        # whitespace above the bowl. Lateral correction handles the
-        # stem's ~7 px leftward lean at the foot.
-        # Bowl is one closed medial-axis loop attached to the stem at
-        # a single 4-way junction; the bowl stroke starts/ends on the
-        # bowl arc itself (deg-2 pixels ~10 px along each branch from
-        # the junction). (0.4, 0.45) is the upper-left arc waypoint
-        # that forces leg 1 to traverse the upper-left arc rather than
-        # detouring.
-        {"kind": "through", "from": (0.19, 0.00), "to": (0.18, 0.66),
-         "tangent": (0, 1)},
-        {"kind": "continuous",
-         "anchors": [(0.159, 0.650),  # upper bowl-arc, ~10 px from junction
-                     (0.4, 0.45),     # upper-left bowl arc waypoint
-                     "MR",            # right of bowl
-                     "BC",            # bottom-center of bowl
-                     (0.100, 0.685)]},  # lower bowl-arc, ~10 px from junction
+        # Phase 3 final. Stem walks the stem chain end-to-end. T snaps
+        # via the standard skel-snap resolver to the stem-top tip.
+        # (0.105, 0.646) is a font-calibration tuple — represents the
+        # cluster-side cut-end position for THIS font. Skel-snap finds
+        # the nearest stem-chain pixel; small font variation tolerated.
+        # Re-probe per font if cut-end geometry shifts significantly.
+        {"kind": "walk", "from": "T", "to": (0.105, 0.646)},
+        # Bowl: open chain from upper cut-end through bowl arc to lower
+        # cut-end. Three tuple waypoints are font-calibration values —
+        # bowl arc geometry varies per font. MR/BC are portable named
+        # anchors that resolve to bowl-loop centerlines on any font with
+        # a roughly oval bowl.
+        {"kind": "continuous", "anchors": [
+            (0.159, 0.650),   # font-calibration: bowl-upper cut-end vicinity
+            (0.4, 0.45),      # font-calibration: upper-left bowl arc
+            "MR",
+            "BC",
+            (0.100, 0.685),   # font-calibration: bowl-lower cut-end vicinity
+        ]},
     ],
     "c": [
         {"kind": "walk", "from": "TR", "to": "BR"},
@@ -1719,11 +1708,8 @@ def resolve_anchor_raw(anchor,
                        bbox: tuple[int, int, int, int]
                        ) -> tuple[int, int]:
     """Map an anchor directly to a raster pixel via the bbox — no
-    skeleton snap. Used by `through`, whose path is synthesised across
-    the ink mask and shouldn't be biased toward the medial axis. The
-    override author is responsible for picking anchors that land inside
-    the ink mask; out-of-ink starts/ends cause the synth to terminate
-    immediately and the override to fall through."""
+    skeleton snap, no ink snap. Retained for callers that explicitly
+    want bbox-relative coordinates regardless of where ink lives."""
     x_min, y_min, x_max, y_max = bbox
     w = max(1, x_max - x_min)
     h = max(1, y_max - y_min)
@@ -1734,6 +1720,36 @@ def resolve_anchor_raw(anchor,
     else:
         ax, ay = anchor
     return (int(round(x_min + ax * w)), int(round(y_min + ay * h)))
+
+
+def resolve_anchor_ink_snap(anchor,
+                            ink_mask: np.ndarray,
+                            bbox: tuple[int, int, int, int]
+                            ) -> tuple[int, int] | None:
+    """Map an anchor to the nearest ink-mask pixel. Used by `through`,
+    whose path is synthesised across ink. Adapts to glyph geometry where
+    bbox corners may lie outside the ink — e.g. b's "T" at bbox-center-
+    top falls in whitespace above the bowl, but the nearest ink pixel
+    is the stem-top, which is the right answer for a stem stroke.
+    Portable across fonts whose ink doesn't tightly fill the bbox."""
+    x_min, y_min, x_max, y_max = bbox
+    w = max(1, x_max - x_min)
+    h = max(1, y_max - y_min)
+    if isinstance(anchor, str):
+        if anchor not in ANCHOR_POSITIONS:
+            raise ValueError(f"Unknown anchor name: {anchor!r}")
+        ax, ay = ANCHOR_POSITIONS[anchor]
+    else:
+        ax, ay = anchor
+    target_x = x_min + ax * w
+    target_y = y_min + ay * h
+    rows, cols = np.where(ink_mask)
+    if len(rows) == 0:
+        return None
+    dx = cols.astype(np.float64) - target_x
+    dy = rows.astype(np.float64) - target_y
+    i = int(np.argmin(dx * dx + dy * dy))
+    return (int(cols[i]), int(rows[i]))
 
 
 # Angle-penalty weight for tangent-aware Dijkstra in bfs_path. Higher
@@ -2093,8 +2109,10 @@ def strokes_from_override(letter: str,
                 return None
             out.append(path)
         elif kind == "through":
-            start = resolve_anchor_raw(stroke_spec["from"], bbox)
-            end = resolve_anchor_raw(stroke_spec["to"], bbox)
+            start = resolve_anchor_ink_snap(stroke_spec["from"], mask, bbox)
+            end = resolve_anchor_ink_snap(stroke_spec["to"], mask, bbox)
+            if start is None or end is None:
+                return None
             tangent = stroke_spec.get("tangent")
             if tangent is None:
                 tangent = (float(end[0] - start[0]),
