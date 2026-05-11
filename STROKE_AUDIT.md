@@ -165,6 +165,15 @@ Phase 2 work-list:
    y net -8 px (extension +49 → prune -57): extension created a
    sub-MAX_SPUR_LENGTH branch the pruner removed; accepted.
 
+   *** SUPERSEDED 2026-05-11 — see section 9 ***
+   The Phase 2.6 work-list and Class A/B/C/D residual taxonomy
+   below are preserved as history. Post-cap-fix structural review
+   unified all four buckets into a single Phase 3 (override-driven
+   stroke decomposition). Do NOT implement against the old phase
+   numbering or class labels — they split one root cause (medial
+   axis snaps to merged-center at multi-stroke meeting points)
+   into four artificial categories. See section 9 for current plan.
+
    Phase 2.6 work-list:
    - m, n, r, g, y_l need override endpoint anchors for fanning-stem
      endings (medial axis genuinely terminates as a single tip;
@@ -225,6 +234,11 @@ Phase 2 work-list:
    - 4 surviving override audit FAILs (I, Z, U, i_l) unchanged.
 
 8. skeleton_audit.py CI gate fix needed (discovered during Phase 1 prep):
+   *** SUPERSEDED 2026-05-11 — renumbered to Phase 4(b); see section 9.
+   Sub-steps (a)/(b)/(c) below are still the implementation plan, but
+   sequencing changed: lands AFTER Phase 3 override rewrites, because
+   running the gate before then produces a meaningless drift baseline. ***
+
    The script currently measures anchor drift on every named anchor in
    LETTER_OVERRIDES regardless of whether each letter's override actually
    uses that anchor. False positives result on letters where unused anchors
@@ -242,6 +256,85 @@ Phase 2 work-list:
        what we think it does and needs a deeper rewrite.
    (c) Only after (a) and (b) verify clean: add the gate to CI as a
        blocking step.
+
+9. Post-cap-fix structural review — unification into Phase 3 (2026-05-11):
+
+   Implementation base: Phase 3 builds on Phase 2.5 + cap fix
+   (commit 034afa0). The cap fix is committed locally but not
+   pushed as of this writing. Reverting it would invalidate
+   Phase 3's anchor-reaches-corner assumption.
+
+   Cap-fix outcome (commit 034afa0). Removed the isolation_cap=200
+   bound in extend_tips_to_outline; H/X/b_l/e_l newly extend, ~24
+   additional letters extend further than ce5f2f1. Audit cost under
+   the refined predicate: 4 chain-revisit defects (r_l cp 13, N cp 41,
+   W cp 42, w_l cp 53). David verified these as render-acceptable on
+   iPad. Subsequent broader iPad pass (2026-05-11) flagged 25 letters
+   as still-not-fine, surfacing the structural mismatch that triggered
+   Phase 3 reframing.
+
+   Note on framing: 034afa0 corrected ce5f2f1's framing of Z/z_l and
+   r_l. Post-cap-fix structural review revealed that the broader
+   Class B framing in ce5f2f1 ("tangent-doesn't-follow-curvature,
+   algorithmic limitation, accepted") was also a partial picture —
+   Class B's unification into Phase 3 happened during this review.
+
+   Structural mismatch (real root cause). Across the ~25 letters
+   still flagged after cap-fix, the majority share one mechanism
+   (counting by structural-review classification): at every multi-
+   stroke meeting point, the medial axis snaps to the merged-center
+   instead of letting each stroke continue along its natural path
+   until the meeting point. Same mechanism underlies:
+   - Class B residuals (N/V/W/v_l/w_l corner-tip dropouts)
+   - b/d/p/q/R/U junction-snap behaviour
+   - h_l arch-foot rounding
+   The old Class A/B/C/D taxonomy split this into four buckets; it's
+   one root cause with letter-specific manifestations.
+
+   Phase 3 — Override-driven stroke decomposition.
+   (a) BFS walker upgrade: tangent-aware exit selection at junctions.
+       Dijkstra with an angle-penalty term on per-exit cost; inbound
+       tangent threaded through walk_continuous so consecutive legs
+       carry direction across junctions. ~50-line bfs_path mod.
+   (b) Override format extension: new `through` primitive
+         {"kind": "through", "from": ANCHOR, "to": ANCHOR,
+          "tangent_at_meeting": ...}
+       Supports tangent-aware on-skeleton routing AND off-skeleton
+       tangent extension in merge zones (so each stroke can continue
+       its natural path through the merged-center).
+   (c) Per-letter override authoring for the ~25 flagged letters.
+       Per-letter ~30 min once walker stabilizes. First 3-5 letters
+       expected to drive walker iteration via discovered edge cases.
+       Realistic total ~3-5 days of focused work including walker
+       rounds.
+
+   Phase 3 absorbs the previously-separate buckets:
+   - Fanning-stems (m/n/r/g/y/r_l) get explicit endpoint anchors
+     (was Phase 2.6).
+   - Z, z_l get explicit corner-pixel anchors (was Phase 2.7 /
+     Class C2).
+   - X, x_l use the new `through` primitive for the center crossing
+     (was Phase 2.8 / Class D).
+   - N/V/W/v_l/w_l corners use `through`'s tangent term (was Class B).
+   - b/d/p/q/R/U/h_l junction-snap fixes use the same primitive.
+   - Surviving override audit FAILs (I, Z, U, i_l from section 1
+     item 1) are subsumed — they're a subset of the per-letter
+     authoring pass.
+
+   Phase 4 — Hygiene (renamed from old Phase 3).
+   Lands AFTER Phase 3 because Phase 3 rewrites most overrides
+   anyway; running the CI drift-gate before Phase 3 settles
+   produces a meaningless baseline.
+   (a) I/Z/U/i_l override audit residual cleanup — verify nothing
+       slipped after the Phase 3 authoring pass.
+   (b) CI gate fix: filter anchor-drift measurement to anchors
+       actually referenced in LETTER_OVERRIDES[letter]. Implementation
+       sub-steps in section 8 (a)/(b)/(c).
+   (c) Font hash check wired in LetterRepository (originally M4 in
+       the body of this file; never landed).
+   (d) docs/STROKE_CALIBRATION.md doc sync — current as of ab37b4d
+       (pre-Phase-1); needs an update covering bake + prune + extend
+       + cap removal + the Phase 3 walker/override changes.
 ═══════════════════════════════════════════════════════════════════════
 -->
 
