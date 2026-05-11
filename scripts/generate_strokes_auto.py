@@ -193,11 +193,13 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
     ],
     "N": [
         # Phase 3 starter: 3 strokes meeting at TL and BR corner junctions.
-        # The diagonal uses `through` so its tangent (inferred TL→BR)
-        # picks the correct exit at both junction clusters.
-        {"kind": "walk",    "from": "TL", "to": "BL"},
+        # All three are `through` so they walk a straight tangent line
+        # through the ink rather than following the medial axis (which
+        # bows inward toward the corner junctions). Lateral correction
+        # tracks any slight font lean on the verticals.
+        {"kind": "through", "from": "TL", "to": "BL"},
         {"kind": "through", "from": "TL", "to": "BR"},
-        {"kind": "walk",    "from": "TR", "to": "BR"},
+        {"kind": "through", "from": "TR", "to": "BR"},
     ],
     "O": [
         {"kind": "loop", "start": "T", "direction": "ccw"},
@@ -255,27 +257,25 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "b": [
-        # Phase 3 starter: stem-through-bowl is the off-skeleton fallback
-        # case. b's stem skeleton bows rightward at the bowl-meets-stem
-        # junction; explicit tangent (0, 1) forces synthesis of the
-        # straight vertical through the merge zone (with lateral
-        # correction to follow the stem's leftward lean at the foot).
-        # The bowl is one closed loop attached to the stem at a single
-        # 4-way junction (rel 0.11, 0.66) — no upper junction exists,
-        # so `loop` can only cover half the bowl before branching into
-        # the stem at that junction. `continuous` with bowl waypoints
-        # forces full bowl coverage via per-leg BFS shortest paths
-        # plus tangent threading.
+        # Phase 3 starter: stem traces a strict-tangent vertical line
+        # through the ink, with lateral correction to track the stem's
+        # ~7 px leftward lean at the foot. Bowl is one closed medial-axis
+        # loop attached to the stem at a single 4-way junction; the bowl
+        # stroke starts/ends on the bowl arc itself (deg-2 pixels ~10 px
+        # along each branch from the junction) rather than at the
+        # junction-interior pixel, so the rendered stroke has no spoke
+        # artifacts. The visible gap between the bowl endpoints and the
+        # stem closes at render time via stroke thickness, not path
+        # overlap. (0.4, 0.45) is the upper-left arc waypoint that forces
+        # leg 1 to traverse the upper-left arc rather than detouring.
         {"kind": "through", "from": "T", "to": "B",
          "tangent": (0, 1)},
         {"kind": "continuous",
-         "anchors": [(0.11, 0.66),    # junction (start)
-                     (0.4, 0.45),     # upper-left bowl arc — forces leg 1
-                                      # to take the upper-left arc rather
-                                      # than detouring through the stem
+         "anchors": [(0.159, 0.650),  # upper bowl-arc, ~10 px from junction
+                     (0.4, 0.45),     # upper-left bowl arc waypoint
                      "MR",            # right of bowl
                      "BC",            # bottom-center of bowl
-                     (0.11, 0.66)]},  # junction (end, full loop closed)
+                     (0.100, 0.685)]},  # lower bowl-arc, ~10 px from junction
     ],
     "c": [
         {"kind": "walk", "from": "TR", "to": "BR"},
@@ -1497,50 +1497,19 @@ def walk_loop_at(anchor,
 
 # Phase 3 — `through` primitive helpers.
 #
-# Tunables. THROUGH_OVERALL_ANGLE_DEG is the cosmetic / "catastrophic
-# mis-route" guard: if the start→end direction of the skeleton path
-# differs from the requested tangent by more than this, the on-skeleton
-# attempt is rejected outright. THROUGH_MAX_PERP_DEV_PX guards the
-# bowl-snap case (b/d/p/q) — when the override author explicitly pinned
-# a tangent, no point on the on-skeleton path may sit more than this
-# many raster pixels from the start→end chord. Inferred tangents
-# (tangent omitted from the override) skip the perp-deviation check by
-# design: start→end already IS the tangent, so deviation is meaningless.
-THROUGH_OVERALL_ANGLE_DEG = 60.0
-THROUGH_MAX_PERP_DEV_PX = 30.0
-
-
-def _through_accept(path: list[tuple[int, int]] | None,
-                    start_pix: tuple[int, int],
-                    end_pix: tuple[int, int],
-                    tangent: tuple[float, float],
-                    explicit_tangent: bool) -> bool:
-    """Decide whether the on-skeleton Dijkstra path is acceptable for a
-    `through` stroke; returns False when off-skeleton synthesis should
-    take over."""
-    if path is None or len(path) < 2:
-        return False
-    dx_p = path[-1][0] - path[0][0]
-    dy_p = path[-1][1] - path[0][1]
-    np_ = math.hypot(dx_p, dy_p)
-    nt = math.hypot(tangent[0], tangent[1])
-    if np_ > 1e-9 and nt > 1e-9:
-        cos_t = (dx_p * tangent[0] + dy_p * tangent[1]) / (np_ * nt)
-        if cos_t < math.cos(math.radians(THROUGH_OVERALL_ANGLE_DEG)):
-            return False
-    if not explicit_tangent:
-        return True
-    sx, sy = start_pix
-    ex, ey = end_pix
-    lx, ly = ex - sx, ey - sy
-    ln = math.hypot(lx, ly)
-    if ln < 1e-9:
-        return True
-    for (px, py) in path:
-        cross = abs((px - sx) * ly - (py - sy) * lx)
-        if cross / ln > THROUGH_MAX_PERP_DEV_PX:
-            return False
-    return True
+# `through` is "straight tangent line through the ink, with lateral
+# correction." The medial axis is ignored entirely: from/to anchors
+# resolve only to seed/terminate positions, and the path is synthesised
+# pixel by pixel along the requested tangent direction, with lateral
+# drift to track gentle font curvature. This is the workhorse for every
+# letter where the medial axis snaps to merged-center at multi-stroke
+# meeting points — N's verticals/diagonal, V's diagonals, b/d/p/q's
+# stem, etc. Earlier revisions wrapped this in an on-skeleton Dijkstra
+# attempt with an acceptance gate; the gate's heuristics were too
+# fragile to be worth the complexity (the gate had to trigger for b's
+# stem-bow case and not trigger for plausible-looking-but-wrong
+# skeleton paths). Skipping the skeleton entirely is the simpler
+# semantics and produces the same result for every case we care about.
 
 
 def synthesize_off_skeleton(start_pix: tuple[int, int],
@@ -1678,18 +1647,13 @@ def strokes_from_override(letter: str,
             end = resolve_anchor(stroke_spec["to"], skel, bbox)
             if start is None or end is None:
                 return None
-            explicit_tangent = "tangent" in stroke_spec
             tangent = stroke_spec.get("tangent")
             if tangent is None:
                 tangent = (float(end[0] - start[0]),
                            float(end[1] - start[1]))
-            path = bfs_path(start, end, adj, inbound_tangent=tangent)
-            if not _through_accept(path, start, end, tangent,
-                                   explicit_tangent=explicit_tangent):
-                # Off-skeleton synthesis through the merge zone.
-                path = synthesize_off_skeleton(start, end, tangent, mask)
-                if path is None or len(path) < 2:
-                    return None
+            path = synthesize_off_skeleton(start, end, tangent, mask)
+            if path is None or len(path) < 2:
+                return None
             out.append(path)
         else:
             raise ValueError(f"Unknown override kind: {kind!r}")
