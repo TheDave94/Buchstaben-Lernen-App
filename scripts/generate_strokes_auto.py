@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import heapq
 import json
 import math
 from collections import defaultdict, deque
@@ -191,7 +192,12 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "continuous", "anchors": ["BL", "TL", "BC", "TR", "BR"]},
     ],
     "N": [
-        {"kind": "continuous", "anchors": ["BL", "TL", "BR", "TR"]},
+        # Phase 3 starter: 3 strokes meeting at TL and BR corner junctions.
+        # The diagonal uses `through` so its tangent (inferred TL→BR)
+        # picks the correct exit at both junction clusters.
+        {"kind": "walk",    "from": "TL", "to": "BL"},
+        {"kind": "through", "from": "TL", "to": "BR"},
+        {"kind": "walk",    "from": "TR", "to": "BR"},
     ],
     "O": [
         {"kind": "loop", "start": "T", "direction": "ccw"},
@@ -221,7 +227,10 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "V": [
-        {"kind": "continuous", "anchors": ["TL", "BC", "TR"]},
+        # Phase 3 starter: 2 strokes meeting at the valley apex. Each
+        # diagonal's tangent is inferred from its endpoints.
+        {"kind": "through", "from": "TL", "to": "BC"},
+        {"kind": "through", "from": "TR", "to": "BC"},
     ],
     "W": [
         {"kind": "continuous", "anchors": ["TL", "BL", "TC", "BR", "TR"]},
@@ -246,7 +255,27 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "b": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR", "MR", "ML"]},
+        # Phase 3 starter: stem-through-bowl is the off-skeleton fallback
+        # case. b's stem skeleton bows rightward at the bowl-meets-stem
+        # junction; explicit tangent (0, 1) forces synthesis of the
+        # straight vertical through the merge zone (with lateral
+        # correction to follow the stem's leftward lean at the foot).
+        # The bowl is one closed loop attached to the stem at a single
+        # 4-way junction (rel 0.11, 0.66) — no upper junction exists,
+        # so `loop` can only cover half the bowl before branching into
+        # the stem at that junction. `continuous` with bowl waypoints
+        # forces full bowl coverage via per-leg BFS shortest paths
+        # plus tangent threading.
+        {"kind": "through", "from": "T", "to": "B",
+         "tangent": (0, 1)},
+        {"kind": "continuous",
+         "anchors": [(0.11, 0.66),    # junction (start)
+                     (0.4, 0.45),     # upper-left bowl arc — forces leg 1
+                                      # to take the upper-left arc rather
+                                      # than detouring through the stem
+                     "MR",            # right of bowl
+                     "BC",            # bottom-center of bowl
+                     (0.11, 0.66)]},  # junction (end, full loop closed)
     ],
     "c": [
         {"kind": "walk", "from": "TR", "to": "BR"},
@@ -1257,36 +1286,116 @@ def resolve_anchor(anchor,
     return (int(cols[i]), int(rows[i]))
 
 
+# Angle-penalty weight for tangent-aware Dijkstra in bfs_path. Higher
+# values make the walker prefer "straight ahead" more strongly at
+# junctions; 5.0 is the Phase 3 starting point, tuned on N's diagonal.
+TANGENT_ANGLE_WEIGHT = 5.0
+
+
 def bfs_path(start: tuple[int, int],
              end: tuple[int, int],
              adj: dict[tuple[int, int], list[tuple[int, int]]],
-             blocked: set[tuple[int, int]] | None = None
+             blocked: set[tuple[int, int]] | None = None,
+             inbound_tangent: tuple[float, float] | None = None,
+             angle_weight: float = TANGENT_ANGLE_WEIGHT,
              ) -> list[tuple[int, int]] | None:
-    """Shortest path along the skeleton graph. Returns None when end is
-    unreachable from start (e.g. they're in disconnected components)."""
+    """Shortest path along the skeleton graph. Returns None when `end`
+    is unreachable from `start`.
+
+    `inbound_tangent` is the direction the walker is moving on arrival
+    at `start`. When None, classic FIFO BFS (shortest by pixel count)
+    — existing callers are unchanged. When set, Dijkstra with edge cost
+    `1 + angle_weight * (1 - cos(theta)) / 2`, where theta is the angle
+    between consecutive edges. At degree-2 chain pixels the penalty is
+    near zero; at junctions the most-aligned exit wins."""
     if blocked is None:
         blocked = set()
     if start == end:
         return [start]
     if start not in adj or end not in adj:
         return None
-    parent: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
-    q: deque[tuple[int, int]] = deque([start])
-    while q:
-        cur = q.popleft()
+
+    if inbound_tangent is None:
+        # FIFO BFS — existing behaviour preserved bit-for-bit.
+        parent: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
+        q: deque[tuple[int, int]] = deque([start])
+        while q:
+            cur = q.popleft()
+            if cur == end:
+                break
+            for n in adj.get(cur, []):
+                if n not in parent and n not in blocked:
+                    parent[n] = cur
+                    q.append(n)
+        if end not in parent:
+            return None
+        path: list[tuple[int, int]] = []
+        cur_p: tuple[int, int] | None = end
+        while cur_p is not None:
+            path.append(cur_p)
+            cur_p = parent[cur_p]
+        path.reverse()
+        return path
+
+    # Tangent-aware Dijkstra. State is (cur_pixel, prev_pixel); the
+    # predecessor is required because the edge cost depends on the angle
+    # between the prev→cur edge and the cur→nxt edge. Bootstrap with a
+    # virtual predecessor offset by -inbound_tangent so the first edge's
+    # angle is measured against the requested arrival direction.
+    tdx, tdy = inbound_tangent
+    tnorm = math.hypot(tdx, tdy)
+    if tnorm < 1e-9:
+        return bfs_path(start, end, adj, blocked=blocked,
+                        inbound_tangent=None)
+    tdx /= tnorm
+    tdy /= tnorm
+    init_prev: tuple[float, float] = (start[0] - tdx, start[1] - tdy)
+
+    def step_cost(prev, cur, nxt) -> float:
+        ax = cur[0] - prev[0]
+        ay = cur[1] - prev[1]
+        bx = nxt[0] - cur[0]
+        by = nxt[1] - cur[1]
+        an = math.hypot(ax, ay)
+        bn = math.hypot(bx, by)
+        if an < 1e-9 or bn < 1e-9:
+            return 1.0
+        cos_t = (ax * bx + ay * by) / (an * bn)
+        cos_t = max(-1.0, min(1.0, cos_t))
+        return 1.0 + angle_weight * (1.0 - cos_t) / 2.0
+
+    dist: dict[tuple, float] = {}
+    parent_state: dict[tuple, tuple] = {}
+    start_state = (start, init_prev)
+    dist[start_state] = 0.0
+    heap: list[tuple[float, int, tuple]] = [(0.0, 0, start_state)]
+    counter = 1
+    end_state: tuple | None = None
+    while heap:
+        cost, _, st = heapq.heappop(heap)
+        if cost > dist.get(st, float("inf")):
+            continue
+        cur, prev = st
         if cur == end:
+            end_state = st
             break
         for n in adj.get(cur, []):
-            if n not in parent and n not in blocked:
-                parent[n] = cur
-                q.append(n)
-    if end not in parent:
+            if n in blocked:
+                continue
+            new_cost = cost + step_cost(prev, cur, n)
+            new_st = (n, cur)
+            if new_cost < dist.get(new_st, float("inf")):
+                dist[new_st] = new_cost
+                parent_state[new_st] = st
+                heapq.heappush(heap, (new_cost, counter, new_st))
+                counter += 1
+    if end_state is None:
         return None
-    path: list[tuple[int, int]] = []
-    cur: tuple[int, int] | None = end
-    while cur is not None:
-        path.append(cur)
-        cur = parent[cur]
+    path = []
+    st_p: tuple | None = end_state
+    while st_p is not None:
+        path.append(st_p[0])
+        st_p = parent_state.get(st_p)
     path.reverse()
     return path
 
@@ -1294,21 +1403,32 @@ def bfs_path(start: tuple[int, int],
 def walk_continuous(anchors: list,
                     adj: dict[tuple[int, int], list[tuple[int, int]]],
                     skel: np.ndarray,
-                    bbox: tuple[int, int, int, int]
+                    bbox: tuple[int, int, int, int],
+                    initial_tangent: tuple[float, float] | None = None,
                     ) -> list[tuple[int, int]] | None:
     """BFS-walk through `anchors` in order, stitching shortest paths
-    head-to-tail. Returns None if any leg is unreachable."""
+    head-to-tail. Returns None if any leg is unreachable.
+
+    Tangent threading (Phase 3): each leg after the first is routed
+    with `inbound_tangent` set to the direction of the previous leg's
+    final edge. This carries direction across junctions so a chain of
+    legs holds its tangent through multi-stroke meeting points. The
+    first leg uses `initial_tangent` (None = unbiased BFS)."""
     if not anchors:
         return None
     pixels = [resolve_anchor(a, skel, bbox) for a in anchors]
     if any(p is None for p in pixels):
         return None
     full: list[tuple[int, int]] = [pixels[0]]
+    tangent = initial_tangent
     for i in range(len(pixels) - 1):
-        seg = bfs_path(pixels[i], pixels[i + 1], adj)
+        seg = bfs_path(pixels[i], pixels[i + 1], adj,
+                       inbound_tangent=tangent)
         if seg is None or len(seg) < 2:
             return None
         full.extend(seg[1:])
+        a, b = seg[-2], seg[-1]
+        tangent = (float(b[0] - a[0]), float(b[1] - a[1]))
     return full
 
 
@@ -1316,14 +1436,22 @@ def walk_loop_at(anchor,
                  direction: str,
                  adj: dict[tuple[int, int], list[tuple[int, int]]],
                  skel: np.ndarray,
-                 bbox: tuple[int, int, int, int]
+                 bbox: tuple[int, int, int, int],
+                 stop_at=None,
                  ) -> list[tuple[int, int]] | None:
     """Walk a closed cycle on the skeleton component containing the
     anchor's nearest skeleton pixel, then enforce direction (CCW = the
     Austrian writing convention for O / o). Falls back to a chain walk
     (endpoint-to-endpoint) when the component is a degenerate non-loop
     — i/j dots skeletonize to a 3–5 px line rather than a true cycle,
-    so requiring a closed cycle would drop the dot entirely."""
+    so requiring a closed cycle would drop the dot entirely.
+
+    `stop_at` is an optional anchor; when provided, the cycle walk
+    truncates at the path pixel nearest to `stop_at`'s resolved
+    skeleton pixel, rather than returning to `anchor`. Used for
+    bowl-with-attached-stem letters (b/d/g/p/q) where the closed
+    cycle reachable from the bowl includes a stem traversal — the
+    stop anchor terminates the bowl walk at the bowl/stem junction."""
     seed = resolve_anchor(anchor, skel, bbox)
     if seed is None:
         return None
@@ -1333,6 +1461,22 @@ def walk_loop_at(anchor,
         path = _walk_cycle_ccw(seed, adj)
         if direction == "cw":
             path = list(reversed(path))
+        if stop_at is not None:
+            stop_pix = resolve_anchor(stop_at, skel, bbox)
+            if stop_pix is None:
+                return None
+            best_i = None
+            best_d2 = None
+            for i, p in enumerate(path):
+                if i == 0:
+                    continue  # don't accept seed itself as the stop
+                d2 = (p[0] - stop_pix[0]) ** 2 + (p[1] - stop_pix[1]) ** 2
+                if best_d2 is None or d2 < best_d2:
+                    best_d2 = d2
+                    best_i = i
+            if best_i is None or best_i < 1:
+                return None
+            path = path[:best_i + 1]
         return path
     # Non-cycle (degree-1 endpoint): walk the whole connected chain
     # by collecting the component, then return endpoint-to-endpoint.
@@ -1349,6 +1493,144 @@ def walk_loop_at(anchor,
         return [seed]
     path = bfs_path(endpoints[0], endpoints[1], adj)
     return path if path else [seed]
+
+
+# Phase 3 — `through` primitive helpers.
+#
+# Tunables. THROUGH_OVERALL_ANGLE_DEG is the cosmetic / "catastrophic
+# mis-route" guard: if the start→end direction of the skeleton path
+# differs from the requested tangent by more than this, the on-skeleton
+# attempt is rejected outright. THROUGH_MAX_PERP_DEV_PX guards the
+# bowl-snap case (b/d/p/q) — when the override author explicitly pinned
+# a tangent, no point on the on-skeleton path may sit more than this
+# many raster pixels from the start→end chord. Inferred tangents
+# (tangent omitted from the override) skip the perp-deviation check by
+# design: start→end already IS the tangent, so deviation is meaningless.
+THROUGH_OVERALL_ANGLE_DEG = 60.0
+THROUGH_MAX_PERP_DEV_PX = 30.0
+
+
+def _through_accept(path: list[tuple[int, int]] | None,
+                    start_pix: tuple[int, int],
+                    end_pix: tuple[int, int],
+                    tangent: tuple[float, float],
+                    explicit_tangent: bool) -> bool:
+    """Decide whether the on-skeleton Dijkstra path is acceptable for a
+    `through` stroke; returns False when off-skeleton synthesis should
+    take over."""
+    if path is None or len(path) < 2:
+        return False
+    dx_p = path[-1][0] - path[0][0]
+    dy_p = path[-1][1] - path[0][1]
+    np_ = math.hypot(dx_p, dy_p)
+    nt = math.hypot(tangent[0], tangent[1])
+    if np_ > 1e-9 and nt > 1e-9:
+        cos_t = (dx_p * tangent[0] + dy_p * tangent[1]) / (np_ * nt)
+        if cos_t < math.cos(math.radians(THROUGH_OVERALL_ANGLE_DEG)):
+            return False
+    if not explicit_tangent:
+        return True
+    sx, sy = start_pix
+    ex, ey = end_pix
+    lx, ly = ex - sx, ey - sy
+    ln = math.hypot(lx, ly)
+    if ln < 1e-9:
+        return True
+    for (px, py) in path:
+        cross = abs((px - sx) * ly - (py - sy) * lx)
+        if cross / ln > THROUGH_MAX_PERP_DEV_PX:
+            return False
+    return True
+
+
+def synthesize_off_skeleton(start_pix: tuple[int, int],
+                            end_pix: tuple[int, int],
+                            tangent: tuple[float, float],
+                            ink_mask: np.ndarray,
+                            max_steps: int = 4000,
+                            terminate_radius_px: float = 6.0,
+                            ) -> list[tuple[int, int]] | None:
+    """Walk in `tangent` direction along ink-mask pixels from
+    `start_pix` toward `end_pix`, synthesising one path pixel per
+    step. Terminates when:
+    - all three candidate pixels (straight-ahead and the two ±1
+      perpendicular drifts) are out of the ink mask;
+    - the walker comes within `terminate_radius_px` of `end_pix`
+      (snaps final pixel to `end_pix` and returns).
+
+    Lateral correction. The walker prefers the straight-ahead candidate
+    (current + tangent). When that pixel is out of ink, it tries the
+    two pixels offset ±1 in the direction perpendicular to the tangent;
+    if either is in ink, it takes that one (when both are in ink, it
+    prefers the one whose perpendicular distance to the centerline
+    through `start_pix` is smaller, pulling the walk back toward the
+    original line). The tangent vector itself doesn't change — only the
+    accumulated float position drifts. This lets the synth track gentle
+    font curvature (e.g. b's stem leaning leftward at the foot) without
+    abandoning the straight-tangent intent.
+
+    Used by the `through` primitive's off-skeleton fallback to draw a
+    stroke's natural path through a multi-stroke merge zone where the
+    medial axis snaps to the merged-center (e.g. b/d/p/q's stem-meets-
+    bowl junction)."""
+    dx, dy = tangent
+    n = math.hypot(dx, dy)
+    if n < 1e-9:
+        return None
+    dx /= n
+    dy /= n
+    # Perpendicular unit vector (tangent rotated 90° CCW).
+    perp_x = -dy
+    perp_y = dx
+    h, w = ink_mask.shape
+    sx, sy = float(start_pix[0]), float(start_pix[1])
+    x, y = sx, sy
+    path: list[tuple[int, int]] = [(int(round(x)), int(round(y)))]
+
+    def in_ink(ic: int, ir: int) -> bool:
+        return 0 <= ir < h and 0 <= ic < w and bool(ink_mask[ir, ic])
+
+    def perp_offset(fx: float, fy: float) -> float:
+        """Signed perp distance from candidate (fx, fy) to the centerline
+        through start_pix along the tangent direction."""
+        return (fx - sx) * perp_x + (fy - sy) * perp_y
+
+    for _ in range(max_steps):
+        # Straight-ahead candidate.
+        ax = x + dx
+        ay = y + dy
+        a_ic, a_ir = int(round(ax)), int(round(ay))
+        if in_ink(a_ic, a_ir):
+            x, y, ic, ir = ax, ay, a_ic, a_ir
+        else:
+            # Lateral drift candidates: straight-ahead ±1 perpendicular.
+            plus_x = ax + perp_x
+            plus_y = ay + perp_y
+            minus_x = ax - perp_x
+            minus_y = ay - perp_y
+            plus_ic, plus_ir = int(round(plus_x)), int(round(plus_y))
+            minus_ic, minus_ir = int(round(minus_x)), int(round(minus_y))
+            plus_ok = in_ink(plus_ic, plus_ir)
+            minus_ok = in_ink(minus_ic, minus_ir)
+            if not plus_ok and not minus_ok:
+                break
+            if plus_ok and not minus_ok:
+                x, y, ic, ir = plus_x, plus_y, plus_ic, plus_ir
+            elif minus_ok and not plus_ok:
+                x, y, ic, ir = minus_x, minus_y, minus_ic, minus_ir
+            else:
+                # Both viable — pick the one closer to the centerline.
+                if abs(perp_offset(plus_x, plus_y)) <= abs(perp_offset(minus_x, minus_y)):
+                    x, y, ic, ir = plus_x, plus_y, plus_ic, plus_ir
+                else:
+                    x, y, ic, ir = minus_x, minus_y, minus_ic, minus_ir
+        if (ic, ir) != path[-1]:
+            path.append((ic, ir))
+        if math.hypot(ic - end_pix[0], ir - end_pix[1]) <= terminate_radius_px:
+            if (end_pix[0], end_pix[1]) != path[-1]:
+                path.append((end_pix[0], end_pix[1]))
+            return path
+    return path if len(path) >= 2 else None
 
 
 def strokes_from_override(letter: str,
@@ -1386,9 +1668,28 @@ def strokes_from_override(letter: str,
         elif kind == "loop":
             path = walk_loop_at(stroke_spec["start"],
                                 stroke_spec.get("direction", "ccw"),
-                                adj, skel, bbox)
+                                adj, skel, bbox,
+                                stop_at=stroke_spec.get("stop_at"))
             if path is None:
                 return None
+            out.append(path)
+        elif kind == "through":
+            start = resolve_anchor(stroke_spec["from"], skel, bbox)
+            end = resolve_anchor(stroke_spec["to"], skel, bbox)
+            if start is None or end is None:
+                return None
+            explicit_tangent = "tangent" in stroke_spec
+            tangent = stroke_spec.get("tangent")
+            if tangent is None:
+                tangent = (float(end[0] - start[0]),
+                           float(end[1] - start[1]))
+            path = bfs_path(start, end, adj, inbound_tangent=tangent)
+            if not _through_accept(path, start, end, tangent,
+                                   explicit_tangent=explicit_tangent):
+                # Off-skeleton synthesis through the merge zone.
+                path = synthesize_off_skeleton(start, end, tangent, mask)
+                if path is None or len(path) < 2:
+                    return None
             out.append(path)
         else:
             raise ValueError(f"Unknown override kind: {kind!r}")
