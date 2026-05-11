@@ -66,16 +66,25 @@ struct LetterStrokes: Codable, Equatable {
     /// of pixel `i`. Drives the calibrator's "tap a few points, BFS
     /// along the centerline between them" anchor mode.
     let skeletonAdj: [[Int]]?
+    /// Routing-only edges between skeleton pixels that bridge gaps left
+    /// by the Phase 3 skeleton split. Pairs of indices into `skeleton`.
+    /// The calibrator unions these into the adjacency graph for BFS
+    /// routing only — the red-dot viz does NOT draw bridge edges. Lets
+    /// the anchor-snap workflow route across former cluster gaps that
+    /// the split intentionally opened for visualization clarity.
+    let bridgeEdges: [[Int]]?
 
     init(letter: String, checkpointRadius: CGFloat,
          strokes: [StrokeDefinition],
          skeleton: [Checkpoint]? = nil,
-         skeletonAdj: [[Int]]? = nil) {
+         skeletonAdj: [[Int]]? = nil,
+         bridgeEdges: [[Int]]? = nil) {
         self.letter = letter
         self.checkpointRadius = checkpointRadius
         self.strokes = strokes
         self.skeleton = skeleton
         self.skeletonAdj = skeletonAdj
+        self.bridgeEdges = bridgeEdges
     }
 }
 

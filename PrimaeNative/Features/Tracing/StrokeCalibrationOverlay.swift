@@ -197,6 +197,10 @@ struct StrokeCalibrationOverlay: View {
 
     /// Lift the baked centerline + adjacency from the active letter's
     /// LetterStrokes into the GlyphSkeleton shape the calibrator expects.
+    /// Bridge edges (Phase 3 skeleton split) are unioned into the routing
+    /// adjacency so anchor-snap BFS routes cleanly across former cluster
+    /// gaps. They are NOT added to `vizPixels` — the red-dot viz keeps
+    /// the visual split intact.
     private func makeBakedSkeleton() -> GlyphSkeleton? {
         guard let strokes = vm.glyphRelativeStrokes,
               let skel = strokes.skeleton,
@@ -204,7 +208,18 @@ struct StrokeCalibrationOverlay: View {
               !skel.isEmpty,
               skel.count == adj.count else { return nil }
         let points = skel.map { CGPoint(x: $0.x, y: $0.y) }
-        return GlyphSkeleton(points: points, adjacency: adj,
+        var augmented = adj
+        if let bridges = strokes.bridgeEdges {
+            for edge in bridges where edge.count == 2 {
+                let i = edge[0]
+                let j = edge[1]
+                guard i >= 0, i < augmented.count,
+                      j >= 0, j < augmented.count else { continue }
+                if !augmented[i].contains(j) { augmented[i].append(j) }
+                if !augmented[j].contains(i) { augmented[j].append(i) }
+            }
+        }
+        return GlyphSkeleton(points: points, adjacency: augmented,
                              vizPixels: points)
     }
 

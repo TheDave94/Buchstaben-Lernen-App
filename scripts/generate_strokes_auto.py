@@ -439,6 +439,35 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
 }
 
 
+# Phase 3 skeleton restructuring (post-bake).
+#
+# Without an override entry: pipeline is `skeletonize → extend → prune`
+# (the cap-fix state). Letters listed here insert a `split` step before
+# extension that cuts the medial axis at every junction, producing a
+# forest of per-arm chains.
+#
+# `split_junctions: True` triggers the cut. Each cluster has its
+# pixels removed plus 6 px back along every exit chain — the gap
+# reads as separate chains in the calibrator's red-dot viz.
+#
+# `drop_chains: ["short_stub"]` additionally drops any chain whose
+# length is less than 0.20 × max-sibling-length within its cluster.
+# Used for V's apex-curl-stub (43 / 450 = 9.5 %) which is a
+# vestigial branch, not a main stroke arm. N's apex-curls (59 / 431
+# = 13.7 %) are kept because they're legitimate top-of-vertical
+# extensions, not vestigial.
+# `stitch_collinear: True` adds a post-split pass that re-bridges chain
+# pairs whose cluster-side tangents are within 30° of opposite (i.e.,
+# they're collinear through the former cluster). N's TL apex-curl and
+# left vertical foot are two halves of one stroke — stitching produces
+# a single left-vertical chain instead of two stubs at the corner.
+SKELETON_OVERRIDES: dict[str, dict] = {
+    "N": {"split_junctions": True, "stitch_collinear": True},
+    "V": {"split_junctions": True, "drop_chains": ["short_stub"]},
+    "b": {"split_junctions": True},
+}
+
+
 ANCHOR_POSITIONS: dict[str, tuple[float, float]] = {
     "TL": (0.0, 0.0), "TR": (1.0, 0.0),
     "BL": (0.0, 1.0), "BR": (1.0, 1.0),
@@ -570,10 +599,292 @@ def prune_skeleton_spurs(skel_mask: np.ndarray,
             mask[r, c] = False
 
 
+SPLIT_CUT_DEPTH_PX = 6
+
+
+def _cluster_junctions_8c(juncs: list[tuple[int, int]]
+                          ) -> list[list[tuple[int, int]]]:
+    """8-connected clustering on the junction-only pixel set. Input
+    pixels are (col, row) tuples."""
+    js = set(juncs)
+    visited: set[tuple[int, int]] = set()
+    clusters: list[list[tuple[int, int]]] = []
+    for j in juncs:
+        if j in visited:
+            continue
+        comp = []
+        stack = [j]
+        visited.add(j)
+        while stack:
+            p = stack.pop()
+            comp.append(p)
+            for dr, dc in NEIGHBOURS_8:
+                n = (p[0] + dc, p[1] + dr)
+                if n in js and n not in visited:
+                    visited.add(n)
+                    stack.append(n)
+        clusters.append(comp)
+    return clusters
+
+
+def split_at_junctions(skel: np.ndarray,
+                       cut_depth_px: int = SPLIT_CUT_DEPTH_PX
+                       ) -> tuple[np.ndarray, list[list[dict]]]:
+    """Cut the medial axis at every junction cluster. Each cluster's
+    pixels are removed, plus `cut_depth_px` pixels back along every
+    exit chain. The gap reads as a clean visual break between arms in
+    the calibrator's red-dot viz.
+
+    Returns (new_skel, cluster_chains_info) where cluster_chains_info
+    is a list of per-cluster chain records. Each record:
+      {"src_cluster_pix": (col, row),  # cluster pixel the exit leaves
+       "exit_pixel":      (col, row),  # first pixel outside the cluster
+       "full_chain":      [(col, row), ...],  # all pixels of the chain
+                                              # walked away from the
+                                              # cluster, until reaching
+                                              # tip / another cluster
+       "length":          int}         # = len(full_chain)
+    Used by `drop_short_stub_chains` to identify vestigial branches.
+    """
+    rows, cols = np.where(skel)
+    skel_pixels = set(zip(cols.tolist(), rows.tolist()))
+    adj = build_adjacency(skel_pixels)
+
+    juncs = [p for p in adj if len(adj[p]) >= 3]
+    if not juncs:
+        return skel.copy(), []
+
+    clusters = _cluster_junctions_8c(juncs)
+    pixels_to_remove: set[tuple[int, int]] = set()
+    cluster_chains_info: list[list[dict]] = []
+
+    for cluster in clusters:
+        cluster_set = set(cluster)
+        pixels_to_remove.update(cluster_set)
+
+        # Enumerate exits: edges from cluster pixels to non-cluster
+        # neighbours. A loop attached to the cluster at two points
+        # appears as TWO exits (one for each end); back-cutting both
+        # produces an open chain with both ends near the former
+        # cluster, which is the intended outcome (the bowl of b).
+        exits: list[tuple[tuple[int, int], tuple[int, int]]] = []
+        for cp in cluster:
+            for n in adj[cp]:
+                if n not in cluster_set:
+                    exits.append((cp, n))
+
+        chains_info: list[dict] = []
+        for src, first in exits:
+            chain_pixels = [first]
+            visited = {src, first}
+            cur = first
+            while True:
+                if len(adj[cur]) >= 3 and cur != first:
+                    break  # hit another junction
+                if len(adj[cur]) == 1 and cur != first:
+                    break  # reached an outer tip
+                nxts = [n for n in adj[cur] if n not in visited]
+                if not nxts:
+                    break
+                if len(nxts) > 1:
+                    break  # ambiguous fork — treat as junction
+                nxt = nxts[0]
+                chain_pixels.append(nxt)
+                visited.add(nxt)
+                cur = nxt
+            # Back-cut N pixels from the cluster-adjacent end.
+            back_cut = chain_pixels[:cut_depth_px]
+            pixels_to_remove.update(back_cut)
+            chains_info.append({
+                "src_cluster_pix": src,
+                "exit_pixel": first,
+                "full_chain": chain_pixels,
+                "length": len(chain_pixels),
+            })
+        cluster_chains_info.append(chains_info)
+
+    new_skel = skel.copy()
+    for (c, r) in pixels_to_remove:
+        new_skel[r, c] = False
+    return new_skel, cluster_chains_info
+
+
+def cluster_chains_cut_ends(skel: np.ndarray,
+                            cluster_chains_info: list[list[dict]],
+                            ) -> set[tuple[int, int]]:
+    """Return cut-end pixels (deg-1 only) of chains that survived
+    split + optional drop + stitch. A cut-end = the first surviving
+    pixel along each chain, walking from the former cluster outward,
+    that still has degree 1 in the current skeleton. Stitched
+    cut-ends are deg ≥ 2 (bridge connects them) and are filtered out.
+
+    Returned in (row, col) order to match extend_tips_to_outline's
+    convention. full_chain is in (col, row) order."""
+    cut_ends: set[tuple[int, int]] = set()
+    rows_max, cols_max = skel.shape
+    # Build a (col, row) skel set for degree lookup.
+    sk_rows, sk_cols = np.where(skel)
+    skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
+
+    def deg(col: int, row: int) -> int:
+        return sum(1 for dr, dc in NEIGHBOURS_8
+                   if (col + dc, row + dr) in skel_set)
+
+    for chains in cluster_chains_info:
+        for c in chains:
+            for col, row in c["full_chain"]:
+                if (col, row) in skel_set:
+                    if deg(col, row) == 1:
+                        cut_ends.add((row, col))
+                    break
+    return cut_ends
+
+
+def _line_pixels(p0: tuple[int, int],
+                 p1: tuple[int, int]
+                 ) -> list[tuple[int, int]]:
+    """Bresenham line between two (col, row) pixels — inclusive of
+    both endpoints. Used to bridge stitched chain cut-ends across the
+    former cluster gap."""
+    x0, y0 = p0
+    x1, y1 = p1
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+    out: list[tuple[int, int]] = []
+    x, y = x0, y0
+    while True:
+        out.append((x, y))
+        if x == x1 and y == y1:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x += sx
+        if e2 < dx:
+            err += dx
+            y += sy
+    return out
+
+
+def stitch_collinear_chains(skel: np.ndarray,
+                            cluster_chains_info: list[list[dict]],
+                            angle_threshold_deg: float = 150.0,
+                            tangent_window: int = 8,
+                            ) -> np.ndarray:
+    """For each cluster, stitch chain pairs whose cluster-side
+    tangents are within 30° of opposite (i.e., they're collinear
+    through the former cluster). Bridge their cut-ends with a
+    Bresenham line — restores visual continuity for stroke pairs that
+    were one through-line before splitting.
+
+    Run AFTER split_at_junctions (and drop, if applicable). Only
+    pairs both of whose chains survive in `skel` are considered.
+    Each chain participates in at most one stitch — the first pair
+    that meets the threshold wins.
+    """
+    new_skel = skel.copy()
+    rows_max, cols_max = skel.shape
+    sk_rows, sk_cols = np.where(skel)
+    skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
+
+    for chains in cluster_chains_info:
+        # For each surviving chain in the cluster, find:
+        # - cluster-side cut-end pixel (first surviving pixel along
+        #   the original full_chain from cluster outward)
+        # - tangent at cut-end pointing INTO the cluster (cut_end −
+        #   back_pixel; back_pixel is tangent_window chain pixels
+        #   FURTHER along the chain, i.e., into the chain interior)
+        chain_data: list[dict | None] = []
+        for c in chains:
+            cut_end: tuple[int, int] | None = None
+            cut_idx: int = -1
+            for i, p in enumerate(c["full_chain"]):
+                if p in skel_set:
+                    cut_end = p
+                    cut_idx = i
+                    break
+            if cut_end is None:
+                chain_data.append(None)
+                continue
+            back_idx = cut_idx + tangent_window
+            if back_idx >= len(c["full_chain"]):
+                back_idx = len(c["full_chain"]) - 1
+            if back_idx <= cut_idx:
+                chain_data.append(None)
+                continue
+            back = c["full_chain"][back_idx]
+            # Tangent: cut_end - back. Points AWAY from chain interior
+            # = INTO the cluster gap.
+            tdx = cut_end[0] - back[0]
+            tdy = cut_end[1] - back[1]
+            chain_data.append({"cut_end": cut_end, "tdx": tdx, "tdy": tdy})
+
+        used: set[int] = set()
+        for i in range(len(chain_data)):
+            if i in used or chain_data[i] is None:
+                continue
+            for j in range(i + 1, len(chain_data)):
+                if j in used or chain_data[j] is None:
+                    continue
+                a, b = chain_data[i], chain_data[j]
+                ax, ay = a["tdx"], a["tdy"]
+                bx, by = b["tdx"], b["tdy"]
+                na = math.hypot(ax, ay)
+                nb = math.hypot(bx, by)
+                if na < 1e-9 or nb < 1e-9:
+                    continue
+                cos_ang = (ax * bx + ay * by) / (na * nb)
+                cos_ang = max(-1.0, min(1.0, cos_ang))
+                ang_deg = math.degrees(math.acos(cos_ang))
+                if ang_deg < angle_threshold_deg:
+                    continue
+                # Bridge cut_end_a → cut_end_b with a line of pixels.
+                bridge = _line_pixels(a["cut_end"], b["cut_end"])
+                for (col, row) in bridge:
+                    if 0 <= row < rows_max and 0 <= col < cols_max:
+                        new_skel[row, col] = True
+                used.add(i)
+                used.add(j)
+                break
+    return new_skel
+
+
+def drop_short_stub_chains(skel: np.ndarray,
+                           cluster_chains_info: list[list[dict]],
+                           ratio: float = 0.20
+                           ) -> np.ndarray:
+    """Drop every chain whose length < `ratio` × max-sibling-length
+    within its originating cluster. Run AFTER split_at_junctions.
+    Opt-in per letter via `SKELETON_OVERRIDES[letter]["drop_chains"]`.
+
+    V's apex-curl stub: length 43 vs main diagonals 450 → 9.5 %, well
+    below the 20 % threshold → dropped. N's apex-curls (59 vs 431 →
+    13.7 %) would also fall under the threshold but N doesn't opt in,
+    so they survive."""
+    to_remove: set[tuple[int, int]] = set()
+    for chains in cluster_chains_info:
+        if not chains:
+            continue
+        max_len = max(c["length"] for c in chains)
+        if max_len <= 0:
+            continue
+        for c in chains:
+            if c["length"] < ratio * max_len:
+                to_remove.update(c["full_chain"])
+    new_skel = skel.copy()
+    for (cc, rr) in to_remove:
+        new_skel[rr, cc] = False
+    return new_skel
+
+
 def extend_tips_to_outline(skel_mask: np.ndarray,
                            ink_mask: np.ndarray,
                            max_extension: int = MAX_TIP_EXTENSION,
-                           tangent_window: int = TANGENT_WINDOW
+                           tangent_window: int = TANGENT_WINDOW,
+                           no_extend_pixels: set | None = None,
                            ) -> np.ndarray:
     """Walk each degree-1 tip toward the ink boundary along its local
     tangent. Tangent = (tip - back-pixel) where back-pixel is the
@@ -584,7 +895,19 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
     Isolation-skip guard: tips on chains that never reach a junction
     are skipped entirely. Preserves i/j tittles, umlaut dots, and any
     isolated linear component (I, L) — all degree-1-to-degree-1.
-    """
+
+    Width-along-tangent discriminator (Phase 3 skeleton restructuring):
+    before extending each tip, probe perp ink width over the next 10
+    forward-tangent steps. Classification:
+      OUTWARD  — width(1)==0 (already at boundary) OR strictly
+                 decreasing trajectory (tapering region).
+      AMBIG    — width within 20% of constant (uniform stroke).
+      INWARD   — anything else: peak-in-middle (cut-end pointing back
+                 into a former junction) or widening (vestigial stub
+                 direction).
+    Only OUTWARD and AMBIG tips are extended. INWARD tips are left in
+    place — useful for post-split chain cut-ends that point into former
+    cluster locations."""
     mask = skel_mask.copy()
     if mask.size == 0:
         return mask
@@ -603,10 +926,87 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
                 d += 1
         deg[(r, c)] = d
 
+    def _classify(tip_rc: tuple[int, int],
+                  tdr: float, tdc: float,
+                  probe_steps: int = 10) -> str:
+        """Width-along-tangent classification at one tip. (r, c)."""
+        n = math.hypot(tdr, tdc)
+        if n < 1e-9:
+            return "INWARD"
+        tdr_u, tdc_u = tdr / n, tdc / n
+        pdr_u, pdc_u = -tdc_u, tdr_u  # perpendicular unit (rotate 90°)
+
+        def perp_w(r: int, c: int) -> int:
+            if not (0 <= r < rows_max and 0 <= c < cols_max
+                    and bool(ink_mask[r, c])):
+                return 0
+            plus_n = 0
+            for k in range(1, 41):
+                rr = int(round(r + k * pdr_u))
+                cc = int(round(c + k * pdc_u))
+                if not (0 <= rr < rows_max and 0 <= cc < cols_max
+                        and bool(ink_mask[rr, cc])):
+                    break
+                plus_n = k
+            minus_n = 0
+            for k in range(1, 41):
+                rr = int(round(r - k * pdr_u))
+                cc = int(round(c - k * pdc_u))
+                if not (0 <= rr < rows_max and 0 <= cc < cols_max
+                        and bool(ink_mask[rr, cc])):
+                    break
+                minus_n = k
+            return plus_n + minus_n + 1
+
+        widths: list[int] = []
+        for k in range(1, probe_steps + 1):
+            rr = int(round(tip_rc[0] + k * tdr_u))
+            cc = int(round(tip_rc[1] + k * tdc_u))
+            if not (0 <= rr < rows_max and 0 <= cc < cols_max
+                    and bool(ink_mask[rr, cc])):
+                widths.append(0)
+            else:
+                widths.append(perp_w(rr, cc))
+
+        if widths[0] == 0:
+            return "OUTWARD"
+        in_ink = [w for w in widths if w > 0]
+        if len(in_ink) <= 2:
+            return "OUTWARD"
+        # Strictly decreasing (allow ≤5 % up-bumps as noise)?
+        decreasing = all(in_ink[i + 1] <= in_ink[i] * 1.05
+                         for i in range(len(in_ink) - 1))
+        if decreasing:
+            return "OUTWARD"
+        # Roughly constant: (max-min)/mean ≤ 0.20?
+        mn, mx = min(in_ink), max(in_ink)
+        mean = sum(in_ink) / len(in_ink)
+        if mean > 0 and (mx - mn) / mean <= 0.20:
+            return "AMBIG"
+        # Falls through: peak-in-middle or widening → INWARD.
+        return "INWARD"
+
     extensions: list[tuple[tuple[int, int], float, float]] = []
+
+    # Tittle threshold: a tip-to-tip chain (no junction) shorter than
+    # this is treated as an isolated component (i/j tittle, umlaut dot)
+    # and skipped. Longer junction-free chains are post-split main
+    # strokes (N's apex-curl is ~30 px after split; tittles are 3-5 px)
+    # — they still need extension to reach the ink boundary.
+    TITTLE_MAX_LEN = 20
+
+    # Cut-ends produced by split_at_junctions point back into former
+    # cluster territory. The width discriminator alone can't reliably
+    # catch them (the junction-overlap region shows wide-but-not-growing
+    # perp widths that fall within the OUTWARD-taper tolerance), so the
+    # caller passes their pixel positions explicitly. Required in
+    # (row, col) order to match the local convention here.
+    no_extend = set(no_extend_pixels) if no_extend_pixels else set()
 
     for tip in pixels:
         if deg[tip] != 1:
+            continue
+        if tip in no_extend:
             continue
 
         chain = [tip]
@@ -614,6 +1014,7 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
         cur = tip
         is_isolated = False
         junction_hit = False
+        chain_len = 1  # total chain pixels walked (incl. tip)
 
         for _ in range(tangent_window):
             cands = [(cur[0] + dr, cur[1] + dc) for dr, dc in NEIGHBOURS_8]
@@ -627,6 +1028,7 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
             prev = cur
             cur = nbrs[0]
             chain.append(cur)
+            chain_len += 1
 
         # Continue walking until we hit a junction or another tip.
         # No safety cap: a degree-2 chain on a 1-pixel skeleton can't
@@ -647,8 +1049,12 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
                     break
                 prev = cur
                 cur = nbrs[0]
+                chain_len += 1
 
-        if is_isolated:
+        # Tittle preservation: short isolated chains (dots) skip
+        # extension entirely. Long isolated chains (post-split main
+        # strokes, or single-stroke letters like I/L) still extend.
+        if is_isolated and chain_len < TITTLE_MAX_LEN:
             continue
 
         back = chain[-1]
@@ -659,6 +1065,14 @@ def extend_tips_to_outline(skel_mask: np.ndarray,
         chev = max(abs(tdr), abs(tdc))
         if chev == 0:
             continue
+
+        # Width-along-tangent classification. INWARD tips don't extend —
+        # they're either vestigial stub directions or post-split
+        # cut-ends pointing back into former junction territory.
+        cls = _classify(tip, float(tdr), float(tdc))
+        if cls == "INWARD":
+            continue
+
         tdr_step = tdr / chev
         tdc_step = tdc / chev
         extensions.append((tip, tdr_step, tdc_step))
@@ -1726,9 +2140,27 @@ def generate_for_letter(letter: str, font_path: Path,
     override is absent or its walker fails on this font's geometry."""
     mask = rasterize(letter, font_path)
     skel = morph.skeletonize(mask)
+
+    # Phase 3 skeleton restructuring: split junctions before extending,
+    # then pass the cut-end pixel positions to the extender so it skips
+    # them (they point back into former cluster territory; extending
+    # would re-bridge the gap we just opened).
+    spec = SKELETON_OVERRIDES.get(letter, {})
+    no_extend_pixels: set[tuple[int, int]] = set()
+    cluster_chains: list[list[dict]] = []
+    if spec.get("split_junctions"):
+        skel, cluster_chains = split_at_junctions(
+            skel, cut_depth_px=SPLIT_CUT_DEPTH_PX)
+        if "short_stub" in spec.get("drop_chains", []):
+            skel = drop_short_stub_chains(skel, cluster_chains, ratio=0.20)
+        if spec.get("stitch_collinear"):
+            skel = stitch_collinear_chains(skel, cluster_chains)
+        no_extend_pixels = cluster_chains_cut_ends(skel, cluster_chains)
+
     skel = extend_tips_to_outline(skel, ink_mask=mask,
                                   max_extension=MAX_TIP_EXTENSION,
-                                  tangent_window=TANGENT_WINDOW)
+                                  tangent_window=TANGENT_WINDOW,
+                                  no_extend_pixels=no_extend_pixels)
     skel = prune_skeleton_spurs(skel, max_spur_length=MAX_SPUR_LENGTH)
 
     rows, cols = np.where(mask)
@@ -1789,6 +2221,34 @@ def generate_for_letter(letter: str, font_path: Path,
                 if (r + dr, c + dc) in pixel_to_idx]
         skeleton_adj.append(nbrs)
 
+    # Phase 3 bridge edges. For every junction cluster that produced
+    # unstitched, surviving deg-1 cut-ends, emit pairwise edges between
+    # them. The Swift calibrator unions these into the routing adjacency
+    # for anchor-snap BFS — they're invisible in the red-dot viz.
+    # Stitched clusters need no bridges (the stitch added real skeleton
+    # pixels that connect cut-ends through the cluster gap).
+    bridge_edges: list[list[int]] = []
+    if cluster_chains:
+        sk_set_final = set(zip(sk_cols_full.tolist(), sk_rows_full.tolist()))
+
+        def _deg(col: int, row: int) -> int:
+            return sum(1 for dr, dc in NEIGHBOURS_8
+                       if (col + dc, row + dr) in sk_set_final)
+
+        for chains in cluster_chains:
+            tip_indices: list[int] = []
+            for c in chains:
+                for col, row in c["full_chain"]:
+                    if (col, row) in sk_set_final:
+                        if _deg(col, row) == 1:
+                            idx = pixel_to_idx.get((row, col))
+                            if idx is not None:
+                                tip_indices.append(idx)
+                        break
+            for ii in range(len(tip_indices)):
+                for jj in range(ii + 1, len(tip_indices)):
+                    bridge_edges.append([tip_indices[ii], tip_indices[jj]])
+
     data = {
         "letter": letter,
         "checkpointRadius": DEFAULT_RADIUS,
@@ -1796,6 +2256,8 @@ def generate_for_letter(letter: str, font_path: Path,
         "skeleton": skeleton_pts,
         "skeletonAdj": skeleton_adj,
     }
+    if bridge_edges:
+        data["bridgeEdges"] = bridge_edges
     debug = {
         "mask": mask,
         "skel": skel,
