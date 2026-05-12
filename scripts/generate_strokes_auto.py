@@ -833,6 +833,13 @@ def extend_to_boundary(point: tuple[int, int],
     visible cap end. The returned point sits in empty space at the cap
     centerline terminus.
 
+    Superseded — not called by the bake. The centerline-as-polyline
+    rendering model already terminates at half-stroke-width inset from
+    the visual corner (the gameplay renderer adds the cap). Kept in
+    case a future rendering mode (calibrator diagnostic overlay, etc.)
+    needs an explicit "extend to cap edge" geometry. Same disposition
+    as `extend_tip_inward`.
+
     `point` must already lie on ink; otherwise returns it unchanged and
     warns naming `letter` / `anchor_name`. If `max_steps` is exhausted
     without exiting the mask, warns and returns the last in-ink pixel
@@ -1067,37 +1074,15 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
+            # snap_to_medial_axis output IS the polyline endpoint —
+            # gameplay renders the centerline thick with rounded caps,
+            # so endpoints sit half-stroke-width inside the visual
+            # corner by design. No extension.
             snapped = [
                 snap_to_medial_axis(p, mask, dt, skeleton,
                                     letter=letter, anchor_name=n)
                 for p, n in zip(anchors, names)
             ]
-            # Extend first / last anchor outward along the endpoint
-            # chord to reach the ink terminus — the medial-axis snap
-            # alone lands ~half-stroke-width short of the visible band
-            # end. Collinear with the adjacent chord, so fillets at
-            # snapped[1] / snapped[-2] stay tangent.
-            if len(snapped) >= 2:
-                p0, p1 = snapped[0], snapped[1]
-                dx, dy = p0[0] - p1[0], p0[1] - p1[1]
-                L = math.hypot(dx, dy)
-                if L > 1e-9:
-                    snapped[0] = extend_to_boundary(
-                        p0, (dx / L, dy / L), mask, dt,
-                        letter=letter, anchor_name=names[0])
-                else:
-                    print(f"  warning: {letter}/{names[0]} degenerate "
-                          f"endpoint chord — skipped extension")
-                pN, pM = snapped[-1], snapped[-2]
-                dx, dy = pN[0] - pM[0], pN[1] - pM[1]
-                L = math.hypot(dx, dy)
-                if L > 1e-9:
-                    snapped[-1] = extend_to_boundary(
-                        pN, (dx / L, dy / L), mask, dt,
-                        letter=letter, anchor_name=names[-1])
-                else:
-                    print(f"  warning: {letter}/{names[-1]} degenerate "
-                          f"endpoint chord — skipped extension")
             if len(snapped) >= 3:
                 # Fillet radius per interior joint = local stroke
                 # half-width at the snapped joint position. Matches the
