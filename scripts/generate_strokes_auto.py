@@ -127,9 +127,7 @@ StrokeSpec = dict  # {"kind": "line", "anchors": [...]} | {"path": [...]}
 
 LETTERS: dict[str, list[StrokeSpec]] = {
     "N": [
-        {"kind": "line", "anchors": ["TL", "BL"]},
-        {"kind": "line", "anchors": ["TL", "BR"]},
-        {"kind": "line", "anchors": ["TR", "BR"]},
+        {"kind": "line", "anchors": ["BL", "TL", "BR", "TR"]},
     ],
     "V": [
         {"kind": "line", "anchors": ["TL", "BC", "TR"]},
@@ -615,7 +613,11 @@ def fillet_arc(p_prev: tuple[float, float],
     with the given `radius`. Returns the arc as a list of `(x, y)`
     floats sampled at ~1 px arc-length spacing, with both tangent points
     included exactly as the first and last elements. Returns `[p_joint]`
-    on a near-straight (≈π) or degenerate (≈0) corner."""
+    on a near-straight (≈π) or degenerate (≈0) corner.
+
+    Superseded by Phase 2.0 — the renderer's round line joins produce
+    the visible curve at joints from a sharp polyline vertex. Kept for
+    potential future use where an explicit centerline arc is needed."""
     jx, jy = float(p_joint[0]), float(p_joint[1])
     v1 = (float(p_prev[0]) - jx, float(p_prev[1]) - jy)
     v2 = (float(p_next[0]) - jx, float(p_next[1]) - jy)
@@ -682,7 +684,12 @@ def polyline_with_filleted_joints(
     45 % of the way along its adjoining segment — prevents an arc from
     swallowing an entire short segment when the snapped centerline runs
     are tight (e.g. M's narrow valley). A capping event prints an info
-    line. A joint with radius 0 / degenerate geometry stays sharp."""
+    line. A joint with radius 0 / degenerate geometry stays sharp.
+
+    Superseded by Phase 2.0 — sharp polyline vertices rendered with
+    `lineJoin: .round` produce the same visible joint curve. Kept for
+    potential future use where the centerline geometry itself needs
+    to encode the fillet (e.g. variable-width strokes)."""
     n = len(positions)
     if n < 2:
         return [(int(round(p[0])), int(round(p[1]))) for p in positions]
@@ -774,7 +781,12 @@ def snap_to_medial_axis(point: tuple[int, int], mask: np.ndarray,
     DT in a 60×60 window around the point, floor 15 px). If no skeleton
     pixel lies within radius, returns `point` unchanged and emits a
     warning naming `letter` / `anchor_name` so the caller's PNG review
-    can spot the unsnapped anchor."""
+    can spot the unsnapped anchor.
+
+    Superseded by Phase 2.0 — anchors at visible outer corners produce
+    a correct chord-centerline trace for uniform-width Prima without
+    snapping. Kept for potential future curve-kind work needing a
+    medial-axis lookup."""
     col, row = int(round(point[0])), int(round(point[1]))
     h, w = mask.shape
 
@@ -1028,14 +1040,10 @@ def bake_letter(letter: str, font_path: Path
     mask = rasterize(letter, font_path)
     bbox = bbox_from_mask(mask)
     dt = distance_transform_edt(mask)
-    # `skeletonize` instead of `medial_axis`: medial_axis is
-    # non-deterministic in skimage (different pixel counts per call on
-    # the same mask, polluting re-bakes with 1-2 px endpoint drift).
-    # `skeletonize` produces a deterministic 1-pixel-wide centerline.
-    # snap_to_medial_axis only consumes this as a boolean "is this
-    # pixel on the centerline?" lookup, so the topological differences
-    # between the two skeletonisers don't matter for our use.
-    skeleton = morph.skeletonize(mask)
+    # `morph.skeletonize` import retained for future curve-kind work
+    # that may want medial-axis lookup (see superseded snap_to_medial_
+    # _axis). The line-kind pipeline doesn't consume a skeleton; anchors
+    # at visible outer corners produce the correct trace by themselves.
 
     stroke_pixel_chains: list[list[tuple[int, int]]] = []
     json_strokes: list[dict] = []
@@ -1074,34 +1082,13 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # snap_to_medial_axis output IS the polyline endpoint —
-            # gameplay renders the centerline thick with rounded caps,
-            # so endpoints sit half-stroke-width inside the visual
-            # corner by design. No extension.
-            snapped = [
-                snap_to_medial_axis(p, mask, dt, skeleton,
-                                    letter=letter, anchor_name=n)
-                for p, n in zip(anchors, names)
-            ]
-            if len(snapped) >= 3:
-                # Fillet radius per interior joint = local stroke
-                # half-width at the snapped joint position. Matches the
-                # rounded outer-ink corner so the centerline curve and
-                # the boundary curve share a radius.
-                h_, w_ = mask.shape
-                radii: list[float] = []
-                for j in range(1, len(snapped) - 1):
-                    sc, sr = snapped[j]
-                    r0 = max(0, sr - 15); r1 = min(h_, sr + 16)
-                    c0 = max(0, sc - 15); c1 = min(w_, sc + 16)
-                    if r1 <= r0 or c1 <= c0:
-                        radii.append(0.0)
-                    else:
-                        radii.append(float(dt[r0:r1, c0:c1].max()))
-                chain = polyline_with_filleted_joints(
-                    [(float(p[0]), float(p[1])) for p in snapped], radii)
-            else:
-                chain = line_sampler(snapped)
+            # Boundary-resolver anchors at visible outer corners produce
+            # a polyline whose chords run through the band centerline by
+            # construction (for uniform-width Prima). Straight chords,
+            # no snap, no fillet, no endpoint extension — the polyline
+            # IS the trace path; the renderer strokes it thick with
+            # rounded caps to produce the visible glyph.
+            chain = line_sampler(anchors)
         else:
             chain = []
             for si in range(len(anchors) - 1):
