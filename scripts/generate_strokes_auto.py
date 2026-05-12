@@ -1085,19 +1085,40 @@ def bake_letter(letter: str, font_path: Path
                 for p, n in zip(anchors, names)
             ]
             if len(snapped) >= 3:
+                # Cap the arc *apex offset* from the joint, not the
+                # radius itself. The apex of an inscribed fillet sits at
+                # distance r·(1−sin α)/sin α from the joint along the
+                # inward bisector — for sharp corners (small α) this
+                # blows up even when r is small, keeping the polyline
+                # far from the snapped vertex. Inverting: pick r so the
+                # apex offset ≤ MAX_APEX_OFFSET px, then clamp by the
+                # local stroke half-width.
+                MAX_APEX_OFFSET = 5.0
                 h_, w_ = mask.shape
                 radii: list[float] = []
                 for j in range(1, len(snapped) - 1):
                     sc, sr = snapped[j]
                     r0 = max(0, sr - 15); r1 = min(h_, sr + 16)
                     c0 = max(0, sc - 15); c1 = min(w_, sc + 16)
-                    if r1 <= r0 or c1 <= c0:
+                    dt_max = (float(dt[r0:r1, c0:c1].max())
+                              if (r1 > r0 and c1 > c0) else 0.0)
+                    p_prev = snapped[j - 1]; p_joint = snapped[j]
+                    p_next = snapped[j + 1]
+                    v1 = (p_prev[0] - p_joint[0], p_prev[1] - p_joint[1])
+                    v2 = (p_next[0] - p_joint[0], p_next[1] - p_joint[1])
+                    L1 = math.hypot(*v1); L2 = math.hypot(*v2)
+                    if L1 < 1e-9 or L2 < 1e-9:
                         radii.append(0.0)
-                    else:
-                        # Cap at 12 px so the fillet stays small enough
-                        # for the linear segments to dominate the trace.
-                        r = float(dt[r0:r1, c0:c1].max())
-                        radii.append(min(r, 12.0))
+                        continue
+                    cos_full = max(-1.0, min(1.0,
+                                              (v1[0]*v2[0] + v1[1]*v2[1])
+                                              / (L1 * L2)))
+                    full_angle = math.acos(cos_full)
+                    half_angle = full_angle / 2.0
+                    sin_half = max(1e-6, math.sin(half_angle))
+                    denom = max(1e-6, 1.0 - sin_half)
+                    r_from_apex = MAX_APEX_OFFSET * sin_half / denom
+                    radii.append(min(r_from_apex, dt_max))
                 chain = polyline_with_filleted_joints(
                     [(float(p[0]), float(p[1])) for p in snapped], radii)
             else:
