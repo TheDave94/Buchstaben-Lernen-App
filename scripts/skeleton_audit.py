@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Validate the polyline-based stroke pipeline.
+"""Validate the anchor-spec stroke pipeline.
 
 Two invariants are checked:
 
-  1. Every author-placed polyline tuple in `LETTERS` lies inside the
-     rasterised glyph's ink mask. Off-ink tuples are the primary
-     failure mode of the polyline architecture and must be fixed by
-     re-eyeballing the offending coordinate.
+  1. Every anchor in every authored `LETTERS` spec resolves to an ink
+     pixel without raising, and the Dijkstra centerline between each
+     consecutive anchor pair completes (no disconnected components).
 
   2. Every bundled `strokes.json` under `PrimaeNative/Resources/Letters`
      conforms to the Swift Codable schema: required top-level fields
      (`letter`, `checkpointRadius`, `strokes`) with the right types,
      and per-stroke `id` / `checkpoints` shape.
 
-Per-letter status is printed; exit code is non-zero only when any
-check fails. The CI step that calls this script treats it as
-advisory, so a non-zero exit will not fail the build by itself.
+Per-letter status is printed; exit code is non-zero on any failure.
+The CI step that calls this script treats it as advisory, so a
+non-zero exit will not by itself fail the build.
 
 Usage:
     python3 scripts/skeleton_audit.py
@@ -33,34 +32,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_strokes_auto import (  # noqa: E402
     LETTERS,
     DEFAULT_FONT,
-    bbox_from_mask,
-    output_dir_for,
-    rasterize,
-    validate_polylines_in_ink,
+    bake_letter,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BUNDLE = REPO_ROOT / "PrimaeNative/Resources/Letters"
 
 
-def check_polyline_in_ink(letter: str, font_path: Path) -> list[str]:
-    """Render the glyph and report every authored polyline tuple whose
-    raster pixel falls outside the ink mask. Returns one human-readable
-    error per offending tuple, or `[]` if the letter is clean."""
+def check_anchor_spec(letter: str, font_path: Path) -> list[str]:
+    """Attempt a dry bake to surface anchor-resolution or Dijkstra
+    failures. The bake is deterministic, so a passing letter here is
+    guaranteed to bake clean."""
     try:
-        mask = rasterize(letter, font_path)
+        bake_letter(letter, font_path)
     except Exception as e:
-        return [f"{letter}: rasterise failed — {e}"]
-    try:
-        bbox = bbox_from_mask(mask)
-    except Exception as e:
-        return [f"{letter}: bbox failed — {e}"]
-    return validate_polylines_in_ink(letter, LETTERS[letter], mask, bbox)
+        return [f"{letter}: {e}"]
+    return []
 
 
 def check_strokes_json_schema(path: Path) -> list[str]:
     """Validate a single `strokes.json` against the Swift Codable
-    schema. Returns one error string per violation; `[]` on success."""
+    schema. Returns one error string per violation."""
     errors: list[str] = []
     try:
         data = json.loads(path.read_text())
@@ -101,16 +93,15 @@ def main() -> int:
     """CLI entry point — runs both checks and prints a summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--letters", nargs="*", default=None,
-                        help="Audit only these LETTERS entries. "
-                             "Default: every authored letter.")
+                        help="Audit only these LETTERS entries.")
     parser.add_argument("--font", default=str(DEFAULT_FONT),
                         help="OTF / TTF font path.")
     parser.add_argument("--bundle-dir", default=str(DEFAULT_BUNDLE),
                         help="Resources/Letters directory to schema-check.")
     parser.add_argument("--json", default=None,
                         help="Write the full audit as JSON to this path.")
-    # Backward-compat: CI passes `--anchor-drift-pct` from the old
-    # audit. Accept and ignore so the workflow doesn't break.
+    # Backward-compat: legacy CI passes `--anchor-drift-pct`. Accept and
+    # ignore so the workflow doesn't break.
     parser.add_argument("--anchor-drift-pct", type=float, default=None,
                         help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -119,14 +110,14 @@ def main() -> int:
     bundle_dir = Path(args.bundle_dir) if args.bundle_dir else None
     letters = args.letters or list(LETTERS.keys())
 
-    polyline_results: list[dict] = []
-    print("=== Polyline-in-ink check ===")
+    spec_results: list[dict] = []
+    print("=== Anchor-spec bake check ===")
     for L in letters:
         if L not in LETTERS:
             print(f"  {L}: skipped (no entry in LETTERS)")
             continue
-        errs = check_polyline_in_ink(L, font_path)
-        polyline_results.append({"letter": L, "errors": errs})
+        errs = check_anchor_spec(L, font_path)
+        spec_results.append({"letter": L, "errors": errs})
         if errs:
             for e in errs:
                 print(f"  {e}")
@@ -148,14 +139,14 @@ def main() -> int:
 
     if args.json:
         Path(args.json).write_text(json.dumps({
-            "polyline_in_ink": polyline_results,
+            "anchor_spec": spec_results,
             "schema": schema_results,
         }, indent=2))
         print(f"\nwrote {args.json}")
 
-    poly_fail = any(r["errors"] for r in polyline_results)
+    spec_fail = any(r["errors"] for r in spec_results)
     schema_fail = any(r["errors"] for r in schema_results)
-    return 0 if not (poly_fail or schema_fail) else 1
+    return 0 if not (spec_fail or schema_fail) else 1
 
 
 if __name__ == "__main__":

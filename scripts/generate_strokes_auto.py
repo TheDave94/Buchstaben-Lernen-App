@@ -1,38 +1,68 @@
-"""Polyline-based stroke generator for Primae.
+"""Anchor-spec stroke generator for Primae.
 
-Each letter is authored as one or more polylines — short lists of
-bbox-relative (x, y) tuples. Every polyline becomes one stroke in
-strokes.json; consecutive tuples within a polyline are connected via
-Bresenham line rasterisation. The dense pixel sequence is then
-resampled to a fixed checkpoint count.
+Each letter is authored as a list of `StrokeSpec` dicts where each spec
+holds a sequence of pedagogical anchor names. At bake time, anchors
+resolve to font-specific pixel positions on the rasterised glyph and a
+Dijkstra-on-distance-transform walker synthesises the centerline path
+between consecutive anchors. The centerline stays inside the ink and
+follows the deepest column of the stroke.
 
-Why we abandoned the medial-axis approach: skimage.skeletonize is a
-faithful geometric reduction of the rendered glyph ink, but the
-pedagogical decomposition of a letter into pen-strokes doesn't follow
-medial-axis topology. Y-junctions appear at outer corners (N, M, W),
-stems bend toward bowl-stem merge zones (b, p, d), and apex stubs
-litter sharp corners. Months of patching (split, stitch, extend,
-straighten, thinning) accumulated complexity without converging on
-clean output. Hand-authored polylines bypass the geometry mismatch
-entirely: the author encodes intended stroke order, direction, and
-shape directly.
+Why anchor specs over hand-authored tuples: anchor names are
+font-independent. Adding a second font requires no per-letter tuning —
+the bake re-resolves each anchor against the new font's ink. The
+medial-axis pipeline had geometry mismatches with pedagogical stroke
+decomposition; the polyline-tuple pipeline solved that but required
+per-font re-eyeballing. Anchor specs combine the clean pedagogical
+decomposition of polylines with deterministic font portability.
+
+The rasteriser also centers the glyph by its **optical outline bbox**
+(via fonttools `BoundsPen`) rather than Pillow's layout bbox (which
+includes asymmetric side bearings). This matches iPad's
+`CTFontGetBoundingRectsForGlyphs` placement and prevents the
+side-bearing drift that shifted glyphs 5–16 px between Python and iPad
+in the polyline-era bake.
 
 Pipeline per letter:
 
-  1. Rasterise the glyph via `rasterize`; compute the bbox from ink.
-  2. Convert every polyline tuple to a raster pixel via the bbox and
-     verify each lies inside the ink mask. If any tuple falls in
-     whitespace the bake aborts, reporting which letter / polyline /
-     tuple is bad so the author can correct the offending coord.
-  3. Walk Bresenham between consecutive tuples to a dense pixel chain.
-  4. Resample each chain uniformly to `CHECKPOINT_COUNT` points.
-  5. Skeleton field = deduplicated union of all polyline pixels.
-  6. skeletonAdj = 8-connected adjacency over those pixels (trivial,
-     since they come from Bresenham-connected polylines).
-  7. Emit strokes.json — schema unchanged from the medial-axis era.
+  1. Rasterise the glyph, centering by optical bbox so the ink mask is
+     positioned where iPad will render it. Compute the path bbox.
+  2. Resolve every anchor name in the spec to a (col, row) raster
+     pixel. Anchor resolution rules — see `ANCHOR_RESOLVERS`.
+  3. Compute the Euclidean distance transform of the ink mask once.
+  4. For each consecutive anchor pair: Dijkstra shortest path with
+     edge weight = step_length / (dt[pixel] + 1). Deep-ink pixels are
+     cheaper, so the path tracks the medial axis.
+  5. Concatenate per-segment paths into one stroke pixel chain.
+  6. Resample uniformly to `CHECKPOINT_COUNT`; convert to bbox-relative.
+  7. Skeleton = deduplicated union of all stroke pixels; skeletonAdj =
+     8-connected adjacency on those pixels.
+  8. Emit strokes.json — schema unchanged from the medial-axis era.
+
+Anchor name vocabulary (font-independent):
+
+  TL TR BL BR     bbox corners; step from corner toward ink centroid
+                  until hitting an ink pixel.
+  T B             topmost / bottommost ink pixel anywhere in the
+                  glyph; ties broken by proximity to bbox x-center.
+  TC BC           column-wise top / bottom extremum closest to bbox
+                  x-center. Picks a local feature (M's valley, V's
+                  apex, W's top peak) instead of an absolute extremum
+                  that lands on a corner / serif.
+  ML MR           midline left / right — ink pixel at the bbox y-center
+                  row, leftmost / rightmost.
+  LEFT_MID        leftmost ink pixel, vertically centered (closest y to
+                  bbox y-center).
+  RIGHT_MID       rightmost ink pixel, vertically centered.
+  UPPER_TOUCH     upper / lower contact points where a bowl meets a
+  LOWER_TOUCH     stem (b, p, d, q, etc.). Resolved by skeletonising
+                  the ink, finding degree-≥3 junction clusters in the
+                  left third of bbox, then sorting by y.
+
+If an anchor doesn't resolve (e.g. `UPPER_TOUCH` on `N`), the bake
+raises a `ValueError` naming the offending letter / spec / anchor.
 
 Usage:
-    pip install Pillow numpy
+    pip install Pillow numpy scipy scikit-image fonttools
     python scripts/generate_strokes_auto.py            # all authored
     python scripts/generate_strokes_auto.py N V M      # subset
     python scripts/generate_strokes_auto.py --debug N  # save PNG
@@ -41,11 +71,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import heapq
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from fontTools.pens.boundsPen import BoundsPen
+from fontTools.ttLib import TTFont
+from scipy.ndimage import distance_transform_edt
+import skimage.morphology as morph
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FONT = REPO_ROOT / "design-system/fonts/Primae-Regular.otf"
@@ -60,8 +96,6 @@ NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
                 ( 0, -1),          ( 0, 1),
                 ( 1, -1), ( 1, 0), ( 1, 1))
 
-# APFS / HFS+ folders are case-insensitive — uppercase and lowercase
-# letter directories collide without a suffix.
 LOWERCASE_SUFFIX = "_l"
 
 
@@ -69,75 +103,75 @@ LOWERCASE_SUFFIX = "_l"
 # Hand-authored stroke decompositions
 # -----------------------------------------------------------------------------
 #
-# Data structure: LETTERS[letter] is a list of polylines; each polyline is a
-# list of (rel_x, rel_y) tuples in glyph-bbox-relative [0, 1] coordinates.
-# One polyline = one pen-stroke a child draws.
+# Pedagogical anchor specs. Each `StrokeSpec` is `{"path": [anchor, ...]}` with
+# 2+ anchors. The bake resolves each anchor to a font-specific pixel position
+# and synthesises the centerline between consecutive anchors via Dijkstra over
+# the ink distance transform.
 #
-# Authoring philosophy: each polyline traces a single uninterrupted pen-down
-# motion in the order taught by the Wiener Bildungsserver "Arbeitsblätter
-# Druckschrift" worksheets. Sharp corners between strokes (e.g. M's apexes,
-# W's valleys) live as adjacent tuples within one continuous polyline.
-# Genuinely separate strokes (b's stem vs. bowl, A's verticals vs. crossbar)
-# become separate entries in the list.
-#
-# Font portability: tuple values are calibrated for Primae-Regular.otf at
-# SIZE=1024 / PAD=0.10. Other fonts whose stem widths or proportions differ
-# may require re-eyeballing the tuples — the bake aborts with a per-tuple
-# report if any value falls outside the new font's ink.
+# Anchor names are font-independent — adding a new font requires zero per-
+# letter tweaking. The bake aborts with an explicit error if any anchor fails
+# to resolve (e.g. `UPPER_TOUCH` on a letter without a closed bowl).
 
-LETTERS: dict[str, list[list[tuple[float, float]]]] = {
+StrokeSpec = dict  # {"path": list[str]}
+
+LETTERS: dict[str, list[StrokeSpec]] = {
     "N": [
-        # Three strokes meeting at corners. Both verticals go top-to-
-        # bottom; the diagonal runs TL to BR. Children draw all three
-        # separately, pen-up between each.
-        [(0.14, 0.00), (0.05, 1.00)],
-        [(0.14, 0.00), (0.86, 1.00)],
-        [(0.95, 0.00), (0.86, 1.00)],
+        {"path": ["TL", "BL"]},
+        {"path": ["TL", "BR"]},
+        {"path": ["TR", "BR"]},
     ],
     "V": [
-        # Single-stroke zigzag: TL diagonal down to apex, back up to TR.
-        # Waypoints sit on the diagonal-stripe centerlines (not bbox
-        # corners) so straight chords stay inside the ink.
-        [(0.076, 0.000), (0.42, 0.95), (0.93, 0.000)],
+        {"path": ["TL", "BC", "TR"]},
     ],
     "M": [
-        # Single-stroke zigzag: BL up to TL, diagonal down to BC valley,
-        # up to TR, down to BR. Every waypoint on the vertical / diagonal
-        # stripe centerlines — TL at 0.196 not 0.10 because the Primae
-        # M's TL serif insets the ink start.
-        [(0.044, 1.000), (0.196, 0.000), (0.500, 0.947),
-         (0.911, 0.000), (0.948, 1.000)],
+        {"path": ["BL", "TL", "BC", "TR", "BR"]},
     ],
     "W": [
-        # Single-stroke zigzag: TL down to BL, up to TC apex, down to BR,
-        # up to TR. Coordinates nudged a few thousandths off the bbox
-        # edges so the corner waypoints land on ink.
-        [(0.05, 0.00), (0.244, 0.994), (0.50, 0.10), (0.719, 0.977), (0.949, 0.002)],
+        {"path": ["TL", "BL", "TC", "BR", "TR"]},
     ],
     "b": [
-        # Stem: 3 waypoints to track the Primae font's mildly-slanted
-        # stem — the column drifts left by ~10% rel-x between top and
-        # midline, then back right toward the baseline. A 2-point
-        # straight chord misses the ink in y=0.73-0.84.
-        [(0.195, 0.000), (0.130, 0.500), (0.180, 0.950)],
-        # Bowl: 9-waypoint open arc. Stem and bowl share ink only in two
-        # merge zones (y≈0.62 upper, y≈0.94 lower); a chord from the
-        # stem mid-height to the bowl crest cuts whitespace, so the arc
-        # enters / exits via the merge zones and traces bowl-left-wall,
-        # top-peak, bowl-right-wall, and bottom-curve in between.
-        [(0.180, 0.620),
-         (0.270, 0.600),
-         (0.430, 0.500),
-         (0.700, 0.400),
-         (0.864, 0.500),
-         (0.910, 0.650),
-         (0.830, 0.800),
-         (0.676, 0.900),
-         (0.397, 0.940)],
+        {"path": ["T", "B"]},
+        {"path": ["UPPER_TOUCH", "RIGHT_MID", "LOWER_TOUCH"]},
     ],
 }
 
 ALL_LETTERS = tuple(LETTERS.keys())
+
+
+# -----------------------------------------------------------------------------
+# Font geometry: optical outline bbox via fonttools
+# -----------------------------------------------------------------------------
+
+_TT_CACHE: dict[str, TTFont] = {}
+
+
+def _tt(font_path: Path) -> TTFont:
+    """Load and memoise a TTFont. The bake opens the same font dozens of
+    times across letters; cold-load is ~80 ms on Primae-Regular."""
+    key = str(font_path)
+    if key not in _TT_CACHE:
+        _TT_CACHE[key] = TTFont(str(font_path))
+    return _TT_CACHE[key]
+
+
+def optical_bbox_font_units(letter: str, font_path: Path
+                            ) -> tuple[float, float, float, float]:
+    """Return the glyph's optical outline bbox `(x_min, y_min, x_max,
+    y_max)` in font units, baseline-anchored (y increases upward). Uses
+    fonttools' `BoundsPen` which samples Bezier curves to get the tight
+    outline rect — matching CoreText's `CTFontGetBoundingRectsForGlyphs`
+    with `.default` orientation."""
+    tt = _tt(font_path)
+    cmap = tt.getBestCmap()
+    if ord(letter) not in cmap:
+        raise ValueError(f"No glyph for {letter!r} in font")
+    glyph_set = tt.getGlyphSet()
+    glyph = glyph_set[cmap[ord(letter)]]
+    pen = BoundsPen(glyph_set)
+    glyph.draw(pen)
+    if pen.bounds is None:
+        raise ValueError(f"Empty outline for {letter!r}")
+    return pen.bounds
 
 
 # -----------------------------------------------------------------------------
@@ -146,10 +180,13 @@ ALL_LETTERS = tuple(LETTERS.keys())
 
 def rasterize(letter: str, font_path: Path,
               features: list[str] | None = None) -> np.ndarray:
-    """Render `letter` to a SIZE×SIZE binary mask using uniform
-    font-metric scaling (em-square = 80 % of canvas height, baseline at
-    pad + ascent). Mirrors `PrimaeLetterRenderer.glyphPath`. `features`
-    is an optional list of OpenType feature tags."""
+    """Render `letter` to a SIZE×SIZE binary mask. The glyph is centered
+    horizontally by its **optical outline bbox** (via fonttools), not by
+    Pillow's `font.getbbox` layout bbox — matching iPad's
+    `CTFontGetBoundingRectsForGlyphs` placement so the rendered ink
+    lands at the same canvas position on both sides. Asymmetric side
+    bearings would otherwise shift the optical glyph by 5–16 px between
+    Python and iPad."""
     avail = int(SIZE * (1 - 2 * PAD))
     probe_size = 1000
     probe = ImageFont.truetype(str(font_path), probe_size)
@@ -160,11 +197,20 @@ def rasterize(letter: str, font_path: Path,
     target_size = int(round(probe_size * avail / em))
     font = ImageFont.truetype(str(font_path), target_size)
     ascent, _ = font.getmetrics()
-    bbox = font.getbbox(letter)
-    w = bbox[2] - bbox[0]
-    if w <= 0:
-        raise ValueError(f"Empty glyph for {letter!r}")
-    x = (SIZE - w) // 2 - bbox[0]
+
+    tt = _tt(font_path)
+    units_per_em = tt['head'].unitsPerEm
+    gx_min, gy_min, gx_max, gy_max = optical_bbox_font_units(letter, font_path)
+    scale = target_size / units_per_em
+    optical_w_pixels = (gx_max - gx_min) * scale
+    optical_left_canvas = (SIZE - optical_w_pixels) / 2
+
+    # Pillow's text() with anchor "ls" places the text at the given
+    # (x, baseline_y) with x being the LEFT SIDE BEARING start. The
+    # optical outline starts at x + gx_min*scale. To land the optical
+    # outline's left at `optical_left_canvas`, set x = canvas_left -
+    # gx_min*scale.
+    x = int(round(optical_left_canvas - gx_min * scale))
     baseline_y = int(SIZE * PAD + ascent)
     img = Image.new("L", (SIZE, SIZE), 255)
     text_kwargs = {"font": font, "fill": 0, "anchor": "ls"}
@@ -175,8 +221,9 @@ def rasterize(letter: str, font_path: Path,
 
 
 def bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
-    """Return the ink mask's bbox `(x_min, y_min, x_max, y_max)` in
-    raster coords. Raises on an empty mask."""
+    """Return the rendered glyph's bbox `(x_min, y_min, x_max, y_max)`
+    in raster coords. After `rasterize` centers by optical outline this
+    is the optical-bbox itself (rounded to pixel grid)."""
     rows, cols = np.where(mask)
     if rows.size == 0:
         raise ValueError("Empty ink mask")
@@ -188,21 +235,9 @@ def bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
 # Coordinate conversion
 # -----------------------------------------------------------------------------
 
-def rel_to_pixel(rel: tuple[float, float],
-                 bbox: tuple[int, int, int, int]) -> tuple[int, int]:
-    """Map a bbox-relative `(rx, ry)` tuple to a raster `(col, row)`
-    pixel via the ink bbox."""
-    x_min, y_min, x_max, y_max = bbox
-    bw = max(1, x_max - x_min)
-    bh = max(1, y_max - y_min)
-    col = int(round(x_min + rel[0] * bw))
-    row = int(round(y_min + rel[1] * bh))
-    return col, row
-
-
 def pixel_to_rel(p: tuple[int, int],
                  bbox: tuple[int, int, int, int]) -> tuple[float, float]:
-    """Inverse of `rel_to_pixel`: raster `(col, row)` → bbox-relative."""
+    """Raster `(col, row)` → bbox-relative `(rx, ry)` in [0, 1]."""
     x_min, y_min, x_max, y_max = bbox
     bw = max(1, x_max - x_min)
     bh = max(1, y_max - y_min)
@@ -210,110 +245,336 @@ def pixel_to_rel(p: tuple[int, int],
 
 
 # -----------------------------------------------------------------------------
-# Polyline → dense pixel chain
+# Anchor resolution
 # -----------------------------------------------------------------------------
 
-def bresenham(p0: tuple[int, int],
-              p1: tuple[int, int]) -> list[tuple[int, int]]:
-    """Integer Bresenham line from `p0` to `p1` inclusive. Consecutive
-    output pixels are 4- or 8-adjacent."""
-    x0, y0 = p0
-    x1, y1 = p1
-    dx = abs(x1 - x0)
-    dy = abs(y1 - y0)
-    sx = 1 if x0 < x1 else -1
-    sy = 1 if y0 < y1 else -1
-    err = dx - dy
-    x, y = x0, y0
-    out: list[tuple[int, int]] = []
-    while True:
-        out.append((x, y))
-        if (x, y) == (x1, y1):
-            break
-        e2 = 2 * err
-        if e2 > -dy:
-            err -= dy
-            x += sx
-        if e2 < dx:
-            err += dx
-            y += sy
+def _ink_centroid(mask: np.ndarray) -> tuple[float, float]:
+    """Return the (col, row) centroid of all ink pixels."""
+    rows, cols = np.where(mask)
+    return float(cols.mean()), float(rows.mean())
+
+
+def _corner_anchor(mask: np.ndarray, bbox: tuple[int, int, int, int],
+                   name: str) -> tuple[int, int]:
+    """Resolve a corner anchor by finding the extremal ink in the
+    corresponding quadrant: TL → topmost-then-leftmost ink in the
+    top-left half-by-half region of bbox, etc. This gives the corner
+    proper for letters that fill the corner (N, M) and the natural
+    "first valley" for letters whose corner quadrant ink stops short
+    of the bbox corner (W's BL valley is the bottommost ink in the
+    bottom-left quadrant, NOT the bbox-corner-stepped ray)."""
+    x_min, y_min, x_max, y_max = bbox
+    bw, bh = x_max - x_min, y_max - y_min
+    if name in {"TL", "BL"}:
+        x_lo, x_hi = x_min, x_min + bw // 2
+        left = True
+    else:
+        x_lo, x_hi = x_max - bw // 2, x_max
+        left = False
+    if name in {"TL", "TR"}:
+        y_lo, y_hi = y_min, y_min + bh // 2
+        top = True
+    else:
+        y_lo, y_hi = y_max - bh // 2, y_max
+        top = False
+    rows, cols = np.where(mask)
+    band = ((cols >= x_lo) & (cols <= x_hi)
+            & (rows >= y_lo) & (rows <= y_hi))
+    if not band.any():
+        # Fallback: nearest ink to the actual bbox corner.
+        corner_x = x_min if left else x_max
+        corner_y = y_min if top else y_max
+        d = np.hypot(cols - corner_x, rows - corner_y)
+        idx = int(np.argmin(d))
+        return int(cols[idx]), int(rows[idx])
+    bcols, brows = cols[band], rows[band]
+    target_row = int(brows.min()) if top else int(brows.max())
+    candidate_cols = bcols[brows == target_row]
+    idx = (int(np.argmin(candidate_cols)) if left
+           else int(np.argmax(candidate_cols)))
+    return int(candidate_cols[idx]), target_row
+
+
+def _topmost_or_bottommost(mask: np.ndarray,
+                           bbox: tuple[int, int, int, int],
+                           top: bool) -> tuple[int, int]:
+    """Topmost (or bottommost) ink pixel; ties broken by proximity to
+    bbox x-center. Used by T / B."""
+    rows, cols = np.where(mask)
+    target_row = int(rows.min()) if top else int(rows.max())
+    candidate_cols = cols[rows == target_row]
+    cx = (bbox[0] + bbox[2]) / 2
+    idx = int(np.argmin(np.abs(candidate_cols - cx)))
+    return int(candidate_cols[idx]), target_row
+
+
+def _column_extremum_near_center(mask: np.ndarray,
+                                 bbox: tuple[int, int, int, int],
+                                 top: bool, window: int = 8
+                                 ) -> tuple[int, int]:
+    """For each ink column, build the topmost-row (top=True) or
+    bottommost-row (top=False) profile, then return the column with a
+    local extremum closest to bbox x-center. Used by TC / BC where the
+    pedagogical anchor sits on a central feature (M's valley, V's apex,
+    W's top peak) — the absolute extremum row would land on a
+    corner / serif instead. `window` is the half-width (in columns) of
+    the local-extremum neighbourhood."""
+    x_min, _, x_max, _ = bbox
+    cx = (x_min + x_max) / 2
+    h, w = mask.shape
+    rows, cols = np.where(mask)
+    if rows.size == 0:
+        raise ValueError("No ink")
+    sentinel = h if top else -1
+    profile = np.full(w, sentinel, dtype=np.int64)
+    for c, r in zip(cols.tolist(), rows.tolist()):
+        if top:
+            if r < profile[c]:
+                profile[c] = r
+        else:
+            if r > profile[c]:
+                profile[c] = r
+    valid_cols = np.where(profile != sentinel)[0]
+    extrema: list[tuple[int, int]] = []
+    for c in valid_cols:
+        p = profile[c]
+        is_extremum = True
+        for dc in range(-window, window + 1):
+            if dc == 0:
+                continue
+            nc = c + dc
+            if 0 <= nc < w and profile[nc] != sentinel:
+                if (top and profile[nc] < p) or (not top and profile[nc] > p):
+                    is_extremum = False
+                    break
+        if is_extremum:
+            extrema.append((int(c), int(p)))
+    if not extrema:
+        idx = (int(np.argmin(profile[valid_cols])) if top
+               else int(np.argmax(profile[valid_cols])))
+        c = int(valid_cols[idx])
+        return c, int(profile[c])
+    extrema.sort(key=lambda e: abs(e[0] - cx))
+    return extrema[0]
+
+
+def _midline_extremum(mask: np.ndarray, bbox: tuple[int, int, int, int],
+                      side: str) -> tuple[int, int]:
+    """Leftmost (or rightmost) ink pixel at the bbox y-center row. Used
+    by ML / MR. Falls back to a 10-row band when the exact center row
+    has no ink (e.g. open shapes where the midline crosses interior)."""
+    x_min, y_min, x_max, y_max = bbox
+    cy = int(round((y_min + y_max) / 2))
+    h, _w = mask.shape
+    if 0 <= cy < h:
+        cols = np.where(mask[cy])[0]
+        if cols.size:
+            target = int(cols.min()) if side == "left" else int(cols.max())
+            return target, cy
+    rows, cols = np.where(mask)
+    band = np.abs(rows - cy) <= 10
+    if not band.any():
+        raise ValueError(f"No ink within ±10 rows of bbox y-center {cy}")
+    bcols, brows = cols[band], rows[band]
+    idx = int(np.argmin(bcols) if side == "left" else np.argmax(bcols))
+    return int(bcols[idx]), int(brows[idx])
+
+
+def _x_extreme_centered(mask: np.ndarray,
+                        bbox: tuple[int, int, int, int],
+                        side: str) -> tuple[int, int]:
+    """Extremal ink pixel at the bbox x-extreme, vertically centered.
+    Used by LEFT_MID / RIGHT_MID."""
+    rows, cols = np.where(mask)
+    x_target = int(cols.max()) if side == "right" else int(cols.min())
+    candidate_rows = rows[cols == x_target]
+    cy = (bbox[1] + bbox[3]) / 2
+    idx = int(np.argmin(np.abs(candidate_rows - cy)))
+    return x_target, int(candidate_rows[idx])
+
+
+def _cluster_pixels(pts: list[tuple[int, int]], radius: int
+                    ) -> list[list[tuple[int, int]]]:
+    """Cluster pixels into 8-radius-connected groups."""
+    visited: set[tuple[int, int]] = set()
+    out: list[list[tuple[int, int]]] = []
+    pts_set = set(pts)
+    for p in pts:
+        if p in visited:
+            continue
+        cluster = []
+        stack = [p]
+        while stack:
+            cur = stack.pop()
+            if cur in visited:
+                continue
+            visited.add(cur)
+            cluster.append(cur)
+            for other in pts_set:
+                if other in visited:
+                    continue
+                if (abs(other[0] - cur[0]) <= radius
+                        and abs(other[1] - cur[1]) <= radius):
+                    stack.append(other)
+        out.append(cluster)
     return out
 
 
-def polyline_to_pixels(polyline: list[tuple[float, float]],
-                       bbox: tuple[int, int, int, int]
-                       ) -> list[tuple[int, int]]:
-    """Convert a relative-coord polyline to an ordered, deduplicated
-    pixel chain by Bresenham-connecting consecutive tuples. Joint
-    pixels shared between adjacent segments appear once."""
-    if not polyline:
+def _row_ink_runs(mask: np.ndarray, y: int) -> list[tuple[int, int]]:
+    """Return inclusive `(col_start, col_end)` runs of contiguous ink
+    pixels in row `y` (gaps of ≥2 separate runs)."""
+    cols = np.where(mask[y])[0]
+    if cols.size == 0:
         return []
-    if len(polyline) == 1:
-        return [rel_to_pixel(polyline[0], bbox)]
-    pixels: list[tuple[int, int]] = []
-    for i in range(len(polyline) - 1):
-        seg = bresenham(rel_to_pixel(polyline[i], bbox),
-                        rel_to_pixel(polyline[i + 1], bbox))
-        if i > 0 and pixels and seg and seg[0] == pixels[-1]:
-            seg = seg[1:]
-        pixels.extend(seg)
-    return pixels
+    diffs = np.diff(cols)
+    starts = [0] + (np.where(diffs > 1)[0] + 1).tolist()
+    runs: list[tuple[int, int]] = []
+    for i, s in enumerate(starts):
+        e = starts[i + 1] if i + 1 < len(starts) else len(cols)
+        runs.append((int(cols[s]), int(cols[e - 1])))
+    return runs
+
+
+def _bowl_stem_touch(mask: np.ndarray, bbox: tuple[int, int, int, int],
+                     upper: bool) -> tuple[int, int]:
+    """Resolve UPPER_TOUCH / LOWER_TOUCH by scanning rows top-to-bottom
+    for the y where two horizontal ink runs merge into one. For a bowl
+    attached to a stem (b, p, d, q), the stem and bowl-left wall are
+    separate runs in the bowl interior region, and merge at two rows:
+    the upper touch (above the bowl, where 3 runs collapse to 2 or 2
+    collapse to 1) and the lower touch (below the bowl, 2→1). The
+    touch column is the midpoint of the closing gap measured one row
+    above the merge — the bowl medial-axis collapses this to a single
+    junction, but the run-count signal preserves both touches."""
+    y_min, y_max = bbox[1], bbox[3]
+    transitions: list[tuple[int, list[tuple[int, int]], list[tuple[int, int]]]] = []
+    prev = _row_ink_runs(mask, y_min)
+    for y in range(y_min + 1, y_max + 1):
+        runs = _row_ink_runs(mask, y)
+        if len(runs) != len(prev):
+            transitions.append((y, prev, runs))
+        prev = runs
+
+    if upper:
+        candidates = [t for t in transitions
+                      if len(t[1]) > len(t[2]) and len(t[1]) >= 2]
+        if not candidates:
+            raise ValueError("UPPER_TOUCH: no run-count merge transition")
+        merge_y, before, _ = candidates[0]
+    else:
+        candidates = [t for t in transitions
+                      if len(t[1]) >= 2 and len(t[2]) == 1]
+        if not candidates:
+            raise ValueError("LOWER_TOUCH: no merge-to-1 transition")
+        merge_y, before, _ = candidates[-1]
+
+    if len(before) < 2:
+        raise ValueError(f"Touch row {merge_y}: pre-merge had <2 runs")
+    run0_right = before[0][1]
+    run1_left = before[1][0]
+    col = (run0_right + run1_left) // 2
+    if not bool(mask[merge_y, col]):
+        # Fall back to the nearest ink pixel in the merge row.
+        cols = np.where(mask[merge_y])[0]
+        if cols.size == 0:
+            raise ValueError(f"Touch row {merge_y} has no ink")
+        idx = int(np.argmin(np.abs(cols - col)))
+        col = int(cols[idx])
+    return col, merge_y
+
+
+def resolve_anchor(name: str, mask: np.ndarray,
+                   bbox: tuple[int, int, int, int]) -> tuple[int, int]:
+    """Dispatch to the appropriate resolver. Raises `KeyError` on an
+    unknown anchor name, `ValueError` on a resolution failure (e.g.
+    `UPPER_TOUCH` on a non-bowl letter)."""
+    if name in {"TL", "TR", "BL", "BR"}:
+        return _corner_anchor(mask, bbox, name)
+    if name == "T":
+        return _topmost_or_bottommost(mask, bbox, top=True)
+    if name == "B":
+        return _topmost_or_bottommost(mask, bbox, top=False)
+    if name == "TC":
+        return _column_extremum_near_center(mask, bbox, top=True)
+    if name == "BC":
+        return _column_extremum_near_center(mask, bbox, top=False)
+    if name == "ML":
+        return _midline_extremum(mask, bbox, "left")
+    if name == "MR":
+        return _midline_extremum(mask, bbox, "right")
+    if name == "LEFT_MID":
+        return _x_extreme_centered(mask, bbox, "left")
+    if name == "RIGHT_MID":
+        return _x_extreme_centered(mask, bbox, "right")
+    if name == "UPPER_TOUCH":
+        return _bowl_stem_touch(mask, bbox, upper=True)
+    if name == "LOWER_TOUCH":
+        return _bowl_stem_touch(mask, bbox, upper=False)
+    raise KeyError(f"Unknown anchor name: {name!r}")
+
+
+# -----------------------------------------------------------------------------
+# Centerline path synthesis
+# -----------------------------------------------------------------------------
+
+def centerline_path(start: tuple[int, int], end: tuple[int, int],
+                    mask: np.ndarray, dt: np.ndarray
+                    ) -> list[tuple[int, int]]:
+    """Dijkstra shortest path between two anchor pixels through ink,
+    with edge cost `step_length / (dt[neighbour] + 1)`. Deep-ink pixels
+    are cheaper, so the path tracks the medial axis. Raises if the two
+    anchors aren't on ink or are in disconnected ink components."""
+    h, w = mask.shape
+    if not (0 <= start[1] < h and 0 <= start[0] < w and mask[start[1], start[0]]):
+        raise ValueError(f"start {start} not in ink")
+    if not (0 <= end[1] < h and 0 <= end[0] < w and mask[end[1], end[0]]):
+        raise ValueError(f"end {end} not in ink")
+    if start == end:
+        return [start]
+    sqrt2 = math.sqrt(2.0)
+    dist: dict[tuple[int, int], float] = {start: 0.0}
+    prev: dict[tuple[int, int], tuple[int, int]] = {}
+    heap: list[tuple[float, tuple[int, int]]] = [(0.0, start)]
+    found = False
+    while heap:
+        d, (c, r) = heapq.heappop(heap)
+        if (c, r) == end:
+            found = True
+            break
+        if d > dist.get((c, r), math.inf):
+            continue
+        for dr, dc in NEIGHBOURS_8:
+            nc, nr = c + dc, r + dr
+            if not (0 <= nc < w and 0 <= nr < h):
+                continue
+            if not mask[nr, nc]:
+                continue
+            step = sqrt2 if (dc != 0 and dr != 0) else 1.0
+            edge = step / (float(dt[nr, nc]) + 1.0)
+            nd = d + edge
+            if nd < dist.get((nc, nr), math.inf):
+                dist[(nc, nr)] = nd
+                prev[(nc, nr)] = (c, r)
+                heapq.heappush(heap, (nd, (nc, nr)))
+    if not found:
+        raise ValueError(f"No ink path from {start} to {end}")
+    path = [end]
+    cur = end
+    while cur in prev:
+        cur = prev[cur]
+        path.append(cur)
+    path.reverse()
+    return path
 
 
 # -----------------------------------------------------------------------------
 # Validation + resampling
 # -----------------------------------------------------------------------------
 
-def validate_polylines_in_ink(letter: str,
-                              polylines: list[list[tuple[float, float]]],
-                              mask: np.ndarray,
-                              bbox: tuple[int, int, int, int]) -> list[str]:
-    """Validate that every authored polyline stays inside the ink mask.
-    Runs two passes: per-tuple (each waypoint's raster pixel must be on
-    ink) and per-segment (the Bresenham line between consecutive
-    waypoints must be entirely on ink). The dense check catches
-    polylines whose waypoints are all in ink but whose straight chords
-    cut through interior whitespace — common on closed bowls. Returns
-    one error string per offender; empty list = clean."""
-    h, w = mask.shape
-    errors: list[str] = []
-    for pi, poly in enumerate(polylines):
-        for ti, t in enumerate(poly):
-            col, row = rel_to_pixel(t, bbox)
-            if not (0 <= row < h and 0 <= col < w):
-                errors.append(f"{letter} polyline {pi} tuple {ti} {t} "
-                              f"→ pixel ({col}, {row}) outside canvas")
-                continue
-            if not bool(mask[row, col]):
-                errors.append(f"{letter} polyline {pi} tuple {ti} {t} "
-                              f"→ pixel ({col}, {row}) outside ink")
-        for si in range(len(poly) - 1):
-            a = rel_to_pixel(poly[si], bbox)
-            b = rel_to_pixel(poly[si + 1], bbox)
-            line = bresenham(a, b)
-            off: list[tuple[int, int]] = []
-            for col, row in line:
-                if not (0 <= row < h and 0 <= col < w):
-                    off.append((col, row))
-                    continue
-                if not bool(mask[row, col]):
-                    off.append((col, row))
-            if off:
-                first_rel = pixel_to_rel(off[0], bbox)
-                last_rel = pixel_to_rel(off[-1], bbox)
-                errors.append(
-                    f"{letter} polyline {pi} segment {si}→{si + 1}: "
-                    f"{len(off)} of {len(line)} pixels outside ink at rel "
-                    f"({first_rel[0]:.3f}, {first_rel[1]:.3f})..."
-                    f"({last_rel[0]:.3f}, {last_rel[1]:.3f})")
-    return errors
-
-
 def resample_uniform(pixels: list[tuple[int, int]],
                      n: int) -> list[tuple[int, int]]:
     """Resample a dense pixel chain to exactly `n` points by linear
-    interpolation along arc length. Output is integer-rounded raster
-    pixels (col, row)."""
+    interpolation along arc length."""
     if n <= 0 or not pixels:
         return []
     if len(pixels) == 1:
@@ -351,10 +612,9 @@ def resample_uniform(pixels: list[tuple[int, int]],
 def build_skeleton_and_adj(stroke_pixel_chains: list[list[tuple[int, int]]],
                            bbox: tuple[int, int, int, int]
                            ) -> tuple[list[dict], list[list[int]]]:
-    """Union all stroke pixel chains into a deduplicated skeleton in
-    bbox-relative coords and return parallel 8-connected adjacency
-    lists. Output matches the strokes.json `skeleton` / `skeletonAdj`
-    fields the iOS calibrator reads."""
+    """Union all stroke pixel chains into a deduplicated skeleton with
+    8-connected adjacency. Output matches the strokes.json `skeleton` /
+    `skeletonAdj` fields the iOS calibrator reads."""
     pixel_to_idx: dict[tuple[int, int], int] = {}
     ordered_pixels: list[tuple[int, int]] = []
     for chain in stroke_pixel_chains:
@@ -381,36 +641,62 @@ def build_skeleton_and_adj(stroke_pixel_chains: list[list[tuple[int, int]]],
 # -----------------------------------------------------------------------------
 
 def output_dir_for(letter: str) -> Path:
-    """Resolve the per-letter resource directory under
-    `PrimaeNative/Resources/Letters/`, honouring the lowercase suffix
-    convention."""
+    """Resolve the per-letter resource directory honouring the
+    lowercase suffix convention (APFS / HFS+ case-insensitivity)."""
     if letter.isupper() or not letter.isalpha():
         return OUTPUT_BASE / letter
     return OUTPUT_BASE / f"{letter}{LOWERCASE_SUFFIX}"
 
 
-def bake_letter(letter: str, font_path: Path) -> dict:
-    """End-to-end bake for one letter. Rasterises the glyph, validates
-    every authored tuple is inside the ink, rasterises each polyline
-    into a dense pixel chain, resamples each to `CHECKPOINT_COUNT`, and
-    packages everything into the strokes.json payload. Raises
-    `ValueError` listing every offending tuple if any falls off-ink."""
-    polylines = LETTERS.get(letter)
-    if not polylines:
-        raise KeyError(f"No polylines authored for {letter!r}")
+def bake_letter(letter: str, font_path: Path
+                ) -> tuple[dict, dict]:
+    """End-to-end bake. Returns `(json_payload, debug_info)`. Resolves
+    anchors, synthesises centerlines, asserts every centerline stays in
+    ink, samples to `CHECKPOINT_COUNT`, and packages into the
+    strokes.json shape."""
+    specs = LETTERS.get(letter)
+    if not specs:
+        raise KeyError(f"No spec authored for {letter!r}")
     mask = rasterize(letter, font_path)
     bbox = bbox_from_mask(mask)
-    errors = validate_polylines_in_ink(letter, polylines, mask, bbox)
-    if errors:
-        raise ValueError("Out-of-ink polyline tuples:\n  "
-                         + "\n  ".join(errors))
+    dt = distance_transform_edt(mask)
 
     stroke_pixel_chains: list[list[tuple[int, int]]] = []
     json_strokes: list[dict] = []
-    for i, poly in enumerate(polylines, start=1):
-        dense = polyline_to_pixels(poly, bbox)
-        resampled = resample_uniform(dense, CHECKPOINT_COUNT)
-        stroke_pixel_chains.append(dense)
+    resolved_anchors: list[list[tuple[str, tuple[int, int]]]] = []
+
+    for i, spec in enumerate(specs, start=1):
+        path = spec.get("path") or []
+        if len(path) < 2:
+            raise ValueError(f"{letter} stroke {i}: path needs ≥2 anchors, "
+                             f"got {path!r}")
+        anchors: list[tuple[int, int]] = []
+        labelled: list[tuple[str, tuple[int, int]]] = []
+        for name in path:
+            try:
+                pos = resolve_anchor(name, mask, bbox)
+            except (KeyError, ValueError) as e:
+                raise ValueError(
+                    f"{letter} stroke {i}: anchor {name!r} failed — {e}"
+                    ) from e
+            anchors.append(pos)
+            labelled.append((name, pos))
+        resolved_anchors.append(labelled)
+
+        chain: list[tuple[int, int]] = []
+        for si in range(len(anchors) - 1):
+            seg = centerline_path(anchors[si], anchors[si + 1], mask, dt)
+            for col, row in seg:
+                if not mask[row, col]:
+                    raise AssertionError(
+                        f"{letter} stroke {i} segment {si}: Dijkstra returned "
+                        f"off-ink pixel ({col}, {row})")
+            if chain and seg and chain[-1] == seg[0]:
+                seg = seg[1:]
+            chain.extend(seg)
+        stroke_pixel_chains.append(chain)
+
+        resampled = resample_uniform(chain, CHECKPOINT_COUNT)
         json_strokes.append({
             "id": i,
             "checkpoints": [
@@ -423,13 +709,20 @@ def bake_letter(letter: str, font_path: Path) -> dict:
     skeleton_pts, skeleton_adj = build_skeleton_and_adj(
         stroke_pixel_chains, bbox)
 
-    return {
+    data = {
         "letter": letter,
         "checkpointRadius": DEFAULT_RADIUS,
         "strokes": json_strokes,
         "skeleton": skeleton_pts,
         "skeletonAdj": skeleton_adj,
     }
+    debug = {
+        "mask": mask,
+        "bbox": bbox,
+        "stroke_chains": stroke_pixel_chains,
+        "resolved_anchors": resolved_anchors,
+    }
+    return data, debug
 
 
 # -----------------------------------------------------------------------------
@@ -437,29 +730,35 @@ def bake_letter(letter: str, font_path: Path) -> dict:
 # -----------------------------------------------------------------------------
 
 def save_overlay(letter: str, font_path: Path, out_path: Path) -> None:
-    """Save a polyline-over-ink PNG for visual review. Author-placed
-    tuples are drawn as labelled dots; the Bresenham-rasterised path is
-    drawn as a coloured line."""
-    polylines = LETTERS.get(letter, [])
-    mask = rasterize(letter, font_path)
-    bbox = bbox_from_mask(mask)
+    """Save a centerline-over-ink PNG for visual review. Shows the ink
+    mask, the path bbox outline, every resolved anchor (labelled), and
+    the Dijkstra centerline path per stroke."""
+    data, debug = bake_letter(letter, font_path)
+    mask = debug["mask"]
+    bbox = debug["bbox"]
+    chains = debug["stroke_chains"]
+    anchors = debug["resolved_anchors"]
     img = Image.fromarray(np.where(mask, 0, 230).astype(np.uint8)).convert("RGB")
     draw = ImageDraw.Draw(img)
+    x_min, y_min, x_max, y_max = bbox
+    draw.rectangle((x_min, y_min, x_max, y_max), outline=(0, 0, 0), width=1)
     palette = [
         (220, 30, 30), (30, 130, 30), (30, 60, 200), (220, 130, 30),
         (180, 30, 180),
     ]
-    for pi, poly in enumerate(polylines):
-        color = palette[pi % len(palette)]
-        pixels = polyline_to_pixels(poly, bbox)
-        if len(pixels) >= 2:
-            draw.line(pixels, fill=color, width=4)
-        for ti, t in enumerate(poly):
-            col, row = rel_to_pixel(t, bbox)
-            r = 10
-            draw.ellipse((col - r, row - r, col + r, row + r),
+    for si, chain in enumerate(chains):
+        color = palette[si % len(palette)]
+        for col, row in chain:
+            draw.point((col, row), fill=color)
+        if chain:
+            sc, sr = chain[0]
+            draw.ellipse((sc - 5, sr - 5, sc + 5, sr + 5),
                          fill=color, outline=(0, 0, 0))
-            draw.text((col + 12, row - 14), f"{pi}.{ti}", fill=(0, 0, 0))
+    for si, group in enumerate(anchors):
+        for name, (col, row) in group:
+            draw.ellipse((col - 8, row - 8, col + 8, row + 8),
+                         fill=(255, 230, 0), outline=(0, 0, 0))
+            draw.text((col + 10, row - 14), name, fill=(0, 0, 0))
     img.save(str(out_path))
 
 
@@ -468,8 +767,8 @@ def save_overlay(letter: str, font_path: Path, out_path: Path) -> None:
 # -----------------------------------------------------------------------------
 
 def write_meta(out_base: Path, font_path: Path) -> None:
-    """Write `_meta.json` next to the per-letter folders so consumers
-    can detect a font swap and trigger a re-bake."""
+    """Write `_meta.json` so consumers can detect a font swap and
+    trigger a re-bake."""
     font_hash = hashlib.sha256(font_path.read_bytes()).hexdigest()
     (out_base / "_meta.json").write_text(json.dumps({
         "fontPath": str(font_path),
@@ -481,19 +780,19 @@ def write_meta(out_base: Path, font_path: Path) -> None:
 
 def main() -> int:
     """CLI entry point. Bakes one or more letters; with `--debug`,
-    saves `/tmp/polyline_<L>.png` overlays."""
+    saves `/tmp/centerline_<L>.png` overlays."""
     parser = argparse.ArgumentParser(
-        description="Bake hand-authored polyline strokes.json files.")
+        description="Bake anchor-spec strokes.json files.")
     parser.add_argument("letters", nargs="*",
                         help="Letters to bake. Default: every entry in LETTERS.")
     parser.add_argument("--font", default=str(DEFAULT_FONT),
-                        help="OTF / TTF font path. Default: Primae-Regular.")
+                        help="OTF / TTF font path.")
     parser.add_argument("--out", default=None,
                         help="Output base dir. Default: PrimaeNative/Resources/Letters.")
     parser.add_argument("--no-overwrite", action="store_true",
                         help="Skip letters whose strokes.json already exists.")
     parser.add_argument("--debug", action="store_true",
-                        help="Save /tmp/polyline_<L>.png overlays.")
+                        help="Save /tmp/centerline_<L>.png overlays.")
     args = parser.parse_args()
 
     font_path = Path(args.font)
@@ -514,7 +813,7 @@ def main() -> int:
             print(f"  {letter}: skipped (exists)")
             continue
         try:
-            data = bake_letter(letter, font_path)
+            data, _ = bake_letter(letter, font_path)
         except Exception as e:
             print(f"  {letter}: FAIL — {e}")
             fail += 1
@@ -524,7 +823,11 @@ def main() -> int:
         n_pts = sum(len(s["checkpoints"]) for s in data["strokes"])
         print(f"  {letter}: ✓ {len(data['strokes'])} strokes, {n_pts} checkpoints")
         if args.debug:
-            save_overlay(letter, font_path, Path(f"/tmp/polyline_{letter}.png"))
+            try:
+                save_overlay(letter, font_path,
+                             Path(f"/tmp/centerline_{letter}.png"))
+            except Exception as e:
+                print(f"  {letter}: overlay FAIL — {e}")
         ok += 1
     if ok > 0:
         try:
