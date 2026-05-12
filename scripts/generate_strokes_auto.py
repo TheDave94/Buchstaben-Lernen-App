@@ -130,7 +130,7 @@ LETTERS: dict[str, list[StrokeSpec]] = {
         {"path": ["TL", "BL", "TC", "BR", "TR"]},
     ],
     "b": [
-        {"path": ["T", "B"]},
+        {"path": ["T", "LOWER_TOUCH"]},
         {"path": ["UPPER_TOUCH", "RIGHT_MID", "LOWER_TOUCH"]},
     ],
 }
@@ -483,34 +483,78 @@ def _bowl_stem_touch(mask: np.ndarray, bbox: tuple[int, int, int, int],
     return col, merge_y
 
 
+# Tip-like anchors sit at the geometric extremum of a stroke and a raw
+# Dijkstra path starting there picks up a "hook" along the apex curl.
+# Walking inward along the DT gradient before routing lands the anchor
+# on the stroke's centerline body. Interior anchors (ML / MR / *_MID /
+# *_TOUCH) already sit on the centerline and must not be perturbed.
+TIP_ANCHORS = frozenset({"TL", "TR", "BL", "BR", "T", "B", "TC", "BC"})
+
+
+def extend_tip_inward(pixel: tuple[int, int], dt: np.ndarray,
+                      mask: np.ndarray, max_steps: int = 8
+                      ) -> tuple[int, int]:
+    """Walk from a tip anchor inward along the DT gradient until the
+    gradient stabilises (best step Δ < 1.0) or `max_steps` is hit. The
+    result sits on the stroke's centerline body rather than at the
+    geometric tip — eliminates the apex-curl hooks Dijkstra otherwise
+    picks up when routing from a corner pixel."""
+    col, row = pixel
+    h, w = mask.shape
+    for _ in range(max_steps):
+        best_delta = 0.0
+        best_n: tuple[int, int] | None = None
+        cur_dt = float(dt[row, col])
+        for dr, dc in NEIGHBOURS_8:
+            nc, nr = col + dc, row + dr
+            if not (0 <= nr < h and 0 <= nc < w):
+                continue
+            if not mask[nr, nc]:
+                continue
+            delta = float(dt[nr, nc]) - cur_dt
+            if delta > best_delta:
+                best_delta = delta
+                best_n = (nc, nr)
+        if best_n is None or best_delta < 1.0:
+            break
+        col, row = best_n
+    return col, row
+
+
 def resolve_anchor(name: str, mask: np.ndarray,
-                   bbox: tuple[int, int, int, int]) -> tuple[int, int]:
-    """Dispatch to the appropriate resolver. Raises `KeyError` on an
-    unknown anchor name, `ValueError` on a resolution failure (e.g.
-    `UPPER_TOUCH` on a non-bowl letter)."""
+                   bbox: tuple[int, int, int, int],
+                   dt: np.ndarray | None = None) -> tuple[int, int]:
+    """Dispatch to the appropriate resolver, then walk tip-like anchors
+    inward along the DT gradient when `dt` is supplied. Raises
+    `KeyError` on an unknown name, `ValueError` on a resolution failure
+    (e.g. `UPPER_TOUCH` on a non-bowl letter)."""
     if name in {"TL", "TR", "BL", "BR"}:
-        return _corner_anchor(mask, bbox, name)
-    if name == "T":
-        return _topmost_or_bottommost(mask, bbox, top=True)
-    if name == "B":
-        return _topmost_or_bottommost(mask, bbox, top=False)
-    if name == "TC":
-        return _column_extremum_near_center(mask, bbox, top=True)
-    if name == "BC":
-        return _column_extremum_near_center(mask, bbox, top=False)
-    if name == "ML":
-        return _midline_extremum(mask, bbox, "left")
-    if name == "MR":
-        return _midline_extremum(mask, bbox, "right")
-    if name == "LEFT_MID":
-        return _x_extreme_centered(mask, bbox, "left")
-    if name == "RIGHT_MID":
-        return _x_extreme_centered(mask, bbox, "right")
-    if name == "UPPER_TOUCH":
-        return _bowl_stem_touch(mask, bbox, upper=True)
-    if name == "LOWER_TOUCH":
-        return _bowl_stem_touch(mask, bbox, upper=False)
-    raise KeyError(f"Unknown anchor name: {name!r}")
+        pos = _corner_anchor(mask, bbox, name)
+    elif name == "T":
+        pos = _topmost_or_bottommost(mask, bbox, top=True)
+    elif name == "B":
+        pos = _topmost_or_bottommost(mask, bbox, top=False)
+    elif name == "TC":
+        pos = _column_extremum_near_center(mask, bbox, top=True)
+    elif name == "BC":
+        pos = _column_extremum_near_center(mask, bbox, top=False)
+    elif name == "ML":
+        pos = _midline_extremum(mask, bbox, "left")
+    elif name == "MR":
+        pos = _midline_extremum(mask, bbox, "right")
+    elif name == "LEFT_MID":
+        pos = _x_extreme_centered(mask, bbox, "left")
+    elif name == "RIGHT_MID":
+        pos = _x_extreme_centered(mask, bbox, "right")
+    elif name == "UPPER_TOUCH":
+        pos = _bowl_stem_touch(mask, bbox, upper=True)
+    elif name == "LOWER_TOUCH":
+        pos = _bowl_stem_touch(mask, bbox, upper=False)
+    else:
+        raise KeyError(f"Unknown anchor name: {name!r}")
+    if dt is not None and name in TIP_ANCHORS:
+        pos = extend_tip_inward(pos, dt, mask)
+    return pos
 
 
 # -----------------------------------------------------------------------------
@@ -674,7 +718,7 @@ def bake_letter(letter: str, font_path: Path
         labelled: list[tuple[str, tuple[int, int]]] = []
         for name in path:
             try:
-                pos = resolve_anchor(name, mask, bbox)
+                pos = resolve_anchor(name, mask, bbox, dt=dt)
             except (KeyError, ValueError) as e:
                 raise ValueError(
                     f"{letter} stroke {i}: anchor {name!r} failed — {e}"
