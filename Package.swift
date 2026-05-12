@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "PrimaeNative",
     platforms: [
-        .iOS(.v26),
+        .iOS("26.5"),
         .macOS(.v15)
     ],
     products: [
