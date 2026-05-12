@@ -777,12 +777,7 @@ def snap_to_medial_axis(point: tuple[int, int], mask: np.ndarray,
     DT in a 60×60 window around the point, floor 15 px). If no skeleton
     pixel lies within radius, returns `point` unchanged and emits a
     warning naming `letter` / `anchor_name` so the caller's PNG review
-    can spot the unsnapped anchor.
-
-    Superseded by Phase 2.0 — anchors at visible outer corners produce
-    a correct chord-centerline trace for uniform-width Prima without
-    snapping. Kept for potential future curve-kind work needing a
-    medial-axis lookup."""
+    can spot the unsnapped anchor."""
     col, row = int(round(point[0])), int(round(point[1]))
     h, w = mask.shape
 
@@ -1036,10 +1031,11 @@ def bake_letter(letter: str, font_path: Path
     mask = rasterize(letter, font_path)
     bbox = bbox_from_mask(mask)
     dt = distance_transform_edt(mask)
-    # `morph.skeletonize` import retained for future curve-kind work
-    # that may want medial-axis lookup (see superseded snap_to_medial_
-    # _axis). The line-kind pipeline doesn't consume a skeleton; anchors
-    # at visible outer corners produce the correct trace by themselves.
+    # Deterministic 1-px-wide centerline lookup consumed by
+    # snap_to_medial_axis. Treated as a boolean point-membership table
+    # (never traversed); topology differences between skeletonize and
+    # medial_axis don't matter for the snap.
+    skeleton = morph.skeletonize(mask)
 
     stroke_pixel_chains: list[list[tuple[int, int]]] = []
     json_strokes: list[dict] = []
@@ -1078,27 +1074,34 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # Anchors sit at the glyph's visible outer corners. Chords
-            # between consecutive anchors run through each band's
-            # centerline; interior joints get an inscribed fillet whose
-            # radius = local stroke half-width — placing the arc at the
-            # corner's rounded outline so the centerline curves smoothly
-            # through the visible corner.
-            if len(anchors) >= 3:
+            # Snap each anchor to the medial axis so the polyline runs
+            # half-stroke-width inset from every band edge — including
+            # caps. Small fillets at interior joints smooth the
+            # medial-axis vertex for animation without dominating the
+            # trace.
+            snapped = [
+                snap_to_medial_axis(p, mask, dt, skeleton,
+                                    letter=letter, anchor_name=n)
+                for p, n in zip(anchors, names)
+            ]
+            if len(snapped) >= 3:
                 h_, w_ = mask.shape
                 radii: list[float] = []
-                for j in range(1, len(anchors) - 1):
-                    ac, ar = anchors[j]
-                    r0 = max(0, ar - 15); r1 = min(h_, ar + 16)
-                    c0 = max(0, ac - 15); c1 = min(w_, ac + 16)
+                for j in range(1, len(snapped) - 1):
+                    sc, sr = snapped[j]
+                    r0 = max(0, sr - 15); r1 = min(h_, sr + 16)
+                    c0 = max(0, sc - 15); c1 = min(w_, sc + 16)
                     if r1 <= r0 or c1 <= c0:
                         radii.append(0.0)
                     else:
-                        radii.append(float(dt[r0:r1, c0:c1].max()))
+                        # Cap at 12 px so the fillet stays small enough
+                        # for the linear segments to dominate the trace.
+                        r = float(dt[r0:r1, c0:c1].max())
+                        radii.append(min(r, 12.0))
                 chain = polyline_with_filleted_joints(
-                    [(float(p[0]), float(p[1])) for p in anchors], radii)
+                    [(float(p[0]), float(p[1])) for p in snapped], radii)
             else:
-                chain = line_sampler(anchors)
+                chain = line_sampler(snapped)
         else:
             chain = []
             for si in range(len(anchors) - 1):
