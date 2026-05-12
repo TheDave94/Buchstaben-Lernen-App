@@ -509,7 +509,12 @@ def extend_tip_inward(pixel: tuple[int, int], dt: np.ndarray,
     gradient stabilises (best step Δ < 1.0) or `max_steps` is hit. The
     result sits on the stroke's centerline body rather than at the
     geometric tip — eliminates the apex-curl hooks Dijkstra otherwise
-    picks up when routing from a corner pixel."""
+    picks up when routing from a corner pixel.
+
+    Superseded by `snap_to_medial_axis` for line-kind anchors (clean
+    centerline lookup with no DT-gradient drift). Still used in the
+    curve / legacy path-kind branch where the tip needs to sit on the
+    Dijkstra-routable ink body; kept in case we ever need to revert."""
     col, row = pixel
     h, w = mask.shape
     for _ in range(max_steps):
@@ -599,6 +604,63 @@ def line_sampler(anchors: list[tuple[int, int]],
             points.append((int(round(a[0] + t * dx)),
                            int(round(a[1] + t * dy))))
     return points
+
+
+def snap_to_medial_axis(point: tuple[int, int], mask: np.ndarray,
+                        dt: np.ndarray, skeleton: np.ndarray,
+                        letter: str = "?",
+                        anchor_name: str = "?") -> tuple[int, int]:
+    """Snap a boundary-resolved anchor onto the nearest medial-axis
+    pixel. Used as a centerline-positioning lookup only — the medial
+    axis is NOT traversed (that pipeline produced Y-bifurcation
+    artefacts at junctions). Walking from outer boundary to centerline
+    here is fine because we only consume the destination pixel.
+
+    Search radius scales with the local stroke half-width (1.5× the max
+    DT in a 60×60 window around the point, floor 15 px). If no skeleton
+    pixel lies within radius, returns `point` unchanged and emits a
+    warning naming `letter` / `anchor_name` so the caller's PNG review
+    can spot the unsnapped anchor."""
+    col, row = int(round(point[0])), int(round(point[1]))
+    h, w = mask.shape
+
+    r0 = max(0, row - 30); r1 = min(h, row + 31)
+    c0 = max(0, col - 30); c1 = min(w, col + 31)
+    if r1 <= r0 or c1 <= c0:
+        local_max_dt = 0.0
+    else:
+        local_max_dt = float(dt[r0:r1, c0:c1].max())
+    radius = max(15, int(round(local_max_dt * 1.5)))
+
+    rr0 = max(0, row - radius); rr1 = min(h, row + radius + 1)
+    cc0 = max(0, col - radius); cc1 = min(w, col + radius + 1)
+    region = skeleton[rr0:rr1, cc0:cc1]
+    sk_rows, sk_cols = np.where(region)
+    if sk_rows.size == 0:
+        print(f"  warning: {letter}/{anchor_name} at {point} — no "
+              f"medial-axis pixel within {radius} px "
+              f"(local max DT {local_max_dt:.1f}); leaving unsnapped")
+        return col, row
+    abs_rows = sk_rows + rr0
+    abs_cols = sk_cols + cc0
+    dx = abs_cols - col
+    dy = abs_rows - row
+    d2 = dx * dx + dy * dy
+    within = d2 <= radius * radius
+    if not np.any(within):
+        print(f"  warning: {letter}/{anchor_name} at {point} — no "
+              f"medial-axis pixel within {radius} px "
+              f"(local max DT {local_max_dt:.1f}); leaving unsnapped")
+        return col, row
+    abs_rows = abs_rows[within]; abs_cols = abs_cols[within]
+    d2 = d2[within]
+    min_d2 = d2.min()
+    # Tie-break by (y, x) for determinism across font / library updates.
+    candidates = np.where(d2 == min_d2)[0]
+    order = sorted(candidates.tolist(),
+                   key=lambda i: (int(abs_rows[i]), int(abs_cols[i])))
+    pick = order[0]
+    return int(abs_cols[pick]), int(abs_rows[pick])
 
 
 def centerline_path(start: tuple[int, int], end: tuple[int, int],
@@ -744,6 +806,11 @@ def bake_letter(letter: str, font_path: Path
     mask = rasterize(letter, font_path)
     bbox = bbox_from_mask(mask)
     dt = distance_transform_edt(mask)
+    # The medial axis is used here purely as an anchor-snap lookup —
+    # never as a routable graph. The Y-bifurcation artefacts came from
+    # *traversing* the medial axis; pointwise nearest-neighbour lookups
+    # have no such failure mode.
+    skeleton = morph.medial_axis(mask)
 
     stroke_pixel_chains: list[list[tuple[int, int]]] = []
     json_strokes: list[dict] = []
@@ -782,7 +849,12 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            chain = line_sampler(anchors)
+            snapped = [
+                snap_to_medial_axis(p, mask, dt, skeleton,
+                                    letter=letter, anchor_name=n)
+                for p, n in zip(anchors, names)
+            ]
+            chain = line_sampler(snapped)
         else:
             chain = []
             for si in range(len(anchors) - 1):
