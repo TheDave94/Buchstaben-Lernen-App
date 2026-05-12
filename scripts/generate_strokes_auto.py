@@ -103,31 +103,42 @@ LOWERCASE_SUFFIX = "_l"
 # Hand-authored stroke decompositions
 # -----------------------------------------------------------------------------
 #
-# Pedagogical anchor specs. Each `StrokeSpec` is `{"path": [anchor, ...]}` with
-# 2+ anchors. The bake resolves each anchor to a font-specific pixel position
-# and synthesises the centerline between consecutive anchors via Dijkstra over
-# the ink distance transform.
+# Two stroke formats coexist:
+#
+#   {"kind": "line", "anchors": [...]}   straight Bresenham polyline through
+#                                         the resolved anchors. Phase 1: used
+#                                         for N/V/M/W. Anchors land on the
+#                                         visual corner (no tip extension);
+#                                         the pen-stroke is a chord, no ink
+#                                         traversal.
+#
+#   {"path": [...]}                       Dijkstra-on-DT centerline through
+#                                         the ink. Used for curved strokes
+#                                         where straight chords would cut
+#                                         whitespace (b's bowl). Tip-anchor
+#                                         entries get DT-gradient extension
+#                                         before routing.
 #
 # Anchor names are font-independent — adding a new font requires zero per-
 # letter tweaking. The bake aborts with an explicit error if any anchor fails
 # to resolve (e.g. `UPPER_TOUCH` on a letter without a closed bowl).
 
-StrokeSpec = dict  # {"path": list[str]}
+StrokeSpec = dict  # {"kind": "line", "anchors": [...]} | {"path": [...]}
 
 LETTERS: dict[str, list[StrokeSpec]] = {
     "N": [
-        {"path": ["TL", "BL"]},
-        {"path": ["TL", "BR"]},
-        {"path": ["TR", "BR"]},
+        {"kind": "line", "anchors": ["TL", "BL"]},
+        {"kind": "line", "anchors": ["TL", "BR"]},
+        {"kind": "line", "anchors": ["TR", "BR"]},
     ],
     "V": [
-        {"path": ["TL", "BC", "TR"]},
+        {"kind": "line", "anchors": ["TL", "BC", "TR"]},
     ],
     "M": [
-        {"path": ["BL", "TL", "BC", "TR", "BR"]},
+        {"kind": "line", "anchors": ["BL", "TL", "BC", "TR", "BR"]},
     ],
     "W": [
-        {"path": ["TL", "BL", "TC", "BR", "TR"]},
+        {"kind": "line", "anchors": ["TL", "BL", "TC", "BR", "TR"]},
     ],
     "b": [
         {"path": ["T", "LOWER_TOUCH"]},
@@ -561,6 +572,35 @@ def resolve_anchor(name: str, mask: np.ndarray,
 # Centerline path synthesis
 # -----------------------------------------------------------------------------
 
+def line_sampler(anchors: list[tuple[int, int]],
+                 spacing: float = 1.0) -> list[tuple[int, int]]:
+    """Linearly interpolate along the polyline through `anchors`,
+    sampling at `spacing`-pixel arc-length intervals. Returns a list
+    of integer `(col, row)` pixels with both endpoints included
+    exactly; output format matches `centerline_path` so downstream
+    serialisation is identical."""
+    if len(anchors) < 2:
+        return [(int(round(a[0])), int(round(a[1]))) for a in anchors]
+    points: list[tuple[int, int]] = []
+    for i in range(len(anchors) - 1):
+        a = anchors[i]
+        b = anchors[i + 1]
+        dx = b[0] - a[0]
+        dy = b[1] - a[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            if i == 0:
+                points.append((int(round(a[0])), int(round(a[1]))))
+            continue
+        n_steps = max(1, int(round(length / spacing)))
+        start_k = 0 if i == 0 else 1  # skip the joint (= prev segment's end)
+        for k in range(start_k, n_steps + 1):
+            t = k / n_steps
+            points.append((int(round(a[0] + t * dx)),
+                           int(round(a[1] + t * dy))))
+    return points
+
+
 def centerline_path(start: tuple[int, int], end: tuple[int, int],
                     mask: np.ndarray, dt: np.ndarray
                     ) -> list[tuple[int, int]]:
@@ -710,15 +750,29 @@ def bake_letter(letter: str, font_path: Path
     resolved_anchors: list[list[tuple[str, tuple[int, int]]]] = []
 
     for i, spec in enumerate(specs, start=1):
-        path = spec.get("path") or []
-        if len(path) < 2:
-            raise ValueError(f"{letter} stroke {i}: path needs ≥2 anchors, "
-                             f"got {path!r}")
+        if "kind" in spec:
+            kind = spec["kind"]
+            names = spec.get("anchors") or []
+        elif "path" in spec:
+            kind = "curve"
+            names = spec["path"]
+        else:
+            raise ValueError(f"{letter} stroke {i}: spec needs 'kind' "
+                             f"+ 'anchors' or legacy 'path' key")
+        if len(names) < 2:
+            raise ValueError(f"{letter} stroke {i}: needs ≥2 anchors, "
+                             f"got {names!r}")
+        if kind not in ("line", "curve"):
+            raise ValueError(f"{letter} stroke {i}: unknown kind {kind!r}")
+        # Line endpoints land directly on the visual corner — no tip
+        # extension. Curves Dijkstra-route through ink and need tips
+        # inside the centerline body to avoid apex-curl hooks.
+        anchor_dt = dt if kind == "curve" else None
         anchors: list[tuple[int, int]] = []
         labelled: list[tuple[str, tuple[int, int]]] = []
-        for name in path:
+        for name in names:
             try:
-                pos = resolve_anchor(name, mask, bbox, dt=dt)
+                pos = resolve_anchor(name, mask, bbox, dt=anchor_dt)
             except (KeyError, ValueError) as e:
                 raise ValueError(
                     f"{letter} stroke {i}: anchor {name!r} failed — {e}"
@@ -727,17 +781,20 @@ def bake_letter(letter: str, font_path: Path
             labelled.append((name, pos))
         resolved_anchors.append(labelled)
 
-        chain: list[tuple[int, int]] = []
-        for si in range(len(anchors) - 1):
-            seg = centerline_path(anchors[si], anchors[si + 1], mask, dt)
-            for col, row in seg:
-                if not mask[row, col]:
-                    raise AssertionError(
-                        f"{letter} stroke {i} segment {si}: Dijkstra returned "
-                        f"off-ink pixel ({col}, {row})")
-            if chain and seg and chain[-1] == seg[0]:
-                seg = seg[1:]
-            chain.extend(seg)
+        if kind == "line":
+            chain = line_sampler(anchors)
+        else:
+            chain = []
+            for si in range(len(anchors) - 1):
+                seg = centerline_path(anchors[si], anchors[si + 1], mask, dt)
+                for col, row in seg:
+                    if not mask[row, col]:
+                        raise AssertionError(
+                            f"{letter} stroke {i} segment {si}: Dijkstra "
+                            f"returned off-ink pixel ({col}, {row})")
+                if chain and seg and chain[-1] == seg[0]:
+                    seg = seg[1:]
+                chain.extend(seg)
         stroke_pixel_chains.append(chain)
 
         resampled = resample_uniform(chain, CHECKPOINT_COUNT)
