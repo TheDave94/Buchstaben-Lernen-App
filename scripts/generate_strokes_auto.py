@@ -1074,16 +1074,65 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # Snap each anchor to the medial axis so the polyline runs
-            # half-stroke-width inset from every band edge — including
-            # caps. Small fillets at interior joints smooth the
-            # medial-axis vertex for animation without dominating the
-            # trace.
-            snapped = [
-                snap_to_medial_axis(p, mask, dt, skeleton,
-                                    letter=letter, anchor_name=n)
-                for p, n in zip(anchors, names)
-            ]
+            # Endpoints snap to the medial axis (lands ~half-stroke
+            # inside the cap). Interior joints would ALSO be there, but
+            # the fillet apex sits MAX_APEX_OFFSET px deeper along the
+            # inward bisector — that extra inset shows up as a visible
+            # gap to the cap at peaks/valleys. Place interior joints at
+            # (h − MAX_APEX_OFFSET) inward from the raw boundary
+            # anchor so the fillet apex lands at the same depth as the
+            # endpoint snap.
+            MAX_APEX_OFFSET = 5.0
+            mh, mw = mask.shape
+
+            def _snap_endpoint(p, n):
+                return snap_to_medial_axis(p, mask, dt, skeleton,
+                                           letter=letter, anchor_name=n)
+
+            def _cap_inset_joint(idx):
+                o = anchors[idx]
+                v1 = (anchors[idx - 1][0] - o[0],
+                      anchors[idx - 1][1] - o[1])
+                v2 = (anchors[idx + 1][0] - o[0],
+                      anchors[idx + 1][1] - o[1])
+                L1 = math.hypot(*v1); L2 = math.hypot(*v2)
+                if L1 < 1e-9 or L2 < 1e-9:
+                    return _snap_endpoint(o, names[idx])
+                bx = v1[0] / L1 + v2[0] / L2
+                by = v1[1] / L1 + v2[1] / L2
+                bl = math.hypot(bx, by)
+                if bl < 1e-6:
+                    return _snap_endpoint(o, names[idx])
+                ix, iy = bx / bl, by / bl
+                oc, orow = o
+                # 60×60 window (30 px each side) so dt_max captures the
+                # full band half-width even at narrow caps where the
+                # medial axis lies up to ~28 px from the outer corner.
+                # The radii loop's 30×30 window centered on the snapped
+                # vertex finds the same depth because the snap is at
+                # the medial axis; centered on the outer corner, a
+                # smaller window can't reach the medial axis.
+                r0 = max(0, orow - 30); r1 = min(mh, orow + 31)
+                c0 = max(0, oc - 30); c1 = min(mw, oc + 31)
+                h = (float(dt[r0:r1, c0:c1].max())
+                     if (r1 > r0 and c1 > c0) else 0.0)
+                d = h - MAX_APEX_OFFSET
+                if d <= 0.0:
+                    return _snap_endpoint(o, names[idx])
+                jx = oc + d * ix
+                jy = orow + d * iy
+                jc = int(round(jx)); jr = int(round(jy))
+                if (jr < 0 or jr >= mh or jc < 0 or jc >= mw
+                        or not mask[jr, jc]):
+                    return _snap_endpoint(o, names[idx])
+                return (jc, jr)
+
+            snapped: list[tuple[int, int]] = []
+            for i_a, (p, n) in enumerate(zip(anchors, names)):
+                if 0 < i_a < len(anchors) - 1:
+                    snapped.append(_cap_inset_joint(i_a))
+                else:
+                    snapped.append(_snap_endpoint(p, n))
             if len(snapped) >= 3:
                 # Cap the arc *apex offset* from the joint, not the
                 # radius itself. The apex of an inscribed fillet sits at
@@ -1093,7 +1142,6 @@ def bake_letter(letter: str, font_path: Path
                 # far from the snapped vertex. Inverting: pick r so the
                 # apex offset ≤ MAX_APEX_OFFSET px, then clamp by the
                 # local stroke half-width.
-                MAX_APEX_OFFSET = 5.0
                 h_, w_ = mask.shape
                 radii: list[float] = []
                 for j in range(1, len(snapped) - 1):
