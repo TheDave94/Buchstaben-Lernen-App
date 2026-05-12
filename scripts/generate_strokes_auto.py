@@ -192,13 +192,11 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "continuous", "anchors": ["BL", "TL", "BC", "TR", "BR"]},
     ],
     "N": [
-        # Phase 3 final. Verticals walk the post-split skeleton chains
-        # via named anchors (TL/BL/TR/BR skel-snap to per-arm tips).
-        # Diagonal uses `through` with TL/BR ink-snap — robust across
-        # fonts whose bbox corners may lie outside the ink. Zero tuples.
-        {"kind": "walk",    "from": "TL", "to": "BL"},
-        {"kind": "through", "from": "TL", "to": "BR"},
-        {"kind": "walk",    "from": "TR", "to": "BR"},
+        # Single-stroke continuous zigzag. Anchor order matches the
+        # worksheet anchor-tap pattern: BL → TL → BR → TR. BFS routes
+        # via the TL and BR corner stars assembled by
+        # SKELETON_OVERRIDES["N"]["extend_chains_to_anchors"].
+        {"kind": "continuous", "anchors": ["BL", "TL", "BR", "TR"]},
     ],
     "O": [
         {"kind": "loop", "start": "T", "direction": "ccw"},
@@ -228,13 +226,11 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
         {"kind": "walk", "from": "TR", "to": "BR"},
     ],
     "V": [
-        # Phase 3 final. Both diagonals `through` with TL/TR/BC
-        # ink-snap. Tangents inferred from endpoints. Both strokes
-        # share the BC apex pixel — kids' renderer fills the apex
-        # geometry via stroke-width overlap, not via shared centerline
-        # path. Zero tuples.
-        {"kind": "through", "from": "TL", "to": "BC"},
-        {"kind": "through", "from": "TR", "to": "BC"},
+        # Single-stroke continuous TL → BC → TR. BFS routes via the BC
+        # apex star assembled by SKELETON_OVERRIDES["V"][
+        # "extend_chains_to_anchors"]; drop_chains removed the
+        # vestigial apex-curl stub before extension.
+        {"kind": "continuous", "anchors": ["TL", "BC", "TR"]},
     ],
     "W": [
         {"kind": "continuous", "anchors": ["TL", "BL", "TC", "BR", "TR"]},
@@ -445,15 +441,33 @@ LETTER_OVERRIDES: dict[str, list[dict]] = {
 # vestigial branch, not a main stroke arm. N's apex-curls (59 / 431
 # = 13.7 %) are kept because they're legitimate top-of-vertical
 # extensions, not vestigial.
-# `stitch_collinear: True` adds a post-split pass that re-bridges chain
-# pairs whose cluster-side tangents are within 30° of opposite (i.e.,
-# they're collinear through the former cluster). N's TL apex-curl and
-# left vertical foot are two halves of one stroke — stitching produces
-# a single left-vertical chain instead of two stubs at the corner.
+# Operations applied in pipeline order: split → drop → stitch → extend
+# → bake_curves → (extend_tips, prune).
+#
+# `extend_chains_to_anchors` (per anchor): collapse each cluster into a
+# star — pick the anchor's raw raster target pixel as the shared center,
+# Bresenham-bridge every surviving deg-1 cluster-side cut-end to it.
+# The target becomes a deg=N junction; the lines stay deg-2. Used for
+# N/V/M/W corner & valley anchors where the pedagogical writing
+# convention treats arms as converging at a single corner.
+#
+# `bake_bridges_as_curves` (mutually exclusive with extend in practice):
+# rasterise cubic Beziers between every deg-1 cut-end pair in a cluster
+# directly into the skeleton. Used for b's bowl/stem junction where
+# arms aren't collinear and pedagogical convention is two distinct
+# strokes connected by a smooth corner.
 SKELETON_OVERRIDES: dict[str, dict] = {
-    "N": {"split_junctions": True, "stitch_collinear": True},
-    "V": {"split_junctions": True, "drop_chains": ["short_stub"]},
-    "b": {"split_junctions": True},
+    "N": {"split_junctions": True,
+          "extend_chains_to_anchors": ["TL", "BR"]},
+    "V": {"split_junctions": True,
+          "drop_chains": ["short_stub"],
+          "extend_chains_to_anchors": ["BC"]},
+    "M": {"split_junctions": True,
+          "extend_chains_to_anchors": ["TL", "BC", "TR"]},
+    "W": {"split_junctions": True,
+          "extend_chains_to_anchors": ["TL", "BL", "TC", "BR", "TR"]},
+    "b": {"split_junctions": True,
+          "bake_bridges_as_curves": True},
 }
 
 
@@ -866,6 +880,289 @@ def drop_short_stub_chains(skel: np.ndarray,
     new_skel = skel.copy()
     for (cc, rr) in to_remove:
         new_skel[rr, cc] = False
+    return new_skel
+
+
+def _can_remove_without_disconnect(p: tuple[int, int],
+                                   skel_set: set[tuple[int, int]],
+                                   star_center: tuple[int, int],
+                                   search_bound_px: int,
+                                   cx: int, cy: int) -> bool:
+    """Global-BFS connectivity test for thin_around_star. Removes p
+    from skel_set virtually, then checks that every foreground 8-
+    neighbour of p still reaches `star_center` via a bounded BFS
+    (within `search_bound_px` Chebyshev from (cx, cy)). Returns True
+    iff all neighbours still reach the star — i.e., p is safe to
+    remove without disconnecting any chain from the convergence point.
+
+    Less conservative than the simple-point test: 3 lines crossing at
+    a pixel can pass even if their neighbours aren't 8-adjacent locally,
+    because each line still reaches the star independently."""
+    nbrs = [(p[0] + dc, p[1] + dr) for dr, dc in NEIGHBOURS_8
+            if (p[0] + dc, p[1] + dr) in skel_set]
+    if len(nbrs) < 2:
+        return True
+    test_set = skel_set - {p}
+    for n in nbrs:
+        if n == star_center:
+            continue
+        # Bounded BFS from n looking for star_center.
+        visited = {n}
+        stack = [n]
+        found = False
+        while stack:
+            cur = stack.pop()
+            if cur == star_center:
+                found = True
+                break
+            for dr, dc in NEIGHBOURS_8:
+                nxt = (cur[0] + dc, cur[1] + dr)
+                if nxt in test_set and nxt not in visited:
+                    if (abs(nxt[0] - cx) <= search_bound_px
+                            and abs(nxt[1] - cy) <= search_bound_px):
+                        visited.add(nxt)
+                        stack.append(nxt)
+        if not found:
+            return False
+    return True
+
+
+def thin_around_star(skel: np.ndarray,
+                     star_center: tuple[int, int],
+                     radius_px: int = 100,
+                     ) -> np.ndarray:
+    """Topological thinning of deg≥3 junctions in the neighbourhood of
+    a star center. Iteratively removes deg-3+ pixels whose removal
+    doesn't disconnect any neighbour from the star_center (verified by
+    bounded global BFS within ~3× radius). The star_center itself is
+    preserved so all chains keep their convergence point.
+
+    After thinning, the star center is the unique high-degree pixel in
+    its neighbourhood; everything else along the convergence lines is
+    deg-2 (chain interior) or deg-1 (chain endpoint at the star)."""
+    cx, cy = star_center
+    search_bound = radius_px * 3
+    changed = True
+    iterations = 0
+    while changed and iterations < 50:
+        changed = False
+        iterations += 1
+        sk_rows, sk_cols = np.where(skel)
+        skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
+        candidates = []
+        for p in skel_set:
+            if p == star_center:
+                continue
+            if abs(p[0] - cx) > radius_px or abs(p[1] - cy) > radius_px:
+                continue
+            nbrs_count = sum(1 for dr, dc in NEIGHBOURS_8
+                             if (p[0] + dc, p[1] + dr) in skel_set)
+            if nbrs_count >= 3:
+                candidates.append(p)
+        candidates.sort()
+        for p in candidates:
+            sk_rows2, sk_cols2 = np.where(skel)
+            current_set = set(zip(sk_cols2.tolist(), sk_rows2.tolist()))
+            if p not in current_set:
+                continue
+            nbrs_count = sum(1 for dr, dc in NEIGHBOURS_8
+                             if (p[0] + dc, p[1] + dr) in current_set)
+            if nbrs_count < 3:
+                continue
+            if _can_remove_without_disconnect(
+                    p, current_set, star_center, search_bound, cx, cy):
+                skel[p[1], p[0]] = False
+                changed = True
+    return skel
+
+
+def extend_chains_to_anchors(skel: np.ndarray,
+                             cluster_chains_info: list[list[dict]],
+                             anchor_names: list,
+                             bbox: tuple[int, int, int, int],
+                             extend_threshold_rel: float = 0.40,
+                             thinning_radius_px: int | None = None,
+                             ) -> tuple[np.ndarray, set[tuple[int, int]]]:
+    """For each named anchor, collapse the nearest cluster into a star
+    around the anchor's raw raster target. Every surviving deg-1
+    cluster-side cut-end within `extend_threshold_rel × max(bbox_w,
+    bbox_h)` of the target gets a Bresenham line to the target. All
+    lines share the target pixel, so the target becomes a deg=N
+    junction and the lines themselves stay deg-2. Pedagogically the
+    star = "single corner where N strokes converge."
+
+    A "surviving cluster-side cut-end" is the first pixel of full_chain
+    still in skel AND with deg=1. Stitched cut-ends are deg≥2 and
+    don't qualify; their chains skip this op.
+
+    Returns (new_skel, extended_cut_ends_rc) where extended_cut_ends_rc
+    is a set of (row, col) cut-end pixels for the caller to add to
+    no_extend_pixels (extend_tips_to_outline shouldn't grow them
+    further since they now feed into a star instead of pointing into
+    free space)."""
+    new_skel = skel.copy()
+    rows_max, cols_max = skel.shape
+    bbox_w = max(1, bbox[2] - bbox[0])
+    bbox_h = max(1, bbox[3] - bbox[1])
+    threshold_px = extend_threshold_rel * max(bbox_w, bbox_h)
+    # Default thinning radius = the extension threshold so the funnel
+    # from cluster to anchor target is fully thinnable.
+    effective_thinning_radius = (thinning_radius_px
+                                 if thinning_radius_px is not None
+                                 else int(threshold_px))
+    extended_cut_ends_rc: set[tuple[int, int]] = set()
+
+    for anchor in anchor_names:
+        target = resolve_anchor_raw(anchor, bbox)
+        sk_rows, sk_cols = np.where(new_skel)
+        skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
+
+        def deg(col: int, row: int) -> int:
+            return sum(1 for dr, dc in NEIGHBOURS_8
+                       if (col + dc, row + dr) in skel_set)
+
+        # Collect candidates: chains with surviving deg-1 cluster-side
+        # cut-ends within threshold of the anchor target. Track each
+        # chain's full pixel set so we can exclude it from the
+        # adjacency snapshot during its own extension walk (otherwise
+        # the line would stop instantly on its own chain interior).
+        candidates: list[dict] = []
+        for chains in cluster_chains_info:
+            for c in chains:
+                cut_end: tuple[int, int] | None = None
+                for col, row in c["full_chain"]:
+                    if (col, row) in skel_set:
+                        if deg(col, row) == 1:
+                            cut_end = (col, row)
+                        break
+                if cut_end is None:
+                    continue
+                d = math.hypot(target[0] - cut_end[0],
+                               target[1] - cut_end[1])
+                if d > threshold_px:
+                    continue
+                candidates.append({"cut_end": cut_end,
+                                   "dist": d,
+                                   "own_chain": set(c["full_chain"])})
+
+        # Sort ascending: closest extends first, fully reaching the
+        # target. Subsequent candidates walk until they touch the
+        # snapshot (prior extensions + other chains), collapsing the
+        # convergence funnel to single-pixel contact points.
+        candidates.sort(key=lambda c: c["dist"])
+
+        for cand in candidates:
+            cut_end = cand["cut_end"]
+            sk_rows, sk_cols = np.where(new_skel)
+            snapshot = set(zip(sk_cols.tolist(), sk_rows.tolist()))
+            snapshot -= cand["own_chain"]
+            snapshot.discard(cut_end)
+            line = _line_pixels(cut_end, target)
+            for i, pix in enumerate(line):
+                if i == 0:
+                    continue  # line[0] is the cut-end itself
+                col, row = pix
+                if not (0 <= row < rows_max and 0 <= col < cols_max):
+                    break
+                new_skel[row, col] = True
+                if pix == target:
+                    break
+                # Stop on first 8-adjacency with the pre-extension
+                # snapshot — meets an existing chain or earlier line.
+                touched_snapshot = False
+                for dr, dc in NEIGHBOURS_8:
+                    if (col + dc, row + dr) in snapshot:
+                        touched_snapshot = True
+                        break
+                if touched_snapshot:
+                    break
+            extended_cut_ends_rc.add((cut_end[1], cut_end[0]))
+
+        # Topological thinning around this star center to clean any
+        # residual deg≥3 junctions at the contact points and along
+        # whatever overlap the short stubs caused.
+        if candidates:
+            new_skel = thin_around_star(new_skel, target,
+                                        radius_px=effective_thinning_radius)
+    return new_skel, extended_cut_ends_rc
+
+
+def bake_bridges_as_curves(skel: np.ndarray,
+                           cluster_chains_info: list[list[dict]],
+                           tangent_window: int = 8,
+                           n_samples: int = 30,
+                           ) -> np.ndarray:
+    """Replace virtual bridgeEdges with cubic Bezier curve pixels baked
+    into the skeleton. For every surviving deg-1 cut-end pair within a
+    cluster, fit a cubic Bezier with control points at half the chord
+    length along each end's exit tangent, then rasterise it as a
+    continuous 8-connected chain (Bresenham-bridge between consecutive
+    sample pixels — per-sample rounding alone leaves gaps because
+    adjacent samples may not be 8-adjacent).
+
+    Used by b's bowl/stem junction where the chains aren't collinear
+    (stitch wouldn't fire) and the pedagogical writing convention
+    treats them as connected via a smooth corner."""
+    new_skel = skel.copy()
+    rows_max, cols_max = skel.shape
+    sk_rows, sk_cols = np.where(new_skel)
+    skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
+
+    def deg(col: int, row: int) -> int:
+        return sum(1 for dr, dc in NEIGHBOURS_8
+                   if (col + dc, row + dr) in skel_set)
+
+    for chains in cluster_chains_info:
+        chain_data: list[dict] = []
+        for c in chains:
+            for i, p in enumerate(c["full_chain"]):
+                if p in skel_set:
+                    if deg(p[0], p[1]) == 1:
+                        back_idx = i + tangent_window
+                        if back_idx >= len(c["full_chain"]):
+                            back_idx = len(c["full_chain"]) - 1
+                        if back_idx > i:
+                            back = c["full_chain"][back_idx]
+                            tdx = p[0] - back[0]
+                            tdy = p[1] - back[1]
+                            n = math.hypot(tdx, tdy)
+                            if n > 1e-9:
+                                chain_data.append({
+                                    "cut_end": p,
+                                    "tdx": tdx / n,
+                                    "tdy": tdy / n,
+                                })
+                    break
+        for i in range(len(chain_data)):
+            for j in range(i + 1, len(chain_data)):
+                a = chain_data[i]
+                b = chain_data[j]
+                ax, ay = a["cut_end"]
+                bx, by = b["cut_end"]
+                d = math.hypot(bx - ax, by - ay)
+                ctrl_len = 0.5 * d
+                cp1_x = ax + ctrl_len * a["tdx"]
+                cp1_y = ay + ctrl_len * a["tdy"]
+                cp2_x = bx + ctrl_len * b["tdx"]
+                cp2_y = by + ctrl_len * b["tdy"]
+                prev_pix: tuple[int, int] | None = None
+                for k in range(n_samples + 1):
+                    t = k / n_samples
+                    u = 1 - t
+                    px = (u**3 * ax + 3 * u**2 * t * cp1_x
+                          + 3 * u * t**2 * cp2_x + t**3 * bx)
+                    py = (u**3 * ay + 3 * u**2 * t * cp1_y
+                          + 3 * u * t**2 * cp2_y + t**3 * by)
+                    cur_pix = (int(round(px)), int(round(py)))
+                    if prev_pix is None:
+                        ic, ir = cur_pix
+                        if 0 <= ir < rows_max and 0 <= ic < cols_max:
+                            new_skel[ir, ic] = True
+                    elif cur_pix != prev_pix:
+                        for (col, row) in _line_pixels(prev_pix, cur_pix):
+                            if 0 <= row < rows_max and 0 <= col < cols_max:
+                                new_skel[row, col] = True
+                    prev_pix = cur_pix
     return new_skel
 
 
@@ -2159,6 +2456,14 @@ def generate_for_letter(letter: str, font_path: Path,
     mask = rasterize(letter, font_path)
     skel = morph.skeletonize(mask)
 
+    # bbox from ink mask, computed before the skeleton-restructuring
+    # block since extend_chains_to_anchors needs it inside the block.
+    rows_m, cols_m = np.where(mask)
+    if len(rows_m) == 0:
+        raise ValueError(f"Empty glyph for {letter!r}")
+    bbox = (int(cols_m.min()), int(rows_m.min()),
+            int(cols_m.max()), int(rows_m.max()))
+
     # Phase 3 skeleton restructuring: split junctions before extending,
     # then pass the cut-end pixel positions to the extender so it skips
     # them (they point back into former cluster territory; extending
@@ -2173,19 +2478,20 @@ def generate_for_letter(letter: str, font_path: Path,
             skel = drop_short_stub_chains(skel, cluster_chains, ratio=0.20)
         if spec.get("stitch_collinear"):
             skel = stitch_collinear_chains(skel, cluster_chains)
-        no_extend_pixels = cluster_chains_cut_ends(skel, cluster_chains)
+        if "extend_chains_to_anchors" in spec:
+            skel, extended_ce = extend_chains_to_anchors(
+                skel, cluster_chains,
+                spec["extend_chains_to_anchors"], bbox)
+            no_extend_pixels |= extended_ce
+        if spec.get("bake_bridges_as_curves"):
+            skel = bake_bridges_as_curves(skel, cluster_chains)
+        no_extend_pixels |= cluster_chains_cut_ends(skel, cluster_chains)
 
     skel = extend_tips_to_outline(skel, ink_mask=mask,
                                   max_extension=MAX_TIP_EXTENSION,
                                   tangent_window=TANGENT_WINDOW,
                                   no_extend_pixels=no_extend_pixels)
     skel = prune_skeleton_spurs(skel, max_spur_length=MAX_SPUR_LENGTH)
-
-    rows, cols = np.where(mask)
-    if len(rows) == 0:
-        raise ValueError(f"Empty glyph for {letter!r}")
-    bbox = (int(cols.min()), int(rows.min()),
-            int(cols.max()), int(rows.max()))
 
     used_override = False
     raw_strokes = strokes_from_override(letter, mask, skel, bbox)
@@ -2245,8 +2551,11 @@ def generate_for_letter(letter: str, font_path: Path,
     # for anchor-snap BFS — they're invisible in the red-dot viz.
     # Stitched clusters need no bridges (the stitch added real skeleton
     # pixels that connect cut-ends through the cluster gap).
+    # bake_bridges_as_curves writes the bridges directly into the
+    # skeleton (visible in viz, included in skeletonAdj). The
+    # routing-only bridgeEdges field is suppressed in that case.
     bridge_edges: list[list[int]] = []
-    if cluster_chains:
+    if cluster_chains and not spec.get("bake_bridges_as_curves"):
         sk_set_final = set(zip(sk_cols_full.tolist(), sk_rows_full.tolist()))
 
         def _deg(col: int, row: int) -> int:
