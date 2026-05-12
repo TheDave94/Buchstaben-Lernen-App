@@ -613,11 +613,7 @@ def fillet_arc(p_prev: tuple[float, float],
     with the given `radius`. Returns the arc as a list of `(x, y)`
     floats sampled at ~1 px arc-length spacing, with both tangent points
     included exactly as the first and last elements. Returns `[p_joint]`
-    on a near-straight (≈π) or degenerate (≈0) corner.
-
-    Superseded by Phase 2.0 — the renderer's round line joins produce
-    the visible curve at joints from a sharp polyline vertex. Kept for
-    potential future use where an explicit centerline arc is needed."""
+    on a near-straight (≈π) or degenerate (≈0) corner."""
     jx, jy = float(p_joint[0]), float(p_joint[1])
     v1 = (float(p_prev[0]) - jx, float(p_prev[1]) - jy)
     v2 = (float(p_next[0]) - jx, float(p_next[1]) - jy)
@@ -680,16 +676,16 @@ def polyline_with_filleted_joints(
     one per interior joint). Straight portions are line-sampled; arcs
     arrive pre-sampled at ~1 px from `fillet_arc`.
 
+    With anchors at the glyph's visible outer corners (Phase 2.1), the
+    inscribed fillet at each interior joint places its arc right at the
+    corner's rounded outline — radius = local stroke half-width matches
+    Prima's outer-corner rounding radius.
+
     Per-joint radius is capped down so each tangent point sits at most
     45 % of the way along its adjoining segment — prevents an arc from
-    swallowing an entire short segment when the snapped centerline runs
-    are tight (e.g. M's narrow valley). A capping event prints an info
-    line. A joint with radius 0 / degenerate geometry stays sharp.
-
-    Superseded by Phase 2.0 — sharp polyline vertices rendered with
-    `lineJoin: .round` produce the same visible joint curve. Kept for
-    potential future use where the centerline geometry itself needs
-    to encode the fillet (e.g. variable-width strokes)."""
+    swallowing an entire short segment when the chord runs are tight
+    (e.g. M's narrow valley). A capping event prints an info line. A
+    joint with radius 0 / degenerate geometry stays sharp."""
     n = len(positions)
     if n < 2:
         return [(int(round(p[0])), int(round(p[1]))) for p in positions]
@@ -1082,13 +1078,27 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # Boundary-resolver anchors at visible outer corners produce
-            # a polyline whose chords run through the band centerline by
-            # construction (for uniform-width Prima). Straight chords,
-            # no snap, no fillet, no endpoint extension — the polyline
-            # IS the trace path; the renderer strokes it thick with
-            # rounded caps to produce the visible glyph.
-            chain = line_sampler(anchors)
+            # Anchors sit at the glyph's visible outer corners. Chords
+            # between consecutive anchors run through each band's
+            # centerline; interior joints get an inscribed fillet whose
+            # radius = local stroke half-width — placing the arc at the
+            # corner's rounded outline so the centerline curves smoothly
+            # through the visible corner.
+            if len(anchors) >= 3:
+                h_, w_ = mask.shape
+                radii: list[float] = []
+                for j in range(1, len(anchors) - 1):
+                    ac, ar = anchors[j]
+                    r0 = max(0, ar - 15); r1 = min(h_, ar + 16)
+                    c0 = max(0, ac - 15); c1 = min(w_, ac + 16)
+                    if r1 <= r0 or c1 <= c0:
+                        radii.append(0.0)
+                    else:
+                        radii.append(float(dt[r0:r1, c0:c1].max()))
+                chain = polyline_with_filleted_joints(
+                    [(float(p[0]), float(p[1])) for p in anchors], radii)
+            else:
+                chain = line_sampler(anchors)
         else:
             chain = []
             for si in range(len(anchors) - 1):
