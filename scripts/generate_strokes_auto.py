@@ -1,47 +1,51 @@
-"""Per-font stroke generator with worksheet ground-truth overrides.
+"""Polyline-based stroke generator for Primae.
 
-Two modes per letter:
+Each letter is authored as one or more polylines — short lists of
+bbox-relative (x, y) tuples. Every polyline becomes one stroke in
+strokes.json; consecutive tuples within a polyline are connected via
+Bresenham line rasterisation. The dense pixel sequence is then
+resampled to a fixed checkpoint count.
 
-1. **Override** (LETTER_OVERRIDES): the Wiener Bildungsserver
-   "Arbeitsblätter Druckschrift" worksheet specifies stroke count,
-   start anchor and direction for every letter. When an override
-   exists, we resolve each anchor against the rasterised skeleton
-   and BFS-walk between them. This pins the OUTPUT order and shape
-   to what's taught in Austrian Volksschule 1. Klasse, regardless
-   of how the font's skeleton happens to branch.
+Why we abandoned the medial-axis approach: skimage.skeletonize is a
+faithful geometric reduction of the rendered glyph ink, but the
+pedagogical decomposition of a letter into pen-strokes doesn't follow
+medial-axis topology. Y-junctions appear at outer corners (N, M, W),
+stems bend toward bowl-stem merge zones (b, p, d), and apex stubs
+litter sharp corners. Months of patching (split, stitch, extend,
+straighten, thinning) accumulated complexity without converging on
+clean output. Hand-authored polylines bypass the geometry mismatch
+entirely: the author encodes intended stroke order, direction, and
+shape directly.
 
-2. **Auto fallback**: skeletonise, walk every connected component,
-   split at branches and merge collinear/2-incidents corners,
-   order by component centroid. Used when no override exists OR
-   when the override walker fails (e.g. an anchor is unreachable
-   on this particular font's geometry).
+Pipeline per letter:
 
-Coordinates are glyph-bbox-relative ([0, 1] within the rendered
-glyph's bounding rect). The iOS renderer maps them through
-`normalizedGlyphRect` so cell aspect ratio and orientation don't
-affect alignment.
+  1. Rasterise the glyph via `rasterize`; compute the bbox from ink.
+  2. Convert every polyline tuple to a raster pixel via the bbox and
+     verify each lies inside the ink mask. If any tuple falls in
+     whitespace the bake aborts, reporting which letter / polyline /
+     tuple is bad so the author can correct the offending coord.
+  3. Walk Bresenham between consecutive tuples to a dense pixel chain.
+  4. Resample each chain uniformly to `CHECKPOINT_COUNT` points.
+  5. Skeleton field = deduplicated union of all polyline pixels.
+  6. skeletonAdj = 8-connected adjacency over those pixels (trivial,
+     since they come from Bresenham-connected polylines).
+  7. Emit strokes.json — schema unchanged from the medial-axis era.
 
 Usage:
-    pip install Pillow numpy scipy scikit-image
-    python scripts/generate_strokes_auto.py            # all letters
-    python scripts/generate_strokes_auto.py A E O      # subset
-    python scripts/generate_strokes_auto.py --font /path/to/Other.otf
-    python scripts/generate_strokes_auto.py --debug A  # save overlay PNG
+    pip install Pillow numpy
+    python scripts/generate_strokes_auto.py            # all authored
+    python scripts/generate_strokes_auto.py N V M      # subset
+    python scripts/generate_strokes_auto.py --debug N  # save PNG
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
-import heapq
 import json
-import math
-from collections import defaultdict, deque
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-import skimage.morphology as morph
-import skimage.measure as measure
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FONT = REPO_ROOT / "design-system/fonts/Primae-Regular.otf"
@@ -50,443 +54,90 @@ OUTPUT_BASE = REPO_ROOT / "PrimaeNative/Resources/Letters"
 SIZE = 1024
 PAD = 0.10
 DEFAULT_RADIUS = 0.05
-# Curvature-adaptive sampling. Straights get a checkpoint every
-# `BASE_SPACING_PX`; curves (local angle change > `CURVE_ANGLE_DEG`)
-# get one every `CURVE_SPACING_PX` (3× denser). Paths shorter than
-# `DOT_LENGTH_THRESHOLD_PX` collapse to a single checkpoint at the
-# midpoint — i / j dots and umlaut dots are tap-targets, not traced
-# strokes, so 15 waypoints over 5 px of skeleton was overkill.
-BASE_SPACING_PX = 12
-CURVE_SPACING_PX = 4
-CURVE_ANGLE_DEG = 15
-CURVE_WINDOW_PX = 6
-MIN_CHECKPOINTS_PER_STROKE = 3
-DOT_LENGTH_THRESHOLD_PX = 30
-MERGE_ANGLE_THRESHOLD_DEG = 35  # segments within 35° of collinear get merged
+CHECKPOINT_COUNT = 40
 
 NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
                 ( 0, -1),          ( 0, 1),
                 ( 1, -1), ( 1, 0), ( 1, 1))
 
-# Spur-pruning post-process for the baked skeleton.
-# morph.skeletonize produces small T-junction branches at thick-stroke
-# meeting points (visible on M, A in the Primae font). The Swift runtime
-# uses 8 nodes at 256² (~32 px equivalent at 1024²); we use 24 here as
-# a conservative threshold confirmed by empirical calibration to cleanly
-# remove M's 10/20/21-px artifacts and A's 20-px artifact while leaving
-# Q's 95-px tail, F's 158-px crossbar, t's 51-px crossbar, and i/j/ä
-# tittle components untouched.
-MAX_SPUR_LENGTH = 24
-
-# Tip-extension parameters. Mirror of the Swift runtime's
-# extendTipsToOutline. 60 raster pixels at 1024² is the practical
-# cap — empirically no in-the-bundle tip extension reaches it, so
-# it's a runaway-walk guard rather than a routine limit. Tangent
-# window 8 smooths the direction estimate over the 4× higher
-# resolution; Swift used 1-back which would be jitter-sensitive at
-# 1024².
-MAX_TIP_EXTENSION = 60
-TANGENT_WINDOW = 8
-
-# Lowercase folder suffix dodges APFS / HFS+ case-insensitive collision
-# with their uppercase counterparts.
+# APFS / HFS+ folders are case-insensitive — uppercase and lowercase
+# letter directories collide without a suffix.
 LOWERCASE_SUFFIX = "_l"
 
 
 # -----------------------------------------------------------------------------
-# Worksheet ground-truth overrides
+# Hand-authored stroke decompositions
 # -----------------------------------------------------------------------------
 #
-# Encodes the stroke count, start anchor, and direction taught in the
-# Wiener Bildungsserver "Arbeitsblätter Druckschrift" PDF. Each entry
-# is a list of strokes in writing order. Three primitives:
+# Data structure: LETTERS[letter] is a list of polylines; each polyline is a
+# list of (rel_x, rel_y) tuples in glyph-bbox-relative [0, 1] coordinates.
+# One polyline = one pen-stroke a child draws.
 #
-#   {"kind": "walk", "from": ANCHOR, "to": ANCHOR}
-#     → BFS-shortest path along the skeleton between two anchors.
+# Authoring philosophy: each polyline traces a single uninterrupted pen-down
+# motion in the order taught by the Wiener Bildungsserver "Arbeitsblätter
+# Druckschrift" worksheets. Sharp corners between strokes (e.g. M's apexes,
+# W's valleys) live as adjacent tuples within one continuous polyline.
+# Genuinely separate strokes (b's stem vs. bowl, A's verticals vs. crossbar)
+# become separate entries in the list.
 #
-#   {"kind": "continuous", "anchors": [ANCHOR, ...]}
-#     → Chain of BFS walks through anchors in order. Used for letters
-#       written as one continuous zigzag (M, N, V, W, Z, U).
-#
-#   {"kind": "loop", "start": ANCHOR, "direction": "ccw"|"cw"}
-#     → Walk a closed cycle starting at the anchor's nearest skeleton
-#       pixel. Direction is enforced via shoelace sign.
-#
-# ANCHOR is one of:
-#   "TL" "TR" "BL" "BR"      bbox corners
-#   "TC"="T" "BC"="B"        top/bottom centre
-#   "ML"="L" "MR"="R"        mid-left / mid-right
-#   "C"                      bbox centre
-#   (x, y)                   normalised tuple in [0, 1] of bbox
-#
-# Conventions captured (Austrian-specific where they differ):
-#   • A: bottom-left UP to apex first, then apex DOWN to BR, then crossbar
-#   • M, N, V, W, Z: single continuous zigzag starting at BL (or TL for V)
-#   • E, F: spine first, then horizontals top-to-bottom
-#   • H: left vertical, right vertical, crossbar (3 strokes)
-#   • h, n, m: arch starts at the bottom-right of the arch going UP
-#   • J: top cap then descending hook (2 strokes)
-#   • U: single continuous bowl
-#   • Ä Ö Ü ä ö ü: body strokes first, then dots left-to-right
+# Font portability: tuple values are calibrated for Primae-Regular.otf at
+# SIZE=1024 / PAD=0.10. Other fonts whose stem widths or proportions differ
+# may require re-eyeballing the tuples — the bake aborts with a per-tuple
+# report if any value falls outside the new font's ink.
 
-LETTER_OVERRIDES: dict[str, list[dict]] = {
-    # ─── Uppercase ────────────────────────────────────────────────────
-    "A": [
-        {"kind": "walk", "from": "BL", "to": "TC"},
-        {"kind": "walk", "from": "TC", "to": "BR"},
-        {"kind": "walk", "from": "ML", "to": "MR"},
-    ],
-    "B": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TL", "TR", "MR", "ML"]},
-        {"kind": "continuous", "anchors": ["ML", "MR", "BR", "BL"]},
-    ],
-    "C": [
-        {"kind": "walk", "from": "TR", "to": "BR"},
-    ],
-    "D": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TL", "MR", "BL"]},
-    ],
-    "E": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "walk", "from": "TL", "to": "TR"},
-        {"kind": "walk", "from": "ML", "to": "MR"},
-        {"kind": "walk", "from": "BL", "to": "BR"},
-    ],
-    "F": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "walk", "from": "TL", "to": "TR"},
-        {"kind": "walk", "from": "ML", "to": "MR"},
-    ],
-    "G": [
-        {"kind": "continuous", "anchors": ["TR", "L", "B", "BR"]},
-        {"kind": "walk", "from": "BR", "to": "MR"},
-        {"kind": "walk", "from": "MR", "to": "C"},
-    ],
-    "H": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "walk", "from": "TR", "to": "BR"},
-        {"kind": "walk", "from": "ML", "to": "MR"},
-    ],
-    "I": [
-        {"kind": "walk", "from": "T", "to": "B"},
-    ],
-    "J": [
-        {"kind": "walk", "from": "TL", "to": "TR"},
-        {"kind": "continuous", "anchors": ["TR", "BR", "BC", "BL"]},
-    ],
-    "K": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        # K's diagonals are a separate skeleton component from the
-        # vertical (ML lands on the vertical component, breaking BFS
-        # bridge). Anchor the junction directly via a tuple inside the
-        # diagonals component.
-        {"kind": "walk", "from": "TR", "to": (0.30, 0.50)},
-        {"kind": "walk", "from": (0.30, 0.50), "to": "BR"},
-    ],
-    "L": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
-    ],
-    "M": [
-        {"kind": "continuous", "anchors": ["BL", "TL", "BC", "TR", "BR"]},
-    ],
+LETTERS: dict[str, list[list[tuple[float, float]]]] = {
     "N": [
-        # Single-stroke continuous zigzag. Anchor order matches the
-        # worksheet anchor-tap pattern: BL → TL → BR → TR. BFS routes
-        # via the TL and BR corner stars assembled by
-        # SKELETON_OVERRIDES["N"]["extend_chains_to_anchors"].
-        {"kind": "continuous", "anchors": ["BL", "TL", "BR", "TR"]},
-    ],
-    "O": [
-        {"kind": "loop", "start": "T", "direction": "ccw"},
-    ],
-    "P": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TL", "TR", "MR", "ML"]},
-    ],
-    "Q": [
-        {"kind": "loop", "start": "T", "direction": "ccw"},
-        {"kind": "walk", "from": "C", "to": "BR"},
-    ],
-    "R": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TL", "TR", "MR", "ML"]},
-        {"kind": "walk", "from": "ML", "to": "BR"},
-    ],
-    "S": [
-        {"kind": "walk", "from": "TR", "to": "BL"},
-    ],
-    "T": [
-        {"kind": "walk", "from": "TL", "to": "TR"},
-        {"kind": "walk", "from": "T", "to": "B"},
-    ],
-    "U": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR", "TR"]},
-        {"kind": "walk", "from": "TR", "to": "BR"},
+        # Three strokes meeting at corners. Both verticals go top-to-
+        # bottom; the diagonal runs TL to BR. Children draw all three
+        # separately, pen-up between each.
+        [(0.14, 0.00), (0.05, 1.00)],
+        [(0.14, 0.00), (0.86, 1.00)],
+        [(0.95, 0.00), (0.86, 1.00)],
     ],
     "V": [
-        # Single-stroke continuous TL → BC → TR. BFS routes via the BC
-        # apex star assembled by SKELETON_OVERRIDES["V"][
-        # "extend_chains_to_anchors"]; drop_chains removed the
-        # vestigial apex-curl stub before extension.
-        {"kind": "continuous", "anchors": ["TL", "BC", "TR"]},
+        # Single-stroke zigzag: TL diagonal down to apex, back up to TR.
+        # Waypoints sit on the diagonal-stripe centerlines (not bbox
+        # corners) so straight chords stay inside the ink.
+        [(0.076, 0.000), (0.42, 0.95), (0.93, 0.000)],
+    ],
+    "M": [
+        # Single-stroke zigzag: BL up to TL, diagonal down to BC valley,
+        # up to TR, down to BR. Every waypoint on the vertical / diagonal
+        # stripe centerlines — TL at 0.196 not 0.10 because the Primae
+        # M's TL serif insets the ink start.
+        [(0.044, 1.000), (0.196, 0.000), (0.500, 0.947),
+         (0.911, 0.000), (0.948, 1.000)],
     ],
     "W": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "TC", "BR", "TR"]},
-    ],
-    "X": [
-        {"kind": "walk", "from": "TL", "to": "BR"},
-        {"kind": "walk", "from": "TR", "to": "BL"},
-    ],
-    "Y": [
-        {"kind": "walk", "from": "TL", "to": "C"},
-        {"kind": "continuous", "anchors": ["TR", "C", "B"]},
-    ],
-    "Z": [
-        {"kind": "walk", "from": "TL", "to": "TR"},
-        {"kind": "walk", "from": "TR", "to": "BL"},
-        {"kind": "walk", "from": "BL", "to": "BR"},
-    ],
-
-    # ─── Lowercase ────────────────────────────────────────────────────
-    "a": [
-        {"kind": "loop", "start": "T", "direction": "ccw"},
-        {"kind": "walk", "from": "TR", "to": "BR"},
+        # Single-stroke zigzag: TL down to BL, up to TC apex, down to BR,
+        # up to TR. Coordinates nudged a few thousandths off the bbox
+        # edges so the corner waypoints land on ink.
+        [(0.05, 0.00), (0.244, 0.994), (0.50, 0.10), (0.719, 0.977), (0.949, 0.002)],
     ],
     "b": [
-        # Phase 3 final. Stem walks the stem chain end-to-end. T snaps
-        # via the standard skel-snap resolver to the stem-top tip.
-        # (0.105, 0.646) is a font-calibration tuple — represents the
-        # cluster-side cut-end position for THIS font. Skel-snap finds
-        # the nearest stem-chain pixel; small font variation tolerated.
-        # Re-probe per font if cut-end geometry shifts significantly.
-        {"kind": "walk", "from": "T", "to": (0.105, 0.646)},
-        # Bowl: open chain from upper cut-end through bowl arc to lower
-        # cut-end. Three tuple waypoints are font-calibration values —
-        # bowl arc geometry varies per font. MR/BC are portable named
-        # anchors that resolve to bowl-loop centerlines on any font with
-        # a roughly oval bowl.
-        {"kind": "continuous", "anchors": [
-            (0.159, 0.650),   # font-calibration: bowl-upper cut-end vicinity
-            (0.4, 0.45),      # font-calibration: upper-left bowl arc
-            "MR",
-            "BC",
-            (0.100, 0.685),   # font-calibration: bowl-lower cut-end vicinity
-        ]},
-    ],
-    "c": [
-        {"kind": "walk", "from": "TR", "to": "BR"},
-    ],
-    "d": [
-        {"kind": "loop", "start": "T", "direction": "ccw"},
-        {"kind": "walk", "from": "TR", "to": "BR"},
-    ],
-    "e": [
-        {"kind": "continuous", "anchors": ["ML", "MR", "T", "L", "B", "BR"]},
-    ],
-    "f": [
-        {"kind": "continuous", "anchors": ["TR", "TC", "TL", "BL"]},
-        {"kind": "walk", "from": "ML", "to": "MR"},
-    ],
-    "g": [
-        {"kind": "loop", "start": "T", "direction": "ccw"},
-        {"kind": "walk", "from": "TR", "to": "BL"},
-    ],
-    "h": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "walk", "from": "BR", "to": "ML"},
-    ],
-    "i": [
-        # Body starts below the dot (~y=0.3); using "T" lands on the
-        # dot, which is a separate skeleton component from the body.
-        {"kind": "walk", "from": (0.50, 0.30), "to": "B"},
-        {"kind": "loop", "start": (0.5, 0.05), "direction": "ccw"},
-    ],
-    "j": [
-        # Same dot/body component-bridge issue as i.
-        {"kind": "walk", "from": (0.50, 0.30), "to": "BL"},
-        {"kind": "loop", "start": (0.5, 0.05), "direction": "ccw"},
-    ],
-    "k": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        # Lowercase k's diagonals are a separate skeleton component
-        # from the vertical descender, so we anchor the upper-diagonal
-        # tip + junction directly via tuples to keep the BFS within
-        # the diagonal component.
-        {"kind": "walk", "from": (0.90, 0.45), "to": (0.40, 0.50)},
-        {"kind": "walk", "from": (0.40, 0.50), "to": "BR"},
-    ],
-    "l": [
-        {"kind": "walk", "from": "T", "to": "BR"},
-    ],
-    "m": [
-        # Worksheet shows the start arrow at TL going down — the BFS
-        # walks down the left vertical, then up-arch-down to BC, then
-        # up-arch-down to BR.
-        {"kind": "continuous", "anchors": ["TL", "BL", "BC", "BR"]},
-    ],
-    "n": [
-        # Same as m: start at TL going down, then up-arch-down to BR.
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR"]},
-    ],
-    "o": [
-        {"kind": "loop", "start": "T", "direction": "ccw"},
-    ],
-    "p": [
-        {"kind": "walk", "from": "TL", "to": "BL"},
-        {"kind": "continuous", "anchors": ["TL", "TR", "MR", "ML"]},
-    ],
-    "q": [
-        {"kind": "loop", "start": "T", "direction": "ccw"},
-        {"kind": "walk", "from": "TR", "to": "BR"},
-    ],
-    "r": [
-        # One continuous stroke: down the vertical, retrace up, hook
-        # right. BFS handles the retrace as the shortest path on the
-        # skeleton.
-        {"kind": "continuous", "anchors": ["TL", "BL", "TR"]},
-    ],
-    "s": [
-        {"kind": "walk", "from": "TR", "to": "BL"},
-    ],
-    "t": [
-        {"kind": "walk", "from": "T", "to": "BR"},
-        {"kind": "walk", "from": "ML", "to": "MR"},
-    ],
-    "u": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "BR", "TR"]},
-        {"kind": "walk", "from": "TR", "to": "BR"},
-    ],
-    "v": [
-        {"kind": "continuous", "anchors": ["TL", "BC", "TR"]},
-    ],
-    "w": [
-        {"kind": "continuous", "anchors": ["TL", "BL", "TC", "BR", "TR"]},
-    ],
-    "x": [
-        {"kind": "walk", "from": "TL", "to": "BR"},
-        {"kind": "walk", "from": "TR", "to": "BL"},
-    ],
-    "y": [
-        {"kind": "walk", "from": "TL", "to": "C"},
-        {"kind": "walk", "from": "TR", "to": "BL"},
-    ],
-    "z": [
-        {"kind": "walk", "from": "TL", "to": "TR"},
-        {"kind": "walk", "from": "TR", "to": "BL"},
-        {"kind": "walk", "from": "BL", "to": "BR"},
-    ],
-
-    # ─── Diaeresis & ß ────────────────────────────────────────────────
-    # Body strokes first (matching base letter), then left dot, right dot.
-    "Ä": [
-        {"kind": "walk", "from": "BL", "to": (0.5, 0.18)},
-        {"kind": "walk", "from": (0.5, 0.18), "to": "BR"},
-        {"kind": "walk", "from": (0.10, 0.55), "to": (0.90, 0.55)},
-        {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
-        {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
-    ],
-    "Ö": [
-        {"kind": "loop", "start": (0.5, 0.18), "direction": "ccw"},
-        {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
-        {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
-    ],
-    "Ü": [
-        {"kind": "continuous",
-         "anchors": [(0.05, 0.18), (0.05, 0.95), (0.95, 0.95)]},
-        {"kind": "walk", "from": (0.95, 0.18), "to": (0.95, 0.95)},
-        {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
-        {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
-    ],
-    "ä": [
-        {"kind": "loop", "start": (0.5, 0.30), "direction": "ccw"},
-        {"kind": "walk", "from": (0.95, 0.30), "to": (0.95, 0.95)},
-        {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
-        {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
-    ],
-    "ö": [
-        {"kind": "loop", "start": (0.5, 0.30), "direction": "ccw"},
-        {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
-        {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
-    ],
-    "ü": [
-        {"kind": "continuous",
-         "anchors": [(0.05, 0.30), (0.05, 0.95), (0.95, 0.95)]},
-        {"kind": "walk", "from": (0.95, 0.30), "to": (0.95, 0.95)},
-        {"kind": "loop", "start": (0.30, 0.05), "direction": "ccw"},
-        {"kind": "loop", "start": (0.70, 0.05), "direction": "ccw"},
-    ],
-    "ß": [
-        {"kind": "continuous",
-         "anchors": ["BL", "TL", "TR", "MR", "ML", "MR", "BC"]},
+        # Stem: 3 waypoints to track the Primae font's mildly-slanted
+        # stem — the column drifts left by ~10% rel-x between top and
+        # midline, then back right toward the baseline. A 2-point
+        # straight chord misses the ink in y=0.73-0.84.
+        [(0.195, 0.000), (0.130, 0.500), (0.180, 0.950)],
+        # Bowl: 9-waypoint open arc. Stem and bowl share ink only in two
+        # merge zones (y≈0.62 upper, y≈0.94 lower); a chord from the
+        # stem mid-height to the bowl crest cuts whitespace, so the arc
+        # enters / exits via the merge zones and traces bowl-left-wall,
+        # top-peak, bowl-right-wall, and bottom-curve in between.
+        [(0.180, 0.620),
+         (0.270, 0.600),
+         (0.430, 0.500),
+         (0.700, 0.400),
+         (0.864, 0.500),
+         (0.910, 0.650),
+         (0.830, 0.800),
+         (0.676, 0.900),
+         (0.397, 0.940)],
     ],
 }
 
-
-# Phase 3 skeleton restructuring (post-bake).
-#
-# Without an override entry: pipeline is `skeletonize → extend → prune`
-# (the cap-fix state). Letters listed here insert a `split` step before
-# extension that cuts the medial axis at every junction, producing a
-# forest of per-arm chains.
-#
-# `split_junctions: True` triggers the cut. Each cluster has its
-# pixels removed plus 6 px back along every exit chain — the gap
-# reads as separate chains in the calibrator's red-dot viz.
-#
-# `drop_chains: ["short_stub"]` additionally drops any chain whose
-# length is less than 0.20 × max-sibling-length within its cluster.
-# Used for V's apex-curl-stub (43 / 450 = 9.5 %) which is a
-# vestigial branch, not a main stroke arm. N's apex-curls (59 / 431
-# = 13.7 %) are kept because they're legitimate top-of-vertical
-# extensions, not vestigial.
-# Operations applied in pipeline order: split → drop → stitch → extend
-# → bake_curves → (extend_tips, prune).
-#
-# `extend_chains_to_anchors` (per anchor): collapse each cluster into a
-# star — pick the anchor's raw raster target pixel as the shared center,
-# Bresenham-bridge every surviving deg-1 cluster-side cut-end to it.
-# The target becomes a deg=N junction; the lines stay deg-2. Used for
-# N/V/M/W corner & valley anchors where the pedagogical writing
-# convention treats arms as converging at a single corner.
-#
-# `bake_bridges_as_curves` (mutually exclusive with extend in practice):
-# rasterise cubic Beziers between every deg-1 cut-end pair in a cluster
-# directly into the skeleton. Used for b's bowl/stem junction where
-# arms aren't collinear and pedagogical convention is two distinct
-# strokes connected by a smooth corner.
-SKELETON_OVERRIDES: dict[str, dict] = {
-    "N": {"split_junctions": True,
-          "extend_chains_to_anchors": ["TL", "BR"]},
-    "V": {"split_junctions": True,
-          "drop_chains": ["short_stub"],
-          "extend_chains_to_anchors": ["BC"]},
-    "M": {"split_junctions": True,
-          "extend_chains_to_anchors": ["TL", "BC", "TR"]},
-    "W": {"split_junctions": True,
-          "extend_chains_to_anchors": ["TL", "BL", "TC", "BR", "TR"]},
-    "b": {"split_junctions": True,
-          "bake_bridges_as_curves": True},
-}
-
-
-ANCHOR_POSITIONS: dict[str, tuple[float, float]] = {
-    "TL": (0.0, 0.0), "TR": (1.0, 0.0),
-    "BL": (0.0, 1.0), "BR": (1.0, 1.0),
-    "T":  (0.5, 0.0), "TC": (0.5, 0.0),
-    "B":  (0.5, 1.0), "BC": (0.5, 1.0),
-    "L":  (0.0, 0.5), "ML": (0.0, 0.5),
-    "R":  (1.0, 0.5), "MR": (1.0, 0.5),
-    "C":  (0.5, 0.5),
-}
-
-# All 59 letters in the Primae demo set: 26 caps + 26 lowercase + Ää Öö Üü ß.
-ALL_LETTERS = (
-    list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    + list("abcdefghijklmnopqrstuvwxyz")
-    + list("ÄÖÜßäöü")
-)
+ALL_LETTERS = tuple(LETTERS.keys())
 
 
 # -----------------------------------------------------------------------------
@@ -496,12 +147,9 @@ ALL_LETTERS = (
 def rasterize(letter: str, font_path: Path,
               features: list[str] | None = None) -> np.ndarray:
     """Render `letter` to a SIZE×SIZE binary mask using uniform
-    font-metric scaling (em-square = 80 % of canvas height, baseline
-    placed at `pad + ascent`). Mirrors `PrimaeLetterRenderer.glyphPath`.
-    `features` is an optional list of OpenType feature tags (e.g.
-    `["ss02"]`) to enable alternate glyphs — used for k's curled
-    variant.
-    """
+    font-metric scaling (em-square = 80 % of canvas height, baseline at
+    pad + ascent). Mirrors `PrimaeLetterRenderer.glyphPath`. `features`
+    is an optional list of OpenType feature tags."""
     avail = int(SIZE * (1 - 2 * PAD))
     probe_size = 1000
     probe = ImageFont.truetype(str(font_path), probe_size)
@@ -526,229 +174,49 @@ def rasterize(letter: str, font_path: Path,
     return np.array(img) < 128
 
 
+def bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
+    """Return the ink mask's bbox `(x_min, y_min, x_max, y_max)` in
+    raster coords. Raises on an empty mask."""
+    rows, cols = np.where(mask)
+    if rows.size == 0:
+        raise ValueError("Empty ink mask")
+    return (int(cols.min()), int(rows.min()),
+            int(cols.max()), int(rows.max()))
+
+
 # -----------------------------------------------------------------------------
-# Skeleton graph: nodes = pixels, edges = 8-connected neighbours
+# Coordinate conversion
 # -----------------------------------------------------------------------------
 
-
-def build_adjacency(skel_pixels: set[tuple[int, int]]
-                    ) -> dict[tuple[int, int], list[tuple[int, int]]]:
-    """Map each (col, row) skeleton pixel to its 8-connected neighbours
-    that are also on the skeleton."""
-    adj: dict[tuple[int, int], list[tuple[int, int]]] = {}
-    for (c, r) in skel_pixels:
-        nbrs = []
-        for dr, dc in NEIGHBOURS_8:
-            n = (c + dc, r + dr)
-            if n in skel_pixels:
-                nbrs.append(n)
-        adj[(c, r)] = nbrs
-    return adj
+def rel_to_pixel(rel: tuple[float, float],
+                 bbox: tuple[int, int, int, int]) -> tuple[int, int]:
+    """Map a bbox-relative `(rx, ry)` tuple to a raster `(col, row)`
+    pixel via the ink bbox."""
+    x_min, y_min, x_max, y_max = bbox
+    bw = max(1, x_max - x_min)
+    bh = max(1, y_max - y_min)
+    col = int(round(x_min + rel[0] * bw))
+    row = int(round(y_min + rel[1] * bh))
+    return col, row
 
 
-def prune_skeleton_spurs(skel_mask: np.ndarray,
-                         max_spur_length: int = MAX_SPUR_LENGTH
-                         ) -> np.ndarray:
-    """Remove tip-to-junction chains of length ≤ `max_spur_length`
-    pixels. Iterative — re-runs until no chains qualify. Isolated
-    components (degree-1 → degree-2 chain → degree-1, no junction)
-    are never pruned, so i/j tittles and umlaut dots survive."""
-    mask = skel_mask.copy()
-    while True:
-        rows, cols = np.where(mask)
-        if len(rows) == 0:
-            return mask
-        pixels = set(zip(rows.tolist(), cols.tolist()))
-        deg: dict[tuple[int, int], int] = {}
-        for (r, c) in pixels:
-            d = 0
-            for dr, dc in NEIGHBOURS_8:
-                if (r + dr, c + dc) in pixels:
-                    d += 1
-            deg[(r, c)] = d
-
-        to_remove: set[tuple[int, int]] = set()
-        for tip in pixels:
-            if deg[tip] != 1:
-                continue
-            if tip in to_remove:
-                continue
-            chain: list[tuple[int, int]] = []
-            prev = None
-            cur = tip
-            while len(chain) < max_spur_length:
-                chain.append(cur)
-                nbrs = [
-                    (cur[0] + dr, cur[1] + dc)
-                    for dr, dc in NEIGHBOURS_8
-                    if (cur[0] + dr, cur[1] + dc) in pixels
-                ]
-                if prev is None:
-                    nbrs_excl = nbrs
-                else:
-                    nbrs_excl = [n for n in nbrs if n != prev]
-                if len(nbrs_excl) != 1:
-                    break
-                nxt = nbrs_excl[0]
-                if deg[nxt] >= 3:
-                    to_remove.update(chain)
-                    break
-                prev = cur
-                cur = nxt
-
-        if not to_remove:
-            return mask
-        for (r, c) in to_remove:
-            mask[r, c] = False
+def pixel_to_rel(p: tuple[int, int],
+                 bbox: tuple[int, int, int, int]) -> tuple[float, float]:
+    """Inverse of `rel_to_pixel`: raster `(col, row)` → bbox-relative."""
+    x_min, y_min, x_max, y_max = bbox
+    bw = max(1, x_max - x_min)
+    bh = max(1, y_max - y_min)
+    return ((p[0] - x_min) / bw, (p[1] - y_min) / bh)
 
 
-SPLIT_CUT_DEPTH_PX = 6
+# -----------------------------------------------------------------------------
+# Polyline → dense pixel chain
+# -----------------------------------------------------------------------------
 
-
-def _cluster_junctions_8c(juncs: list[tuple[int, int]]
-                          ) -> list[list[tuple[int, int]]]:
-    """8-connected clustering on the junction-only pixel set. Input
-    pixels are (col, row) tuples."""
-    js = set(juncs)
-    visited: set[tuple[int, int]] = set()
-    clusters: list[list[tuple[int, int]]] = []
-    for j in juncs:
-        if j in visited:
-            continue
-        comp = []
-        stack = [j]
-        visited.add(j)
-        while stack:
-            p = stack.pop()
-            comp.append(p)
-            for dr, dc in NEIGHBOURS_8:
-                n = (p[0] + dc, p[1] + dr)
-                if n in js and n not in visited:
-                    visited.add(n)
-                    stack.append(n)
-        clusters.append(comp)
-    return clusters
-
-
-def split_at_junctions(skel: np.ndarray,
-                       cut_depth_px: int = SPLIT_CUT_DEPTH_PX
-                       ) -> tuple[np.ndarray, list[list[dict]]]:
-    """Cut the medial axis at every junction cluster. Each cluster's
-    pixels are removed, plus `cut_depth_px` pixels back along every
-    exit chain. The gap reads as a clean visual break between arms in
-    the calibrator's red-dot viz.
-
-    Returns (new_skel, cluster_chains_info) where cluster_chains_info
-    is a list of per-cluster chain records. Each record:
-      {"src_cluster_pix": (col, row),  # cluster pixel the exit leaves
-       "exit_pixel":      (col, row),  # first pixel outside the cluster
-       "full_chain":      [(col, row), ...],  # all pixels of the chain
-                                              # walked away from the
-                                              # cluster, until reaching
-                                              # tip / another cluster
-       "length":          int}         # = len(full_chain)
-    Used by `drop_short_stub_chains` to identify vestigial branches.
-    """
-    rows, cols = np.where(skel)
-    skel_pixels = set(zip(cols.tolist(), rows.tolist()))
-    adj = build_adjacency(skel_pixels)
-
-    juncs = [p for p in adj if len(adj[p]) >= 3]
-    if not juncs:
-        return skel.copy(), []
-
-    clusters = _cluster_junctions_8c(juncs)
-    pixels_to_remove: set[tuple[int, int]] = set()
-    cluster_chains_info: list[list[dict]] = []
-
-    for cluster in clusters:
-        cluster_set = set(cluster)
-        pixels_to_remove.update(cluster_set)
-
-        # Enumerate exits: edges from cluster pixels to non-cluster
-        # neighbours. A loop attached to the cluster at two points
-        # appears as TWO exits (one for each end); back-cutting both
-        # produces an open chain with both ends near the former
-        # cluster, which is the intended outcome (the bowl of b).
-        exits: list[tuple[tuple[int, int], tuple[int, int]]] = []
-        for cp in cluster:
-            for n in adj[cp]:
-                if n not in cluster_set:
-                    exits.append((cp, n))
-
-        chains_info: list[dict] = []
-        for src, first in exits:
-            chain_pixels = [first]
-            visited = {src, first}
-            cur = first
-            while True:
-                if len(adj[cur]) >= 3 and cur != first:
-                    break  # hit another junction
-                if len(adj[cur]) == 1 and cur != first:
-                    break  # reached an outer tip
-                nxts = [n for n in adj[cur] if n not in visited]
-                if not nxts:
-                    break
-                if len(nxts) > 1:
-                    break  # ambiguous fork — treat as junction
-                nxt = nxts[0]
-                chain_pixels.append(nxt)
-                visited.add(nxt)
-                cur = nxt
-            # Back-cut N pixels from the cluster-adjacent end.
-            back_cut = chain_pixels[:cut_depth_px]
-            pixels_to_remove.update(back_cut)
-            chains_info.append({
-                "src_cluster_pix": src,
-                "exit_pixel": first,
-                "full_chain": chain_pixels,
-                "length": len(chain_pixels),
-            })
-        cluster_chains_info.append(chains_info)
-
-    new_skel = skel.copy()
-    for (c, r) in pixels_to_remove:
-        new_skel[r, c] = False
-    return new_skel, cluster_chains_info
-
-
-def cluster_chains_cut_ends(skel: np.ndarray,
-                            cluster_chains_info: list[list[dict]],
-                            ) -> set[tuple[int, int]]:
-    """Return cut-end pixels (deg-1 only) of chains that survived
-    split + optional drop + stitch. A cut-end = the first surviving
-    pixel along each chain, walking from the former cluster outward,
-    that still has degree 1 in the current skeleton. Stitched
-    cut-ends are deg ≥ 2 (bridge connects them) and are filtered out.
-
-    Returned in (row, col) order to match extend_tips_to_outline's
-    convention. full_chain is in (col, row) order."""
-    cut_ends: set[tuple[int, int]] = set()
-    rows_max, cols_max = skel.shape
-    # Build a (col, row) skel set for degree lookup.
-    sk_rows, sk_cols = np.where(skel)
-    skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
-
-    def deg(col: int, row: int) -> int:
-        return sum(1 for dr, dc in NEIGHBOURS_8
-                   if (col + dc, row + dr) in skel_set)
-
-    for chains in cluster_chains_info:
-        for c in chains:
-            for col, row in c["full_chain"]:
-                if (col, row) in skel_set:
-                    if deg(col, row) == 1:
-                        cut_ends.add((row, col))
-                    break
-    return cut_ends
-
-
-def _line_pixels(p0: tuple[int, int],
-                 p1: tuple[int, int]
-                 ) -> list[tuple[int, int]]:
-    """Bresenham line between two (col, row) pixels — inclusive of
-    both endpoints. Used to bridge stitched chain cut-ends across the
-    former cluster gap."""
+def bresenham(p0: tuple[int, int],
+              p1: tuple[int, int]) -> list[tuple[int, int]]:
+    """Integer Bresenham line from `p0` to `p1` inclusive. Consecutive
+    output pixels are 4- or 8-adjacent."""
     x0, y0 = p0
     x1, y1 = p1
     dx = abs(x1 - x0)
@@ -756,11 +224,11 @@ def _line_pixels(p0: tuple[int, int],
     sx = 1 if x0 < x1 else -1
     sy = 1 if y0 < y1 else -1
     err = dx - dy
-    out: list[tuple[int, int]] = []
     x, y = x0, y0
+    out: list[tuple[int, int]] = []
     while True:
         out.append((x, y))
-        if x == x1 and y == y1:
+        if (x, y) == (x1, y1):
             break
         e2 = 2 * err
         if e2 > -dy:
@@ -772,1848 +240,226 @@ def _line_pixels(p0: tuple[int, int],
     return out
 
 
-def stitch_collinear_chains(skel: np.ndarray,
-                            cluster_chains_info: list[list[dict]],
-                            angle_threshold_deg: float = 150.0,
-                            tangent_window: int = 8,
-                            ) -> np.ndarray:
-    """For each cluster, stitch chain pairs whose cluster-side
-    tangents are within 30° of opposite (i.e., they're collinear
-    through the former cluster). Bridge their cut-ends with a
-    Bresenham line — restores visual continuity for stroke pairs that
-    were one through-line before splitting.
-
-    Run AFTER split_at_junctions (and drop, if applicable). Only
-    pairs both of whose chains survive in `skel` are considered.
-    Each chain participates in at most one stitch — the first pair
-    that meets the threshold wins.
-    """
-    new_skel = skel.copy()
-    rows_max, cols_max = skel.shape
-    sk_rows, sk_cols = np.where(skel)
-    skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
-
-    for chains in cluster_chains_info:
-        # For each surviving chain in the cluster, find:
-        # - cluster-side cut-end pixel (first surviving pixel along
-        #   the original full_chain from cluster outward)
-        # - tangent at cut-end pointing INTO the cluster (cut_end −
-        #   back_pixel; back_pixel is tangent_window chain pixels
-        #   FURTHER along the chain, i.e., into the chain interior)
-        chain_data: list[dict | None] = []
-        for c in chains:
-            cut_end: tuple[int, int] | None = None
-            cut_idx: int = -1
-            for i, p in enumerate(c["full_chain"]):
-                if p in skel_set:
-                    cut_end = p
-                    cut_idx = i
-                    break
-            if cut_end is None:
-                chain_data.append(None)
-                continue
-            back_idx = cut_idx + tangent_window
-            if back_idx >= len(c["full_chain"]):
-                back_idx = len(c["full_chain"]) - 1
-            if back_idx <= cut_idx:
-                chain_data.append(None)
-                continue
-            back = c["full_chain"][back_idx]
-            # Tangent: cut_end - back. Points AWAY from chain interior
-            # = INTO the cluster gap.
-            tdx = cut_end[0] - back[0]
-            tdy = cut_end[1] - back[1]
-            chain_data.append({"cut_end": cut_end, "tdx": tdx, "tdy": tdy})
-
-        used: set[int] = set()
-        for i in range(len(chain_data)):
-            if i in used or chain_data[i] is None:
-                continue
-            for j in range(i + 1, len(chain_data)):
-                if j in used or chain_data[j] is None:
-                    continue
-                a, b = chain_data[i], chain_data[j]
-                ax, ay = a["tdx"], a["tdy"]
-                bx, by = b["tdx"], b["tdy"]
-                na = math.hypot(ax, ay)
-                nb = math.hypot(bx, by)
-                if na < 1e-9 or nb < 1e-9:
-                    continue
-                cos_ang = (ax * bx + ay * by) / (na * nb)
-                cos_ang = max(-1.0, min(1.0, cos_ang))
-                ang_deg = math.degrees(math.acos(cos_ang))
-                if ang_deg < angle_threshold_deg:
-                    continue
-                # Bridge cut_end_a → cut_end_b with a line of pixels.
-                bridge = _line_pixels(a["cut_end"], b["cut_end"])
-                for (col, row) in bridge:
-                    if 0 <= row < rows_max and 0 <= col < cols_max:
-                        new_skel[row, col] = True
-                used.add(i)
-                used.add(j)
-                break
-    return new_skel
-
-
-def drop_short_stub_chains(skel: np.ndarray,
-                           cluster_chains_info: list[list[dict]],
-                           ratio: float = 0.20
-                           ) -> np.ndarray:
-    """Drop every chain whose length < `ratio` × max-sibling-length
-    within its originating cluster. Run AFTER split_at_junctions.
-    Opt-in per letter via `SKELETON_OVERRIDES[letter]["drop_chains"]`.
-
-    V's apex-curl stub: length 43 vs main diagonals 450 → 9.5 %, well
-    below the 20 % threshold → dropped. N's apex-curls (59 vs 431 →
-    13.7 %) would also fall under the threshold but N doesn't opt in,
-    so they survive."""
-    to_remove: set[tuple[int, int]] = set()
-    for chains in cluster_chains_info:
-        if not chains:
-            continue
-        max_len = max(c["length"] for c in chains)
-        if max_len <= 0:
-            continue
-        for c in chains:
-            if c["length"] < ratio * max_len:
-                to_remove.update(c["full_chain"])
-    new_skel = skel.copy()
-    for (cc, rr) in to_remove:
-        new_skel[rr, cc] = False
-    return new_skel
-
-
-def _can_remove_without_disconnect(p: tuple[int, int],
-                                   skel_set: set[tuple[int, int]],
-                                   star_center: tuple[int, int],
-                                   search_bound_px: int,
-                                   cx: int, cy: int) -> bool:
-    """Global-BFS connectivity test for thin_around_star. Removes p
-    from skel_set virtually, then checks that every foreground 8-
-    neighbour of p still reaches `star_center` via a bounded BFS
-    (within `search_bound_px` Chebyshev from (cx, cy)). Returns True
-    iff all neighbours still reach the star — i.e., p is safe to
-    remove without disconnecting any chain from the convergence point.
-
-    Less conservative than the simple-point test: 3 lines crossing at
-    a pixel can pass even if their neighbours aren't 8-adjacent locally,
-    because each line still reaches the star independently."""
-    nbrs = [(p[0] + dc, p[1] + dr) for dr, dc in NEIGHBOURS_8
-            if (p[0] + dc, p[1] + dr) in skel_set]
-    if len(nbrs) < 2:
-        return True
-    test_set = skel_set - {p}
-    for n in nbrs:
-        if n == star_center:
-            continue
-        # Bounded BFS from n looking for star_center.
-        visited = {n}
-        stack = [n]
-        found = False
-        while stack:
-            cur = stack.pop()
-            if cur == star_center:
-                found = True
-                break
-            for dr, dc in NEIGHBOURS_8:
-                nxt = (cur[0] + dc, cur[1] + dr)
-                if nxt in test_set and nxt not in visited:
-                    if (abs(nxt[0] - cx) <= search_bound_px
-                            and abs(nxt[1] - cy) <= search_bound_px):
-                        visited.add(nxt)
-                        stack.append(nxt)
-        if not found:
-            return False
-    return True
-
-
-def thin_around_star(skel: np.ndarray,
-                     star_center: tuple[int, int],
-                     radius_px: int = 100,
-                     ) -> np.ndarray:
-    """Topological thinning of deg≥3 junctions in the neighbourhood of
-    a star center. Iteratively removes deg-3+ pixels whose removal
-    doesn't disconnect any neighbour from the star_center (verified by
-    bounded global BFS within ~3× radius). The star_center itself is
-    preserved so all chains keep their convergence point.
-
-    After thinning, the star center is the unique high-degree pixel in
-    its neighbourhood; everything else along the convergence lines is
-    deg-2 (chain interior) or deg-1 (chain endpoint at the star)."""
-    cx, cy = star_center
-    search_bound = radius_px * 3
-    changed = True
-    iterations = 0
-    while changed and iterations < 50:
-        changed = False
-        iterations += 1
-        sk_rows, sk_cols = np.where(skel)
-        skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
-        candidates = []
-        for p in skel_set:
-            if p == star_center:
-                continue
-            if abs(p[0] - cx) > radius_px or abs(p[1] - cy) > radius_px:
-                continue
-            nbrs_count = sum(1 for dr, dc in NEIGHBOURS_8
-                             if (p[0] + dc, p[1] + dr) in skel_set)
-            if nbrs_count >= 3:
-                candidates.append(p)
-        candidates.sort()
-        for p in candidates:
-            sk_rows2, sk_cols2 = np.where(skel)
-            current_set = set(zip(sk_cols2.tolist(), sk_rows2.tolist()))
-            if p not in current_set:
-                continue
-            nbrs_count = sum(1 for dr, dc in NEIGHBOURS_8
-                             if (p[0] + dc, p[1] + dr) in current_set)
-            if nbrs_count < 3:
-                continue
-            if _can_remove_without_disconnect(
-                    p, current_set, star_center, search_bound, cx, cy):
-                skel[p[1], p[0]] = False
-                changed = True
-    return skel
-
-
-def extend_chains_to_anchors(skel: np.ndarray,
-                             cluster_chains_info: list[list[dict]],
-                             anchor_names: list,
-                             bbox: tuple[int, int, int, int],
-                             extend_threshold_rel: float = 0.40,
-                             thinning_radius_px: int | None = None,
-                             ) -> tuple[np.ndarray, set[tuple[int, int]]]:
-    """For each named anchor, collapse the nearest cluster into a star
-    around the anchor's raw raster target. Every surviving deg-1
-    cluster-side cut-end within `extend_threshold_rel × max(bbox_w,
-    bbox_h)` of the target gets a Bresenham line to the target. All
-    lines share the target pixel, so the target becomes a deg=N
-    junction and the lines themselves stay deg-2. Pedagogically the
-    star = "single corner where N strokes converge."
-
-    A "surviving cluster-side cut-end" is the first pixel of full_chain
-    still in skel AND with deg=1. Stitched cut-ends are deg≥2 and
-    don't qualify; their chains skip this op.
-
-    Returns (new_skel, extended_cut_ends_rc) where extended_cut_ends_rc
-    is a set of (row, col) cut-end pixels for the caller to add to
-    no_extend_pixels (extend_tips_to_outline shouldn't grow them
-    further since they now feed into a star instead of pointing into
-    free space)."""
-    new_skel = skel.copy()
-    rows_max, cols_max = skel.shape
-    bbox_w = max(1, bbox[2] - bbox[0])
-    bbox_h = max(1, bbox[3] - bbox[1])
-    threshold_px = extend_threshold_rel * max(bbox_w, bbox_h)
-    # Default thinning radius = the extension threshold so the funnel
-    # from cluster to anchor target is fully thinnable.
-    effective_thinning_radius = (thinning_radius_px
-                                 if thinning_radius_px is not None
-                                 else int(threshold_px))
-    extended_cut_ends_rc: set[tuple[int, int]] = set()
-
-    for anchor in anchor_names:
-        target = resolve_anchor_raw(anchor, bbox)
-        sk_rows, sk_cols = np.where(new_skel)
-        skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
-
-        def deg(col: int, row: int) -> int:
-            return sum(1 for dr, dc in NEIGHBOURS_8
-                       if (col + dc, row + dr) in skel_set)
-
-        # Collect candidates: chains with surviving deg-1 cluster-side
-        # cut-ends within threshold of the anchor target. Track each
-        # chain's full pixel set so we can exclude it from the
-        # adjacency snapshot during its own extension walk (otherwise
-        # the line would stop instantly on its own chain interior).
-        candidates: list[dict] = []
-        for chains in cluster_chains_info:
-            for c in chains:
-                cut_end: tuple[int, int] | None = None
-                for col, row in c["full_chain"]:
-                    if (col, row) in skel_set:
-                        if deg(col, row) == 1:
-                            cut_end = (col, row)
-                        break
-                if cut_end is None:
-                    continue
-                d = math.hypot(target[0] - cut_end[0],
-                               target[1] - cut_end[1])
-                if d > threshold_px:
-                    continue
-                candidates.append({"cut_end": cut_end,
-                                   "dist": d,
-                                   "own_chain": set(c["full_chain"])})
-
-        # Sort ascending: closest extends first, fully reaching the
-        # target. Subsequent candidates walk until they touch the
-        # snapshot (prior extensions + other chains), collapsing the
-        # convergence funnel to single-pixel contact points.
-        candidates.sort(key=lambda c: c["dist"])
-
-        for cand in candidates:
-            cut_end = cand["cut_end"]
-            sk_rows, sk_cols = np.where(new_skel)
-            snapshot = set(zip(sk_cols.tolist(), sk_rows.tolist()))
-            snapshot -= cand["own_chain"]
-            snapshot.discard(cut_end)
-            line = _line_pixels(cut_end, target)
-            for i, pix in enumerate(line):
-                if i == 0:
-                    continue  # line[0] is the cut-end itself
-                col, row = pix
-                if not (0 <= row < rows_max and 0 <= col < cols_max):
-                    break
-                new_skel[row, col] = True
-                if pix == target:
-                    break
-                # Stop on first 8-adjacency with the pre-extension
-                # snapshot — meets an existing chain or earlier line.
-                touched_snapshot = False
-                for dr, dc in NEIGHBOURS_8:
-                    if (col + dc, row + dr) in snapshot:
-                        touched_snapshot = True
-                        break
-                if touched_snapshot:
-                    break
-            extended_cut_ends_rc.add((cut_end[1], cut_end[0]))
-
-        # Topological thinning around this star center to clean any
-        # residual deg≥3 junctions at the contact points and along
-        # whatever overlap the short stubs caused.
-        if candidates:
-            new_skel = thin_around_star(new_skel, target,
-                                        radius_px=effective_thinning_radius)
-    return new_skel, extended_cut_ends_rc
-
-
-def bake_bridges_as_curves(skel: np.ndarray,
-                           cluster_chains_info: list[list[dict]],
-                           tangent_window: int = 8,
-                           n_samples: int = 30,
-                           ) -> np.ndarray:
-    """Replace virtual bridgeEdges with cubic Bezier curve pixels baked
-    into the skeleton. For every surviving deg-1 cut-end pair within a
-    cluster, fit a cubic Bezier with control points at half the chord
-    length along each end's exit tangent, then rasterise it as a
-    continuous 8-connected chain (Bresenham-bridge between consecutive
-    sample pixels — per-sample rounding alone leaves gaps because
-    adjacent samples may not be 8-adjacent).
-
-    Used by b's bowl/stem junction where the chains aren't collinear
-    (stitch wouldn't fire) and the pedagogical writing convention
-    treats them as connected via a smooth corner."""
-    new_skel = skel.copy()
-    rows_max, cols_max = skel.shape
-    sk_rows, sk_cols = np.where(new_skel)
-    skel_set = set(zip(sk_cols.tolist(), sk_rows.tolist()))
-
-    def deg(col: int, row: int) -> int:
-        return sum(1 for dr, dc in NEIGHBOURS_8
-                   if (col + dc, row + dr) in skel_set)
-
-    for chains in cluster_chains_info:
-        chain_data: list[dict] = []
-        for c in chains:
-            for i, p in enumerate(c["full_chain"]):
-                if p in skel_set:
-                    if deg(p[0], p[1]) == 1:
-                        back_idx = i + tangent_window
-                        if back_idx >= len(c["full_chain"]):
-                            back_idx = len(c["full_chain"]) - 1
-                        if back_idx > i:
-                            back = c["full_chain"][back_idx]
-                            tdx = p[0] - back[0]
-                            tdy = p[1] - back[1]
-                            n = math.hypot(tdx, tdy)
-                            if n > 1e-9:
-                                chain_data.append({
-                                    "cut_end": p,
-                                    "tdx": tdx / n,
-                                    "tdy": tdy / n,
-                                })
-                    break
-        for i in range(len(chain_data)):
-            for j in range(i + 1, len(chain_data)):
-                a = chain_data[i]
-                b = chain_data[j]
-                ax, ay = a["cut_end"]
-                bx, by = b["cut_end"]
-                d = math.hypot(bx - ax, by - ay)
-                ctrl_len = 0.5 * d
-                cp1_x = ax + ctrl_len * a["tdx"]
-                cp1_y = ay + ctrl_len * a["tdy"]
-                cp2_x = bx + ctrl_len * b["tdx"]
-                cp2_y = by + ctrl_len * b["tdy"]
-                prev_pix: tuple[int, int] | None = None
-                for k in range(n_samples + 1):
-                    t = k / n_samples
-                    u = 1 - t
-                    px = (u**3 * ax + 3 * u**2 * t * cp1_x
-                          + 3 * u * t**2 * cp2_x + t**3 * bx)
-                    py = (u**3 * ay + 3 * u**2 * t * cp1_y
-                          + 3 * u * t**2 * cp2_y + t**3 * by)
-                    cur_pix = (int(round(px)), int(round(py)))
-                    if prev_pix is None:
-                        ic, ir = cur_pix
-                        if 0 <= ir < rows_max and 0 <= ic < cols_max:
-                            new_skel[ir, ic] = True
-                    elif cur_pix != prev_pix:
-                        for (col, row) in _line_pixels(prev_pix, cur_pix):
-                            if 0 <= row < rows_max and 0 <= col < cols_max:
-                                new_skel[row, col] = True
-                    prev_pix = cur_pix
-    return new_skel
-
-
-def extend_tips_to_outline(skel_mask: np.ndarray,
-                           ink_mask: np.ndarray,
-                           max_extension: int = MAX_TIP_EXTENSION,
-                           tangent_window: int = TANGENT_WINDOW,
-                           no_extend_pixels: set | None = None,
-                           ) -> np.ndarray:
-    """Walk each degree-1 tip toward the ink boundary along its local
-    tangent. Tangent = (tip - back-pixel) where back-pixel is the
-    tangent_window-th chain pixel back from the tip; the walk stops
-    earlier if a junction (deg≥3) is reached. Chebyshev-normalised
-    tangent so each forward step adds exactly 1 pixel.
-
-    Isolation-skip guard: tips on chains that never reach a junction
-    are skipped entirely. Preserves i/j tittles, umlaut dots, and any
-    isolated linear component (I, L) — all degree-1-to-degree-1.
-
-    Width-along-tangent discriminator (Phase 3 skeleton restructuring):
-    before extending each tip, probe perp ink width over the next 10
-    forward-tangent steps. Classification:
-      OUTWARD  — width(1)==0 (already at boundary) OR strictly
-                 decreasing trajectory (tapering region).
-      AMBIG    — width within 20% of constant (uniform stroke).
-      INWARD   — anything else: peak-in-middle (cut-end pointing back
-                 into a former junction) or widening (vestigial stub
-                 direction).
-    Only OUTWARD and AMBIG tips are extended. INWARD tips are left in
-    place — useful for post-split chain cut-ends that point into former
-    cluster locations."""
-    mask = skel_mask.copy()
-    if mask.size == 0:
-        return mask
-    rows_max, cols_max = mask.shape
-
-    pa = np.where(mask)
-    pixels = set(zip(pa[0].tolist(), pa[1].tolist()))
-    if not pixels:
-        return mask
-
-    deg: dict[tuple[int, int], int] = {}
-    for (r, c) in pixels:
-        d = 0
-        for dr, dc in NEIGHBOURS_8:
-            if (r + dr, c + dc) in pixels:
-                d += 1
-        deg[(r, c)] = d
-
-    def _classify(tip_rc: tuple[int, int],
-                  tdr: float, tdc: float,
-                  probe_steps: int = 10) -> str:
-        """Width-along-tangent classification at one tip. (r, c)."""
-        n = math.hypot(tdr, tdc)
-        if n < 1e-9:
-            return "INWARD"
-        tdr_u, tdc_u = tdr / n, tdc / n
-        pdr_u, pdc_u = -tdc_u, tdr_u  # perpendicular unit (rotate 90°)
-
-        def perp_w(r: int, c: int) -> int:
-            if not (0 <= r < rows_max and 0 <= c < cols_max
-                    and bool(ink_mask[r, c])):
-                return 0
-            plus_n = 0
-            for k in range(1, 41):
-                rr = int(round(r + k * pdr_u))
-                cc = int(round(c + k * pdc_u))
-                if not (0 <= rr < rows_max and 0 <= cc < cols_max
-                        and bool(ink_mask[rr, cc])):
-                    break
-                plus_n = k
-            minus_n = 0
-            for k in range(1, 41):
-                rr = int(round(r - k * pdr_u))
-                cc = int(round(c - k * pdc_u))
-                if not (0 <= rr < rows_max and 0 <= cc < cols_max
-                        and bool(ink_mask[rr, cc])):
-                    break
-                minus_n = k
-            return plus_n + minus_n + 1
-
-        widths: list[int] = []
-        for k in range(1, probe_steps + 1):
-            rr = int(round(tip_rc[0] + k * tdr_u))
-            cc = int(round(tip_rc[1] + k * tdc_u))
-            if not (0 <= rr < rows_max and 0 <= cc < cols_max
-                    and bool(ink_mask[rr, cc])):
-                widths.append(0)
-            else:
-                widths.append(perp_w(rr, cc))
-
-        if widths[0] == 0:
-            return "OUTWARD"
-        in_ink = [w for w in widths if w > 0]
-        if len(in_ink) <= 2:
-            return "OUTWARD"
-        # Strictly decreasing (allow ≤5 % up-bumps as noise)?
-        decreasing = all(in_ink[i + 1] <= in_ink[i] * 1.05
-                         for i in range(len(in_ink) - 1))
-        if decreasing:
-            return "OUTWARD"
-        # Roughly constant: (max-min)/mean ≤ 0.20?
-        mn, mx = min(in_ink), max(in_ink)
-        mean = sum(in_ink) / len(in_ink)
-        if mean > 0 and (mx - mn) / mean <= 0.20:
-            return "AMBIG"
-        # Falls through: peak-in-middle or widening → INWARD.
-        return "INWARD"
-
-    extensions: list[tuple[tuple[int, int], float, float]] = []
-
-    # Tittle threshold: a tip-to-tip chain (no junction) shorter than
-    # this is treated as an isolated component (i/j tittle, umlaut dot)
-    # and skipped. Longer junction-free chains are post-split main
-    # strokes (N's apex-curl is ~30 px after split; tittles are 3-5 px)
-    # — they still need extension to reach the ink boundary.
-    TITTLE_MAX_LEN = 20
-
-    # Cut-ends produced by split_at_junctions point back into former
-    # cluster territory. The width discriminator alone can't reliably
-    # catch them (the junction-overlap region shows wide-but-not-growing
-    # perp widths that fall within the OUTWARD-taper tolerance), so the
-    # caller passes their pixel positions explicitly. Required in
-    # (row, col) order to match the local convention here.
-    no_extend = set(no_extend_pixels) if no_extend_pixels else set()
-
-    for tip in pixels:
-        if deg[tip] != 1:
-            continue
-        if tip in no_extend:
-            continue
-
-        chain = [tip]
-        prev = None
-        cur = tip
-        is_isolated = False
-        junction_hit = False
-        chain_len = 1  # total chain pixels walked (incl. tip)
-
-        for _ in range(tangent_window):
-            cands = [(cur[0] + dr, cur[1] + dc) for dr, dc in NEIGHBOURS_8]
-            nbrs = [n for n in cands if n in pixels and n != prev]
-            if len(nbrs) == 0:
-                is_isolated = True
-                break
-            if len(nbrs) > 1:
-                junction_hit = True
-                break
-            prev = cur
-            cur = nbrs[0]
-            chain.append(cur)
-            chain_len += 1
-
-        # Continue walking until we hit a junction or another tip.
-        # No safety cap: a degree-2 chain on a 1-pixel skeleton can't
-        # loop (the walk has one non-prev neighbour at every step;
-        # cycles require a junction which terminates the walk), and
-        # the chain length is bounded by raster size. Earlier 200-step
-        # cap fired on Z's ~267-px bars and incorrectly defaulted them
-        # to isolated, suppressing extension on Z/z/T/t tips.
-        if not is_isolated and not junction_hit:
-            while True:
-                cands = [(cur[0] + dr, cur[1] + dc) for dr, dc in NEIGHBOURS_8]
-                nbrs = [n for n in cands if n in pixels and n != prev]
-                if len(nbrs) == 0:
-                    is_isolated = True
-                    break
-                if len(nbrs) > 1:
-                    junction_hit = True
-                    break
-                prev = cur
-                cur = nbrs[0]
-                chain_len += 1
-
-        # Tittle preservation: short isolated chains (dots) skip
-        # extension entirely. Long isolated chains (post-split main
-        # strokes, or single-stroke letters like I/L) still extend.
-        if is_isolated and chain_len < TITTLE_MAX_LEN:
-            continue
-
-        back = chain[-1]
-        if back == tip:
-            continue
-        tdr = tip[0] - back[0]
-        tdc = tip[1] - back[1]
-        chev = max(abs(tdr), abs(tdc))
-        if chev == 0:
-            continue
-
-        # Width-along-tangent classification. INWARD tips don't extend —
-        # they're either vestigial stub directions or post-split
-        # cut-ends pointing back into former junction territory.
-        cls = _classify(tip, float(tdr), float(tdc))
-        if cls == "INWARD":
-            continue
-
-        tdr_step = tdr / chev
-        tdc_step = tdc / chev
-        extensions.append((tip, tdr_step, tdc_step))
-
-    for (tip, tdr_step, tdc_step) in extensions:
-        rf = float(tip[0]) + 0.5
-        cf = float(tip[1]) + 0.5
-        prev_pos = tip
-        steps_added = 0
-        for _ in range(max_extension * 2):
-            if steps_added >= max_extension:
-                break
-            rf += tdr_step
-            cf += tdc_step
-            ri, ci = int(rf), int(cf)
-            if (ri, ci) == prev_pos:
-                continue
-            if not (0 <= ri < rows_max and 0 <= ci < cols_max):
-                break
-            if not ink_mask[ri, ci]:
-                break
-            mask[ri, ci] = True
-            prev_pos = (ri, ci)
-            steps_added += 1
-
-    return mask
-
-
-def _walk_cycle_ccw(seed: tuple[int, int],
-                    adj: dict[tuple[int, int], list[tuple[int, int]]]
-                    ) -> list[tuple[int, int]]:
-    """Walk a closed skeleton cycle starting at `seed`, return the
-    full path including the seed at both ends. Direction is forced to
-    visual counter-clockwise (handwriting convention for O / o).
-    Tries both starting neighbours and picks the longer walk — a 1-px
-    dangling skeletonisation stub adjacent to the seed would otherwise
-    dead-end the walker after a single step (seen on lowercase d's
-    bowl)."""
-    if len(adj[seed]) < 2:
-        return [seed]
-    candidate_paths: list[list[tuple[int, int]]] = []
-    for start in adj[seed][:2]:
-        visited = {seed, start}
-        path = [seed, start]
-        cur = start
-        while True:
-            options = [n for n in adj[cur] if n not in visited]
-            if not options:
-                if seed in adj[cur] and cur != seed:
-                    path.append(seed)
-                break
-            cur = options[0]
-            path.append(cur)
-            visited.add(cur)
-        candidate_paths.append(path)
-    path = max(candidate_paths, key=len)
-
-    # Image-coord shoelace: positive sign = clockwise visually.
-    s = 0.0
-    for i in range(len(path) - 1):
-        x1, y1 = path[i]
-        x2, y2 = path[i + 1]
-        s += (x2 - x1) * (y2 + y1)
-    if s > 0:
-        path = list(reversed(path))
-    return path
-
-
-def split_into_segments(
-    component_pixels: set[tuple[int, int]],
-    adj: dict[tuple[int, int], list[tuple[int, int]]],
-) -> list[list[tuple[int, int]]]:
-    """Cut a skeleton component at every endpoint and branch point,
-    returning each maximal degree-2 chain between two boundary
-    pixels. Pure cycles (no boundary) become a single CCW-oriented
-    closed segment."""
-    boundary = {p for p in component_pixels if len(adj[p]) != 2}
-    segments: list[list[tuple[int, int]]] = []
-
-    if not boundary:
-        seed = min(component_pixels, key=lambda p: (p[1], p[0]))
-        return [_walk_cycle_ccw(seed, adj)]
-
-    # Walk every (boundary, neighbour) starting edge once. The visited
-    # set is on EDGES not nodes, because a branch point is shared by
-    # multiple segments.
-    used_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
-
-    def edge_key(a, b):
-        return (a, b) if a < b else (b, a)
-
-    for bp in boundary:
-        for first_step in adj[bp]:
-            ek = edge_key(bp, first_step)
-            if ek in used_edges:
-                continue
-            used_edges.add(ek)
-            path = [bp, first_step]
-            cur = first_step
-            prev = bp
-            while cur not in boundary:
-                nxts = [n for n in adj[cur] if n != prev]
-                if not nxts:
-                    break
-                nxt = nxts[0]
-                used_edges.add(edge_key(cur, nxt))
-                path.append(nxt)
-                prev, cur = cur, nxt
-            segments.append(path)
-    return segments
-
-
-# -----------------------------------------------------------------------------
-# Merge collinear segments at branch points
-# -----------------------------------------------------------------------------
-
-def segment_tangent(seg: list[tuple[int, int]], at_start: bool,
-                    span_frac: float = 0.30,
-                    min_span: int = 8,
-                    max_span: int = 60) -> tuple[float, float]:
-    """Unit vector along the segment at one end. Sampling reaches into
-    the segment by `span_frac` of its pixel length (clamped to
-    `min_span..max_span`) so the result tracks the segment's overall
-    heading instead of any single-pixel jog where skeleton thinning
-    wraps around a thick branch joint."""
-    n_pix = len(seg)
-    if n_pix < 2:
-        return (0.0, 0.0)
-    span = max(min_span, min(max_span, int(round(span_frac * n_pix))))
-    span = min(span, n_pix - 1)
-    if at_start:
-        a = seg[0]
-        b = seg[span]
-    else:
-        a = seg[-1]
-        b = seg[n_pix - 1 - span]
-    dx = a[0] - b[0]
-    dy = a[1] - b[1]
-    n = math.hypot(dx, dy)
-    if n == 0:
-        return (0.0, 0.0)
-    return (dx / n, dy / n)
-
-
-def _path_length(seg: list[tuple[int, int]]) -> float:
-    return sum(math.hypot(seg[i][0] - seg[i - 1][0],
-                          seg[i][1] - seg[i - 1][1])
-               for i in range(1, len(seg)))
-
-
-def merge_segments_at_branches(segments: list[list[tuple[int, int]]],
-                               threshold_deg: float = MERGE_ANGLE_THRESHOLD_DEG,
-                               stub_min_length_px: float = 30.0,
-                               ) -> list[list[tuple[int, int]]]:
-    """At each branch point, pair up any two incoming segments whose
-    tangents are nearly opposite (i.e. the segments form a near-straight
-    line through the branch) and merge them. Crossbars and arches stay
-    as their own strokes; the two halves of an H-vertical merge back
-    into one stroke."""
-    # Drop pixel-stub segments emitted at branch points. Stubs come
-    # from skeletonisation jitter (an extra 1–3 px outcrop where a
-    # crossbar meets a vertical) and have no useful tangent — leaving
-    # them in poisons the collinear-pair selection at the branch. But
-    # if a component produced ONE segment (an isolated dot, the i tittle,
-    # umlaut dots), keep it whatever its length.
-    if len(segments) > 1:
-        segments = [s for s in segments
-                    if len(s) >= 2 and _path_length(s) >= stub_min_length_px]
-    else:
-        segments = [s for s in segments if len(s) >= 2]
-
-    # Branches in the skeleton are not always one pixel wide — they
-    # can be a 2×2 cluster of degree-3+ pixels. After stub removal the
-    # remaining segments end at distinct pixels of the same conceptual
-    # branch. Snap nearby endpoints (within `snap_radius` px) to a
-    # shared centroid so the incidence map sees them as one node.
-    snap_radius = 5.0
-    eps = list({p for s in segments for p in (s[0], s[-1])})
-    parent_ep = {p: p for p in eps}
-
-    def _ep_find(p):
-        while parent_ep[p] != p:
-            parent_ep[p] = parent_ep[parent_ep[p]]
-            p = parent_ep[p]
-        return p
-
-    for i in range(len(eps)):
-        for j in range(i + 1, len(eps)):
-            if math.hypot(eps[i][0] - eps[j][0],
-                          eps[i][1] - eps[j][1]) <= snap_radius:
-                ra, rb = _ep_find(eps[i]), _ep_find(eps[j])
-                if ra != rb:
-                    parent_ep[rb] = ra
-
-    snap: dict[tuple[int, int], tuple[int, int]] = {}
-    cluster_members: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
-    for p in eps:
-        cluster_members[_ep_find(p)].append(p)
-    for root, members in cluster_members.items():
-        if len(members) == 1:
-            snap[members[0]] = members[0]
-            continue
-        cx = round(sum(p[0] for p in members) / len(members))
-        cy = round(sum(p[1] for p in members) / len(members))
-        for p in members:
-            snap[p] = (cx, cy)
-
-    snapped: list[list[tuple[int, int]]] = []
-    for s in segments:
-        new_first = snap.get(s[0], s[0])
-        new_last = snap.get(s[-1], s[-1])
-        body = s[1:-1] if len(s) > 2 else []
-        snapped.append([new_first] + body + [new_last])
-    segments = snapped
-
-    incidence: dict[tuple[int, int], list[tuple[int, bool]]] = defaultdict(list)
-    for i, seg in enumerate(segments):
-        if len(seg) < 2:
-            continue
-        incidence[seg[0]].append((i, True))
-        incidence[seg[-1]].append((i, False))
-
-    # union-find over segment indices
-    parent = list(range(len(segments)))
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
-
-    cos_thr = math.cos(math.radians(180 - threshold_deg))
-
-    for bp, incident in incidence.items():
-        if len(incident) < 2:
-            continue
-        # Special case: exactly 2 incidents. After stub filtering this
-        # is just a corner — merge unconditionally so M / N / V / W
-        # zigzag together as one continuous stroke instead of one
-        # piece per arm.
-        if len(incident) == 2:
-            union(incident[0][0], incident[1][0])
-            continue
-        # 3+ incidents: real junction. Greedy-pair the two segments
-        # with most-opposed tangents (most collinear) and merge them
-        # if they meet the threshold; repeat for any remaining pair.
-        tangents = [segment_tangent(segments[idx], at_start)
-                    for (idx, at_start) in incident]
-        used = [False] * len(incident)
-        while True:
-            best = None
-            best_cos = cos_thr
-            for i in range(len(incident)):
-                if used[i]:
-                    continue
-                for j in range(i + 1, len(incident)):
-                    if used[j]:
-                        continue
-                    dp = tangents[i][0] * tangents[j][0] + tangents[i][1] * tangents[j][1]
-                    if dp < best_cos:
-                        best_cos = dp
-                        best = (i, j)
-            if best is None:
-                break
-            i, j = best
-            used[i] = used[j] = True
-            union(incident[i][0], incident[j][0])
-
-    # Build merged segments by walking each union-find group.
-    groups: dict[int, list[int]] = defaultdict(list)
-    for i in range(len(segments)):
-        groups[find(i)].append(i)
-
-    merged: list[list[tuple[int, int]]] = []
-    for member_ids in groups.values():
-        if len(member_ids) == 1:
-            merged.append(segments[member_ids[0]])
-            continue
-        # Stitch members head-to-tail by matching shared endpoints.
-        remaining = list(member_ids)
-        seq = list(segments[remaining.pop(0)])
-        progress = True
-        while remaining and progress:
-            progress = False
-            for k, idx in enumerate(remaining):
-                seg = segments[idx]
-                if seg[0] == seq[-1]:
-                    seq.extend(seg[1:])
-                    remaining.pop(k)
-                    progress = True
-                    break
-                if seg[-1] == seq[-1]:
-                    seq.extend(reversed(seg[:-1]))
-                    remaining.pop(k)
-                    progress = True
-                    break
-                if seg[0] == seq[0]:
-                    seq[:0] = list(reversed(seg[1:]))
-                    remaining.pop(k)
-                    progress = True
-                    break
-                if seg[-1] == seq[0]:
-                    seq[:0] = seg[:-1]
-                    remaining.pop(k)
-                    progress = True
-                    break
-        merged.append(seq)
-        # Stragglers that didn't connect (shouldn't happen for a clean
-        # skeleton but emit them rather than silently drop) become
-        # separate merged entries.
-        for idx in remaining:
-            merged.append(segments[idx])
-    return merged
-
-
-# -----------------------------------------------------------------------------
-# Stroke ordering and orientation
-# -----------------------------------------------------------------------------
-
-def stroke_orientation(seg: list[tuple[int, int]]) -> str:
-    """Classify a stroke as 'v' (vertical), 'h' (horizontal), 'l'
-    (closed loop), or 'd' (diagonal/curve) by comparing endpoints
-    and bounding box aspect."""
-    if len(seg) >= 3 and seg[0] == seg[-1]:
-        return "l"
-    xs = [p[0] for p in seg]
-    ys = [p[1] for p in seg]
-    dx = max(xs) - min(xs)
-    dy = max(ys) - min(ys)
-    if dy > 1.8 * dx:
-        return "v"
-    if dx > 1.8 * dy:
-        return "h"
-    return "d"
-
-
-def order_stroke(seg: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Open strokes are oriented topmost-endpoint first; on a tie in
-    y, leftmost first. Closed loops are left untouched (their CCW
-    direction was already enforced by `_walk_cycle_ccw`)."""
-    if len(seg) < 2 or seg[0] == seg[-1]:
-        return seg
-    a, b = seg[0], seg[-1]
-    if (a[1], a[0]) > (b[1], b[0]):
-        return list(reversed(seg))
-    return seg
-
-
-def order_strokes(strokes: list[list[tuple[int, int]]]
-                  ) -> list[list[tuple[int, int]]]:
-    """Sort strokes by component-centroid: top-to-bottom by centroid
-    y (binned into bands so a stroke a few pixels lower doesn't lose
-    priority), then left-to-right by centroid x within a band."""
-    def key(seg):
-        n = len(seg)
-        cx = sum(p[0] for p in seg) / n
-        cy = sum(p[1] for p in seg) / n
-        band_h = SIZE // 12
-        return (int(cy // band_h), cx)
-    return sorted(strokes, key=key)
-
-
-# -----------------------------------------------------------------------------
-# Resampling to dense waypoints
-# -----------------------------------------------------------------------------
-
-def _interp_pixel(seg: list[tuple[int, int]],
-                  cum: list[float],
-                  target: float) -> tuple[int, int]:
-    """Linear interpolation along a polyline at arc length `target`."""
-    if target <= 0:
-        return seg[0]
-    if target >= cum[-1]:
-        return seg[-1]
-    lo, hi = 0, len(cum) - 1
-    while lo + 1 < hi:
-        mid = (lo + hi) // 2
-        if cum[mid] <= target:
-            lo = mid
-        else:
-            hi = mid
-    if cum[hi] == cum[lo]:
-        return seg[lo]
-    t = (target - cum[lo]) / (cum[hi] - cum[lo])
-    return (round(seg[lo][0] + t * (seg[hi][0] - seg[lo][0])),
-            round(seg[lo][1] + t * (seg[hi][1] - seg[lo][1])))
-
-
-def _uniform_resample(seg: list[tuple[int, int]],
-                      cum: list[float], n: int
-                      ) -> list[tuple[int, int]]:
-    if n < 2:
-        return [seg[0]]
-    total = cum[-1]
-    return [_interp_pixel(seg, cum, total * k / (n - 1)) for k in range(n)]
-
-
-def trim_lead_in(seg: list[tuple[int, int]],
-                 max_off_axis_deg: float = 60.0
-                 ) -> list[tuple[int, int]]:
-    """Trim the first checkpoints whose direction differs by more
-    than `max_off_axis_deg` from the path's overall direction.
-
-    BFS legs that start on the wrong skeleton branch (e.g. an `ML`
-    anchor for a horizontal crossbar resolves to the left vertical
-    pixel rather than the bar itself) produce a perpendicular
-    "lead-in" before the path enters the intended segment. The first
-    checkpoint reads as a sharp upward step before the trace turns
-    horizontal — a child can't advance through it.
-    """
-    if len(seg) < 3:
-        return seg
-    overall_dx = seg[-1][0] - seg[0][0]
-    overall_dy = seg[-1][1] - seg[0][1]
-    overall_len = math.hypot(overall_dx, overall_dy)
-    if overall_len < 1:
-        return seg
-    overall_ux = overall_dx / overall_len
-    overall_uy = overall_dy / overall_len
-    cos_thr = math.cos(math.radians(max_off_axis_deg))
-    drop = 0
-    for i in range(min(3, len(seg) - 2)):
-        dx = seg[i + 1][0] - seg[i][0]
-        dy = seg[i + 1][1] - seg[i][1]
-        n = math.hypot(dx, dy)
-        if n < 1:
-            continue
-        cos_a = (dx * overall_ux + dy * overall_uy) / n
-        if cos_a < cos_thr:
-            drop = i + 1
-        else:
-            break
-    if drop == 0:
-        return seg
-    return seg[drop:]
-
-
-def prune_retraces(seg: list[tuple[int, int]],
-                   near_thr_px: float = 4.0
-                   ) -> list[tuple[int, int]]:
-    """Detect and elide out-and-back excursions in a sampled path.
-
-    BFS through skeleton branches with stubs of more than one pixel
-    can produce a multi-pixel detour: the path goes out to a peak and
-    retraces nearly identical positions on the way back. Single-point
-    spike pruning misses these because each consecutive triple has a
-    valid sub-150° angle. Here we walk forward and, whenever a later
-    point is within `near_thr_px` of an earlier one, drop everything
-    strictly between them.
-
-    Closed-loop paths (start == end, e.g. O bowl) are passed through
-    unchanged — every closed cycle would otherwise collapse to its
-    two endpoints.
-    """
-    if len(seg) < 4:
-        return seg
-    closed_loop = (
-        math.hypot(seg[-1][0] - seg[0][0], seg[-1][1] - seg[0][1])
-        < near_thr_px
-    )
-    if closed_loop:
-        return seg
-    keep = [True] * len(seg)
-    i = 0
-    while i < len(seg) - 2:
-        if not keep[i]:
-            i += 1
-            continue
-        match_j = -1
-        for j in range(i + 2, len(seg)):
-            if not keep[j]:
-                continue
-            dx = seg[j][0] - seg[i][0]
-            dy = seg[j][1] - seg[i][1]
-            if math.hypot(dx, dy) < near_thr_px:
-                match_j = j
-        if match_j > i + 1:
-            for k in range(i + 1, match_j):
-                keep[k] = False
-            i = match_j
-        else:
-            i += 1
-    return [seg[k] for k in range(len(seg)) if keep[k]]
-
-
-def prune_spikes(seg: list[tuple[int, int]],
-                 angle_deg: float = 150.0,
-                 max_iters: int = 6
-                 ) -> list[tuple[int, int]]:
-    """Iteratively drop checkpoints that form a near-180° kink with
-    their neighbours. Skeleton spurs at sharp corners (M valley, V
-    apex, B bump-stem junction, …) leave multi-pixel out-and-back
-    chains; pruning one tip exposes another. Up to `max_iters`
-    passes converge in practice for the bundled strokes.
-    """
-    cos_thr = math.cos(math.radians(angle_deg))
-    cur = seg
-    for _ in range(max_iters):
-        if len(cur) < 3:
-            return cur
-        out = [cur[0]]
-        for i in range(1, len(cur) - 1):
-            ax, ay = cur[i - 1]
-            bx, by = cur[i]
-            cx, cy = cur[i + 1]
-            v1x, v1y = bx - ax, by - ay
-            v2x, v2y = cx - bx, cy - by
-            n1 = math.hypot(v1x, v1y)
-            n2 = math.hypot(v2x, v2y)
-            if n1 == 0 or n2 == 0:
-                continue
-            cos_a = (v1x * v2x + v1y * v2y) / (n1 * n2)
-            if cos_a < cos_thr:
-                continue
-            out.append(cur[i])
-        out.append(cur[-1])
-        if len(out) == len(cur):
-            return out
-        cur = out
-    return cur
-
-
-def resample(seg: list[tuple[int, int]],
-             base: float = BASE_SPACING_PX,
-             curve: float = CURVE_SPACING_PX,
-             curve_angle_deg: float = CURVE_ANGLE_DEG,
-             window_px: float = CURVE_WINDOW_PX,
-             min_pts: int = MIN_CHECKPOINTS_PER_STROKE,
-             dot_threshold_px: float = DOT_LENGTH_THRESHOLD_PX
-             ) -> list[tuple[int, int]]:
-    """Curvature-adaptive resampling. Three regimes by total length:
-
-    * `total <= dot_threshold_px` (umlaut dots, i/j dots): a single
-      checkpoint at the midpoint — the proximity tracker treats it as
-      a tap target.
-    * `dot_threshold_px < total <= base`: short bar; 2 checkpoints
-      (start, end) so the tracker has a direction.
-    * `total > base`: full curvature-adaptive walk; straights get a
-      checkpoint every `base` px, curves every `curve` px (~3× denser).
-
-    `min_pts` only floors the long-path output so a barely-curved
-    moderate stroke still has enough waypoints to register hits.
-    """
-    if len(seg) < 2:
-        return seg
-    cum = [0.0]
-    for i in range(1, len(seg)):
-        cum.append(cum[-1] + math.hypot(seg[i][0] - seg[i - 1][0],
-                                        seg[i][1] - seg[i - 1][1]))
-    total = cum[-1]
-    if total <= dot_threshold_px:
-        mid = _interp_pixel(seg, cum, total / 2)
-        return [mid]
-    if total <= base:
-        return [seg[0], seg[-1]]
-
-    angle_thr = math.radians(curve_angle_deg)
-    out = [seg[0]]
-    last_dist = 0.0
-    target = base
-    while target < total:
-        # Probe ±window_px around the target arc length to detect
-        # whether we're on a curve.
-        a = _interp_pixel(seg, cum, max(0.0, target - window_px))
-        b = _interp_pixel(seg, cum, target)
-        c = _interp_pixel(seg, cum, min(total, target + window_px))
-        v1 = (b[0] - a[0], b[1] - a[1])
-        v2 = (c[0] - b[0], c[1] - b[1])
-        n1 = math.hypot(*v1)
-        n2 = math.hypot(*v2)
-        on_curve = False
-        if n1 > 0 and n2 > 0:
-            cos_a = max(-1.0, min(1.0,
-                (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)))
-            ang = math.acos(cos_a)
-            if ang >= angle_thr:
-                on_curve = True
-        out.append(b)
-        last_dist = target
-        target += curve if on_curve else base
-
-    if out[-1] != seg[-1]:
-        out.append(seg[-1])
-
-    if len(out) < min_pts:
-        out = _uniform_resample(seg, cum, min_pts)
-    return out
-
-
-# -----------------------------------------------------------------------------
-# Bbox-relative coordinate conversion
-# -----------------------------------------------------------------------------
-
-def to_bbox_relative(seg: list[tuple[int, int]],
-                     bbox: tuple[int, int, int, int]
-                     ) -> list[tuple[float, float]]:
-    """Convert pixel coords to (x, y) in [0, 1] of the glyph's bounding
-    rect. iOS multiplies these against `normalizedGlyphRect` to land
-    on the on-screen ghost regardless of cell aspect ratio."""
-    x_min, y_min, x_max, y_max = bbox
-    w = max(1, x_max - x_min)
-    h = max(1, y_max - y_min)
-    return [((c - x_min) / w, (r - y_min) / h) for (c, r) in seg]
-
-
-# -----------------------------------------------------------------------------
-# Worksheet-override walker
-# -----------------------------------------------------------------------------
-
-def resolve_anchor(anchor,
-                   skel: np.ndarray,
-                   bbox: tuple[int, int, int, int]
-                   ) -> tuple[int, int] | None:
-    """Map an anchor (string name or (x, y) tuple in [0, 1] of bbox) to
-    the nearest skeleton pixel. Returns None for an empty skeleton.
-    Used by `walk`, `continuous`, and `loop` — primitives whose paths
-    follow the medial axis."""
-    x_min, y_min, x_max, y_max = bbox
-    w = max(1, x_max - x_min)
-    h = max(1, y_max - y_min)
-    if isinstance(anchor, str):
-        if anchor not in ANCHOR_POSITIONS:
-            raise ValueError(f"Unknown anchor name: {anchor!r}")
-        ax, ay = ANCHOR_POSITIONS[anchor]
-    else:
-        ax, ay = anchor
-    target_x = x_min + ax * w
-    target_y = y_min + ay * h
-    rows, cols = np.where(skel)
-    if len(rows) == 0:
-        return None
-    dx = cols.astype(np.float64) - target_x
-    dy = rows.astype(np.float64) - target_y
-    i = int(np.argmin(dx * dx + dy * dy))
-    return (int(cols[i]), int(rows[i]))
-
-
-def resolve_anchor_raw(anchor,
+def polyline_to_pixels(polyline: list[tuple[float, float]],
                        bbox: tuple[int, int, int, int]
-                       ) -> tuple[int, int]:
-    """Map an anchor directly to a raster pixel via the bbox — no
-    skeleton snap, no ink snap. Retained for callers that explicitly
-    want bbox-relative coordinates regardless of where ink lives."""
-    x_min, y_min, x_max, y_max = bbox
-    w = max(1, x_max - x_min)
-    h = max(1, y_max - y_min)
-    if isinstance(anchor, str):
-        if anchor not in ANCHOR_POSITIONS:
-            raise ValueError(f"Unknown anchor name: {anchor!r}")
-        ax, ay = ANCHOR_POSITIONS[anchor]
-    else:
-        ax, ay = anchor
-    return (int(round(x_min + ax * w)), int(round(y_min + ay * h)))
+                       ) -> list[tuple[int, int]]:
+    """Convert a relative-coord polyline to an ordered, deduplicated
+    pixel chain by Bresenham-connecting consecutive tuples. Joint
+    pixels shared between adjacent segments appear once."""
+    if not polyline:
+        return []
+    if len(polyline) == 1:
+        return [rel_to_pixel(polyline[0], bbox)]
+    pixels: list[tuple[int, int]] = []
+    for i in range(len(polyline) - 1):
+        seg = bresenham(rel_to_pixel(polyline[i], bbox),
+                        rel_to_pixel(polyline[i + 1], bbox))
+        if i > 0 and pixels and seg and seg[0] == pixels[-1]:
+            seg = seg[1:]
+        pixels.extend(seg)
+    return pixels
 
 
-def resolve_anchor_ink_snap(anchor,
-                            ink_mask: np.ndarray,
-                            bbox: tuple[int, int, int, int]
-                            ) -> tuple[int, int] | None:
-    """Map an anchor to the nearest ink-mask pixel. Used by `through`,
-    whose path is synthesised across ink. Adapts to glyph geometry where
-    bbox corners may lie outside the ink — e.g. b's "T" at bbox-center-
-    top falls in whitespace above the bowl, but the nearest ink pixel
-    is the stem-top, which is the right answer for a stem stroke.
-    Portable across fonts whose ink doesn't tightly fill the bbox."""
-    x_min, y_min, x_max, y_max = bbox
-    w = max(1, x_max - x_min)
-    h = max(1, y_max - y_min)
-    if isinstance(anchor, str):
-        if anchor not in ANCHOR_POSITIONS:
-            raise ValueError(f"Unknown anchor name: {anchor!r}")
-        ax, ay = ANCHOR_POSITIONS[anchor]
-    else:
-        ax, ay = anchor
-    target_x = x_min + ax * w
-    target_y = y_min + ay * h
-    rows, cols = np.where(ink_mask)
-    if len(rows) == 0:
-        return None
-    dx = cols.astype(np.float64) - target_x
-    dy = rows.astype(np.float64) - target_y
-    i = int(np.argmin(dx * dx + dy * dy))
-    return (int(cols[i]), int(rows[i]))
+# -----------------------------------------------------------------------------
+# Validation + resampling
+# -----------------------------------------------------------------------------
 
-
-# Angle-penalty weight for tangent-aware Dijkstra in bfs_path. Higher
-# values make the walker prefer "straight ahead" more strongly at
-# junctions; 5.0 is the Phase 3 starting point, tuned on N's diagonal.
-TANGENT_ANGLE_WEIGHT = 5.0
-
-
-def bfs_path(start: tuple[int, int],
-             end: tuple[int, int],
-             adj: dict[tuple[int, int], list[tuple[int, int]]],
-             blocked: set[tuple[int, int]] | None = None,
-             inbound_tangent: tuple[float, float] | None = None,
-             angle_weight: float = TANGENT_ANGLE_WEIGHT,
-             ) -> list[tuple[int, int]] | None:
-    """Shortest path along the skeleton graph. Returns None when `end`
-    is unreachable from `start`.
-
-    `inbound_tangent` is the direction the walker is moving on arrival
-    at `start`. When None, classic FIFO BFS (shortest by pixel count)
-    — existing callers are unchanged. When set, Dijkstra with edge cost
-    `1 + angle_weight * (1 - cos(theta)) / 2`, where theta is the angle
-    between consecutive edges. At degree-2 chain pixels the penalty is
-    near zero; at junctions the most-aligned exit wins."""
-    if blocked is None:
-        blocked = set()
-    if start == end:
-        return [start]
-    if start not in adj or end not in adj:
-        return None
-
-    if inbound_tangent is None:
-        # FIFO BFS — existing behaviour preserved bit-for-bit.
-        parent: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
-        q: deque[tuple[int, int]] = deque([start])
-        while q:
-            cur = q.popleft()
-            if cur == end:
-                break
-            for n in adj.get(cur, []):
-                if n not in parent and n not in blocked:
-                    parent[n] = cur
-                    q.append(n)
-        if end not in parent:
-            return None
-        path: list[tuple[int, int]] = []
-        cur_p: tuple[int, int] | None = end
-        while cur_p is not None:
-            path.append(cur_p)
-            cur_p = parent[cur_p]
-        path.reverse()
-        return path
-
-    # Tangent-aware Dijkstra. State is (cur_pixel, prev_pixel); the
-    # predecessor is required because the edge cost depends on the angle
-    # between the prev→cur edge and the cur→nxt edge. Bootstrap with a
-    # virtual predecessor offset by -inbound_tangent so the first edge's
-    # angle is measured against the requested arrival direction.
-    tdx, tdy = inbound_tangent
-    tnorm = math.hypot(tdx, tdy)
-    if tnorm < 1e-9:
-        return bfs_path(start, end, adj, blocked=blocked,
-                        inbound_tangent=None)
-    tdx /= tnorm
-    tdy /= tnorm
-    init_prev: tuple[float, float] = (start[0] - tdx, start[1] - tdy)
-
-    def step_cost(prev, cur, nxt) -> float:
-        ax = cur[0] - prev[0]
-        ay = cur[1] - prev[1]
-        bx = nxt[0] - cur[0]
-        by = nxt[1] - cur[1]
-        an = math.hypot(ax, ay)
-        bn = math.hypot(bx, by)
-        if an < 1e-9 or bn < 1e-9:
-            return 1.0
-        cos_t = (ax * bx + ay * by) / (an * bn)
-        cos_t = max(-1.0, min(1.0, cos_t))
-        return 1.0 + angle_weight * (1.0 - cos_t) / 2.0
-
-    dist: dict[tuple, float] = {}
-    parent_state: dict[tuple, tuple] = {}
-    start_state = (start, init_prev)
-    dist[start_state] = 0.0
-    heap: list[tuple[float, int, tuple]] = [(0.0, 0, start_state)]
-    counter = 1
-    end_state: tuple | None = None
-    while heap:
-        cost, _, st = heapq.heappop(heap)
-        if cost > dist.get(st, float("inf")):
-            continue
-        cur, prev = st
-        if cur == end:
-            end_state = st
-            break
-        for n in adj.get(cur, []):
-            if n in blocked:
+def validate_polylines_in_ink(letter: str,
+                              polylines: list[list[tuple[float, float]]],
+                              mask: np.ndarray,
+                              bbox: tuple[int, int, int, int]) -> list[str]:
+    """Validate that every authored polyline stays inside the ink mask.
+    Runs two passes: per-tuple (each waypoint's raster pixel must be on
+    ink) and per-segment (the Bresenham line between consecutive
+    waypoints must be entirely on ink). The dense check catches
+    polylines whose waypoints are all in ink but whose straight chords
+    cut through interior whitespace — common on closed bowls. Returns
+    one error string per offender; empty list = clean."""
+    h, w = mask.shape
+    errors: list[str] = []
+    for pi, poly in enumerate(polylines):
+        for ti, t in enumerate(poly):
+            col, row = rel_to_pixel(t, bbox)
+            if not (0 <= row < h and 0 <= col < w):
+                errors.append(f"{letter} polyline {pi} tuple {ti} {t} "
+                              f"→ pixel ({col}, {row}) outside canvas")
                 continue
-            new_cost = cost + step_cost(prev, cur, n)
-            new_st = (n, cur)
-            if new_cost < dist.get(new_st, float("inf")):
-                dist[new_st] = new_cost
-                parent_state[new_st] = st
-                heapq.heappush(heap, (new_cost, counter, new_st))
-                counter += 1
-    if end_state is None:
-        return None
-    path = []
-    st_p: tuple | None = end_state
-    while st_p is not None:
-        path.append(st_p[0])
-        st_p = parent_state.get(st_p)
-    path.reverse()
-    return path
+            if not bool(mask[row, col]):
+                errors.append(f"{letter} polyline {pi} tuple {ti} {t} "
+                              f"→ pixel ({col}, {row}) outside ink")
+        for si in range(len(poly) - 1):
+            a = rel_to_pixel(poly[si], bbox)
+            b = rel_to_pixel(poly[si + 1], bbox)
+            line = bresenham(a, b)
+            off: list[tuple[int, int]] = []
+            for col, row in line:
+                if not (0 <= row < h and 0 <= col < w):
+                    off.append((col, row))
+                    continue
+                if not bool(mask[row, col]):
+                    off.append((col, row))
+            if off:
+                first_rel = pixel_to_rel(off[0], bbox)
+                last_rel = pixel_to_rel(off[-1], bbox)
+                errors.append(
+                    f"{letter} polyline {pi} segment {si}→{si + 1}: "
+                    f"{len(off)} of {len(line)} pixels outside ink at rel "
+                    f"({first_rel[0]:.3f}, {first_rel[1]:.3f})..."
+                    f"({last_rel[0]:.3f}, {last_rel[1]:.3f})")
+    return errors
 
 
-def walk_continuous(anchors: list,
-                    adj: dict[tuple[int, int], list[tuple[int, int]]],
-                    skel: np.ndarray,
-                    bbox: tuple[int, int, int, int],
-                    initial_tangent: tuple[float, float] | None = None,
-                    ) -> list[tuple[int, int]] | None:
-    """BFS-walk through `anchors` in order, stitching shortest paths
-    head-to-tail. Returns None if any leg is unreachable.
-
-    Tangent threading (Phase 3): each leg after the first is routed
-    with `inbound_tangent` set to the direction of the previous leg's
-    final edge. This carries direction across junctions so a chain of
-    legs holds its tangent through multi-stroke meeting points. The
-    first leg uses `initial_tangent` (None = unbiased BFS)."""
-    if not anchors:
-        return None
-    pixels = [resolve_anchor(a, skel, bbox) for a in anchors]
-    if any(p is None for p in pixels):
-        return None
-    full: list[tuple[int, int]] = [pixels[0]]
-    tangent = initial_tangent
-    for i in range(len(pixels) - 1):
-        seg = bfs_path(pixels[i], pixels[i + 1], adj,
-                       inbound_tangent=tangent)
-        if seg is None or len(seg) < 2:
-            return None
-        full.extend(seg[1:])
-        a, b = seg[-2], seg[-1]
-        tangent = (float(b[0] - a[0]), float(b[1] - a[1]))
-    return full
-
-
-def walk_loop_at(anchor,
-                 direction: str,
-                 adj: dict[tuple[int, int], list[tuple[int, int]]],
-                 skel: np.ndarray,
-                 bbox: tuple[int, int, int, int],
-                 stop_at=None,
-                 ) -> list[tuple[int, int]] | None:
-    """Walk a closed cycle on the skeleton component containing the
-    anchor's nearest skeleton pixel, then enforce direction (CCW = the
-    Austrian writing convention for O / o). Falls back to a chain walk
-    (endpoint-to-endpoint) when the component is a degenerate non-loop
-    — i/j dots skeletonize to a 3–5 px line rather than a true cycle,
-    so requiring a closed cycle would drop the dot entirely.
-
-    `stop_at` is an optional anchor; when provided, the cycle walk
-    truncates at the path pixel nearest to `stop_at`'s resolved
-    skeleton pixel, rather than returning to `anchor`. Used for
-    bowl-with-attached-stem letters (b/d/g/p/q) where the closed
-    cycle reachable from the bowl includes a stem traversal — the
-    stop anchor terminates the bowl walk at the bowl/stem junction."""
-    seed = resolve_anchor(anchor, skel, bbox)
-    if seed is None:
-        return None
-    if seed not in adj:
-        return None
-    if len(adj[seed]) >= 2:
-        path = _walk_cycle_ccw(seed, adj)
-        if direction == "cw":
-            path = list(reversed(path))
-        if stop_at is not None:
-            stop_pix = resolve_anchor(stop_at, skel, bbox)
-            if stop_pix is None:
-                return None
-            best_i = None
-            best_d2 = None
-            for i, p in enumerate(path):
-                if i == 0:
-                    continue  # don't accept seed itself as the stop
-                d2 = (p[0] - stop_pix[0]) ** 2 + (p[1] - stop_pix[1]) ** 2
-                if best_d2 is None or d2 < best_d2:
-                    best_d2 = d2
-                    best_i = i
-            if best_i is None or best_i < 1:
-                return None
-            path = path[:best_i + 1]
-        return path
-    # Non-cycle (degree-1 endpoint): walk the whole connected chain
-    # by collecting the component, then return endpoint-to-endpoint.
-    component: set[tuple[int, int]] = {seed}
-    stack = [seed]
-    while stack:
-        cur = stack.pop()
-        for n in adj[cur]:
-            if n not in component:
-                component.add(n)
-                stack.append(n)
-    endpoints = [p for p in component if len(adj[p]) == 1]
-    if len(endpoints) < 2:
-        return [seed]
-    path = bfs_path(endpoints[0], endpoints[1], adj)
-    return path if path else [seed]
-
-
-# Phase 3 — `through` primitive helpers.
-#
-# `through` is "straight tangent line through the ink, with lateral
-# correction." The medial axis is ignored entirely: from/to anchors
-# resolve only to seed/terminate positions, and the path is synthesised
-# pixel by pixel along the requested tangent direction, with lateral
-# drift to track gentle font curvature. This is the workhorse for every
-# letter where the medial axis snaps to merged-center at multi-stroke
-# meeting points — N's verticals/diagonal, V's diagonals, b/d/p/q's
-# stem, etc. Earlier revisions wrapped this in an on-skeleton Dijkstra
-# attempt with an acceptance gate; the gate's heuristics were too
-# fragile to be worth the complexity (the gate had to trigger for b's
-# stem-bow case and not trigger for plausible-looking-but-wrong
-# skeleton paths). Skipping the skeleton entirely is the simpler
-# semantics and produces the same result for every case we care about.
-
-
-def synthesize_off_skeleton(start_pix: tuple[int, int],
-                            end_pix: tuple[int, int],
-                            tangent: tuple[float, float],
-                            ink_mask: np.ndarray,
-                            max_steps: int = 4000,
-                            terminate_radius_px: float = 6.0,
-                            ) -> list[tuple[int, int]] | None:
-    """Walk in `tangent` direction along ink-mask pixels from
-    `start_pix` toward `end_pix`, synthesising one path pixel per
-    step. Terminates when:
-    - all three candidate pixels (straight-ahead and the two ±1
-      perpendicular drifts) are out of the ink mask;
-    - the walker comes within `terminate_radius_px` of `end_pix`
-      (snaps final pixel to `end_pix` and returns).
-
-    Lateral correction. The walker prefers the straight-ahead candidate
-    (current + tangent). When that pixel is out of ink, it tries the
-    two pixels offset ±1 in the direction perpendicular to the tangent;
-    if either is in ink, it takes that one (when both are in ink, it
-    prefers the one whose perpendicular distance to the centerline
-    through `start_pix` is smaller, pulling the walk back toward the
-    original line). The tangent vector itself doesn't change — only the
-    accumulated float position drifts. This lets the synth track gentle
-    font curvature (e.g. b's stem leaning leftward at the foot) without
-    abandoning the straight-tangent intent.
-
-    Used by the `through` primitive's off-skeleton fallback to draw a
-    stroke's natural path through a multi-stroke merge zone where the
-    medial axis snaps to the merged-center (e.g. b/d/p/q's stem-meets-
-    bowl junction)."""
-    dx, dy = tangent
-    n = math.hypot(dx, dy)
-    if n < 1e-9:
-        return None
-    dx /= n
-    dy /= n
-    # Perpendicular unit vector (tangent rotated 90° CCW).
-    perp_x = -dy
-    perp_y = dx
-    h, w = ink_mask.shape
-    sx, sy = float(start_pix[0]), float(start_pix[1])
-    x, y = sx, sy
-    path: list[tuple[int, int]] = [(int(round(x)), int(round(y)))]
-
-    def in_ink(ic: int, ir: int) -> bool:
-        return 0 <= ir < h and 0 <= ic < w and bool(ink_mask[ir, ic])
-
-    def perp_offset(fx: float, fy: float) -> float:
-        """Signed perp distance from candidate (fx, fy) to the centerline
-        through start_pix along the tangent direction."""
-        return (fx - sx) * perp_x + (fy - sy) * perp_y
-
-    for _ in range(max_steps):
-        # Straight-ahead candidate.
-        ax = x + dx
-        ay = y + dy
-        a_ic, a_ir = int(round(ax)), int(round(ay))
-        if in_ink(a_ic, a_ir):
-            x, y, ic, ir = ax, ay, a_ic, a_ir
-        else:
-            # Lateral drift candidates: straight-ahead ±1 perpendicular.
-            plus_x = ax + perp_x
-            plus_y = ay + perp_y
-            minus_x = ax - perp_x
-            minus_y = ay - perp_y
-            plus_ic, plus_ir = int(round(plus_x)), int(round(plus_y))
-            minus_ic, minus_ir = int(round(minus_x)), int(round(minus_y))
-            plus_ok = in_ink(plus_ic, plus_ir)
-            minus_ok = in_ink(minus_ic, minus_ir)
-            if not plus_ok and not minus_ok:
-                break
-            if plus_ok and not minus_ok:
-                x, y, ic, ir = plus_x, plus_y, plus_ic, plus_ir
-            elif minus_ok and not plus_ok:
-                x, y, ic, ir = minus_x, minus_y, minus_ic, minus_ir
-            else:
-                # Both viable — pick the one closer to the centerline.
-                if abs(perp_offset(plus_x, plus_y)) <= abs(perp_offset(minus_x, minus_y)):
-                    x, y, ic, ir = plus_x, plus_y, plus_ic, plus_ir
-                else:
-                    x, y, ic, ir = minus_x, minus_y, minus_ic, minus_ir
-        if (ic, ir) != path[-1]:
-            path.append((ic, ir))
-        if math.hypot(ic - end_pix[0], ir - end_pix[1]) <= terminate_radius_px:
-            if (end_pix[0], end_pix[1]) != path[-1]:
-                path.append((end_pix[0], end_pix[1]))
-            return path
-    return path if len(path) >= 2 else None
-
-
-def strokes_from_override(letter: str,
-                          mask: np.ndarray,
-                          skel: np.ndarray,
-                          bbox: tuple[int, int, int, int]
-                          ) -> list[list[tuple[int, int]]] | None:
-    """Build strokes from the LETTER_OVERRIDES spec. Returns None when
-    the override doesn't exist or any walk fails (e.g. an anchor is
-    unreachable on this font's specific geometry); the caller falls
-    back to auto-extraction in that case."""
-    spec = LETTER_OVERRIDES.get(letter)
-    if not spec:
-        return None
-    rows, cols = np.where(skel)
-    skel_pixels = set(zip(cols.tolist(), rows.tolist()))
-    adj = build_adjacency(skel_pixels)
-    out: list[list[tuple[int, int]]] = []
-    for stroke_spec in spec:
-        kind = stroke_spec["kind"]
-        if kind == "walk":
-            start = resolve_anchor(stroke_spec["from"], skel, bbox)
-            end = resolve_anchor(stroke_spec["to"], skel, bbox)
-            if start is None or end is None:
-                return None
-            path = bfs_path(start, end, adj)
-            if path is None or len(path) < 2:
-                return None
-            out.append(path)
-        elif kind == "continuous":
-            path = walk_continuous(stroke_spec["anchors"], adj, skel, bbox)
-            if path is None:
-                return None
-            out.append(path)
-        elif kind == "loop":
-            path = walk_loop_at(stroke_spec["start"],
-                                stroke_spec.get("direction", "ccw"),
-                                adj, skel, bbox,
-                                stop_at=stroke_spec.get("stop_at"))
-            if path is None:
-                return None
-            out.append(path)
-        elif kind == "through":
-            start = resolve_anchor_ink_snap(stroke_spec["from"], mask, bbox)
-            end = resolve_anchor_ink_snap(stroke_spec["to"], mask, bbox)
-            if start is None or end is None:
-                return None
-            tangent = stroke_spec.get("tangent")
-            if tangent is None:
-                tangent = (float(end[0] - start[0]),
-                           float(end[1] - start[1]))
-            path = synthesize_off_skeleton(start, end, tangent, mask)
-            if path is None or len(path) < 2:
-                return None
-            out.append(path)
-        else:
-            raise ValueError(f"Unknown override kind: {kind!r}")
-    return out
-
-
-def strokes_auto(skel: np.ndarray) -> list[list[tuple[int, int]]]:
-    """Fallback per-component extraction (split + merge + walk). Used
-    when a letter has no override entry or the override walker fails."""
-    labels = measure.label(skel, connectivity=2)
-    n_components = labels.max()
-    out: list[list[tuple[int, int]]] = []
-    for lbl in range(1, n_components + 1):
-        comp_mask = labels == lbl
-        rs, cs = np.where(comp_mask)
-        comp_pixels = set(zip(cs.tolist(), rs.tolist()))
-        if not comp_pixels:
+def resample_uniform(pixels: list[tuple[int, int]],
+                     n: int) -> list[tuple[int, int]]:
+    """Resample a dense pixel chain to exactly `n` points by linear
+    interpolation along arc length. Output is integer-rounded raster
+    pixels (col, row)."""
+    if n <= 0 or not pixels:
+        return []
+    if len(pixels) == 1:
+        return [pixels[0]] * n
+    arc = [0.0]
+    for i in range(1, len(pixels)):
+        ax, ay = pixels[i - 1]
+        bx, by = pixels[i]
+        arc.append(arc[-1] + ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5)
+    total = arc[-1]
+    if total <= 0:
+        return [pixels[0]] * n
+    out: list[tuple[int, int]] = []
+    j = 0
+    for k in range(n):
+        target = total * k / (n - 1)
+        while j + 1 < len(arc) and arc[j + 1] < target:
+            j += 1
+        if j + 1 >= len(arc):
+            out.append(pixels[-1])
             continue
-        adj = build_adjacency(comp_pixels)
-        segments = split_into_segments(comp_pixels, adj)
-        merged = merge_segments_at_branches(segments)
-        for s in merged:
-            if len(s) >= 2:
-                out.append(s)
+        span = arc[j + 1] - arc[j]
+        t = 0.0 if span <= 0 else (target - arc[j]) / span
+        ax, ay = pixels[j]
+        bx, by = pixels[j + 1]
+        out.append((int(round(ax + (bx - ax) * t)),
+                    int(round(ay + (by - ay) * t))))
     return out
 
 
 # -----------------------------------------------------------------------------
-# Top-level letter pipeline
+# Skeleton field assembly
 # -----------------------------------------------------------------------------
 
-def generate_for_letter(letter: str, font_path: Path,
-                        ) -> tuple[dict, dict]:
-    """Returns (json_data, debug_info) for one letter. Tries the
-    worksheet override first; falls back to auto-extraction when the
-    override is absent or its walker fails on this font's geometry."""
+def build_skeleton_and_adj(stroke_pixel_chains: list[list[tuple[int, int]]],
+                           bbox: tuple[int, int, int, int]
+                           ) -> tuple[list[dict], list[list[int]]]:
+    """Union all stroke pixel chains into a deduplicated skeleton in
+    bbox-relative coords and return parallel 8-connected adjacency
+    lists. Output matches the strokes.json `skeleton` / `skeletonAdj`
+    fields the iOS calibrator reads."""
+    pixel_to_idx: dict[tuple[int, int], int] = {}
+    ordered_pixels: list[tuple[int, int]] = []
+    for chain in stroke_pixel_chains:
+        for p in chain:
+            if p not in pixel_to_idx:
+                pixel_to_idx[p] = len(ordered_pixels)
+                ordered_pixels.append(p)
+    skeleton_pts = [
+        {"x": round(pixel_to_rel(p, bbox)[0], 4),
+         "y": round(pixel_to_rel(p, bbox)[1], 4)}
+        for p in ordered_pixels
+    ]
+    skeleton_adj: list[list[int]] = []
+    for col, row in ordered_pixels:
+        nbrs = [pixel_to_idx[(col + dc, row + dr)]
+                for dr, dc in NEIGHBOURS_8
+                if (col + dc, row + dr) in pixel_to_idx]
+        skeleton_adj.append(nbrs)
+    return skeleton_pts, skeleton_adj
+
+
+# -----------------------------------------------------------------------------
+# Per-letter bake
+# -----------------------------------------------------------------------------
+
+def output_dir_for(letter: str) -> Path:
+    """Resolve the per-letter resource directory under
+    `PrimaeNative/Resources/Letters/`, honouring the lowercase suffix
+    convention."""
+    if letter.isupper() or not letter.isalpha():
+        return OUTPUT_BASE / letter
+    return OUTPUT_BASE / f"{letter}{LOWERCASE_SUFFIX}"
+
+
+def bake_letter(letter: str, font_path: Path) -> dict:
+    """End-to-end bake for one letter. Rasterises the glyph, validates
+    every authored tuple is inside the ink, rasterises each polyline
+    into a dense pixel chain, resamples each to `CHECKPOINT_COUNT`, and
+    packages everything into the strokes.json payload. Raises
+    `ValueError` listing every offending tuple if any falls off-ink."""
+    polylines = LETTERS.get(letter)
+    if not polylines:
+        raise KeyError(f"No polylines authored for {letter!r}")
     mask = rasterize(letter, font_path)
-    skel = morph.skeletonize(mask)
+    bbox = bbox_from_mask(mask)
+    errors = validate_polylines_in_ink(letter, polylines, mask, bbox)
+    if errors:
+        raise ValueError("Out-of-ink polyline tuples:\n  "
+                         + "\n  ".join(errors))
 
-    # bbox from ink mask, computed before the skeleton-restructuring
-    # block since extend_chains_to_anchors needs it inside the block.
-    rows_m, cols_m = np.where(mask)
-    if len(rows_m) == 0:
-        raise ValueError(f"Empty glyph for {letter!r}")
-    bbox = (int(cols_m.min()), int(rows_m.min()),
-            int(cols_m.max()), int(rows_m.max()))
-
-    # Phase 3 skeleton restructuring: split junctions before extending,
-    # then pass the cut-end pixel positions to the extender so it skips
-    # them (they point back into former cluster territory; extending
-    # would re-bridge the gap we just opened).
-    spec = SKELETON_OVERRIDES.get(letter, {})
-    no_extend_pixels: set[tuple[int, int]] = set()
-    cluster_chains: list[list[dict]] = []
-    if spec.get("split_junctions"):
-        skel, cluster_chains = split_at_junctions(
-            skel, cut_depth_px=SPLIT_CUT_DEPTH_PX)
-        if "short_stub" in spec.get("drop_chains", []):
-            skel = drop_short_stub_chains(skel, cluster_chains, ratio=0.20)
-        if spec.get("stitch_collinear"):
-            skel = stitch_collinear_chains(skel, cluster_chains)
-        if "extend_chains_to_anchors" in spec:
-            skel, extended_ce = extend_chains_to_anchors(
-                skel, cluster_chains,
-                spec["extend_chains_to_anchors"], bbox)
-            no_extend_pixels |= extended_ce
-        if spec.get("bake_bridges_as_curves"):
-            skel = bake_bridges_as_curves(skel, cluster_chains)
-        no_extend_pixels |= cluster_chains_cut_ends(skel, cluster_chains)
-
-    skel = extend_tips_to_outline(skel, ink_mask=mask,
-                                  max_extension=MAX_TIP_EXTENSION,
-                                  tangent_window=TANGENT_WINDOW,
-                                  no_extend_pixels=no_extend_pixels)
-    skel = prune_skeleton_spurs(skel, max_spur_length=MAX_SPUR_LENGTH)
-
-    used_override = False
-    raw_strokes = strokes_from_override(letter, mask, skel, bbox)
-    if raw_strokes is not None and raw_strokes:
-        used_override = True
-    else:
-        raw_strokes = strokes_auto(skel)
-        # Auto extraction owns ordering and direction; overrides
-        # already encode both, so we only re-run the orderer for the
-        # auto path.
-        raw_strokes = order_strokes(raw_strokes)
-        raw_strokes = [order_stroke(s) for s in raw_strokes]
-
-    sampled = [trim_lead_in(prune_spikes(prune_retraces(resample(s))))
-               for s in raw_strokes]
-
-    json_strokes = []
-    for i, s in enumerate(sampled, start=1):
-        rel = to_bbox_relative(s, bbox)
-        comment = ("worksheet" if used_override
-                   else f"auto-{stroke_orientation(s)}")
+    stroke_pixel_chains: list[list[tuple[int, int]]] = []
+    json_strokes: list[dict] = []
+    for i, poly in enumerate(polylines, start=1):
+        dense = polyline_to_pixels(poly, bbox)
+        resampled = resample_uniform(dense, CHECKPOINT_COUNT)
+        stroke_pixel_chains.append(dense)
         json_strokes.append({
             "id": i,
-            "checkpoints": [{"x": round(x, 4), "y": round(y, 4)}
-                            for (x, y) in rel],
-            "comment": comment,
+            "checkpoints": [
+                {"x": round(pixel_to_rel(p, bbox)[0], 4),
+                 "y": round(pixel_to_rel(p, bbox)[1], 4)}
+                for p in resampled
+            ],
         })
-    # 8-neighbour adjacency, no subsample. The previous bake used [::2]
-    # subsampling + a 3.5-px all-pairs adjacency; on letters with parallel
-    # stroke arms close together (M, V, W, Ä, etc.) this cross-linked the
-    # medial-axis chains, producing degree-5/6 nodes that BFS could shortcut
-    # through stroke boundaries. Strict 8-neighbour preserves true chain
-    # topology and matches the convention the iOS-side calibrator's runtime
-    # fallback already uses.
-    sk_rows_full, sk_cols_full = np.where(skel)
-    bbox_w = max(1, bbox[2] - bbox[0])
-    bbox_h = max(1, bbox[3] - bbox[1])
-    skeleton_pts = []
-    pixel_to_idx: dict[tuple[int, int], int] = {}
-    for i, (r, c) in enumerate(zip(sk_rows_full.tolist(),
-                                   sk_cols_full.tolist())):
-        skeleton_pts.append({
-            "x": round((c - bbox[0]) / bbox_w, 4),
-            "y": round((r - bbox[1]) / bbox_h, 4),
-        })
-        pixel_to_idx[(r, c)] = i
-    skeleton_adj: list[list[int]] = []
-    for r, c in zip(sk_rows_full.tolist(), sk_cols_full.tolist()):
-        nbrs = [pixel_to_idx[(r + dr, c + dc)]
-                for dr, dc in NEIGHBOURS_8
-                if (r + dr, c + dc) in pixel_to_idx]
-        skeleton_adj.append(nbrs)
 
-    # Phase 3 bridge edges. For every junction cluster that produced
-    # unstitched, surviving deg-1 cut-ends, emit pairwise edges between
-    # them. The Swift calibrator unions these into the routing adjacency
-    # for anchor-snap BFS — they're invisible in the red-dot viz.
-    # Stitched clusters need no bridges (the stitch added real skeleton
-    # pixels that connect cut-ends through the cluster gap).
-    # bake_bridges_as_curves writes the bridges directly into the
-    # skeleton (visible in viz, included in skeletonAdj). The
-    # routing-only bridgeEdges field is suppressed in that case.
-    bridge_edges: list[list[int]] = []
-    if cluster_chains and not spec.get("bake_bridges_as_curves"):
-        sk_set_final = set(zip(sk_cols_full.tolist(), sk_rows_full.tolist()))
+    skeleton_pts, skeleton_adj = build_skeleton_and_adj(
+        stroke_pixel_chains, bbox)
 
-        def _deg(col: int, row: int) -> int:
-            return sum(1 for dr, dc in NEIGHBOURS_8
-                       if (col + dc, row + dr) in sk_set_final)
-
-        for chains in cluster_chains:
-            tip_indices: list[int] = []
-            for c in chains:
-                for col, row in c["full_chain"]:
-                    if (col, row) in sk_set_final:
-                        if _deg(col, row) == 1:
-                            idx = pixel_to_idx.get((row, col))
-                            if idx is not None:
-                                tip_indices.append(idx)
-                        break
-            for ii in range(len(tip_indices)):
-                for jj in range(ii + 1, len(tip_indices)):
-                    bridge_edges.append([tip_indices[ii], tip_indices[jj]])
-
-    data = {
+    return {
         "letter": letter,
         "checkpointRadius": DEFAULT_RADIUS,
         "strokes": json_strokes,
         "skeleton": skeleton_pts,
         "skeletonAdj": skeleton_adj,
     }
-    if bridge_edges:
-        data["bridgeEdges"] = bridge_edges
-    debug = {
-        "mask": mask,
-        "skel": skel,
-        "bbox": bbox,
-        "raw_strokes": sampled,
-        "used_override": used_override,
-    }
-    return data, debug
 
 
 # -----------------------------------------------------------------------------
 # Debug overlay
 # -----------------------------------------------------------------------------
 
-def debug_overlay(letter: str, debug: dict, out_path: Path) -> None:
-    mask = debug["mask"]
+def save_overlay(letter: str, font_path: Path, out_path: Path) -> None:
+    """Save a polyline-over-ink PNG for visual review. Author-placed
+    tuples are drawn as labelled dots; the Bresenham-rasterised path is
+    drawn as a coloured line."""
+    polylines = LETTERS.get(letter, [])
+    mask = rasterize(letter, font_path)
+    bbox = bbox_from_mask(mask)
     img = Image.fromarray(np.where(mask, 0, 230).astype(np.uint8)).convert("RGB")
     draw = ImageDraw.Draw(img)
     palette = [
         (220, 30, 30), (30, 130, 30), (30, 60, 200), (220, 130, 30),
-        (180, 30, 180), (30, 180, 200), (200, 200, 30), (130, 30, 130),
+        (180, 30, 180),
     ]
-    for i, seg in enumerate(debug["raw_strokes"]):
-        color = palette[i % len(palette)]
-        if len(seg) >= 2:
-            draw.line([(c, r) for (c, r) in seg], fill=color, width=4)
-        if seg:
-            c, r = seg[0]
-            draw.ellipse((c - 12, r - 12, c + 12, r + 12), fill=color)
+    for pi, poly in enumerate(polylines):
+        color = palette[pi % len(palette)]
+        pixels = polyline_to_pixels(poly, bbox)
+        if len(pixels) >= 2:
+            draw.line(pixels, fill=color, width=4)
+        for ti, t in enumerate(poly):
+            col, row = rel_to_pixel(t, bbox)
+            r = 10
+            draw.ellipse((col - r, row - r, col + r, row + r),
+                         fill=color, outline=(0, 0, 0))
+            draw.text((col + 12, row - 14), f"{pi}.{ti}", fill=(0, 0, 0))
     img.save(str(out_path))
 
 
@@ -2621,16 +467,25 @@ def debug_overlay(letter: str, debug: dict, out_path: Path) -> None:
 # CLI
 # -----------------------------------------------------------------------------
 
-def output_dir_for(letter: str) -> Path:
-    if letter.isupper() or not letter.isalpha():
-        return OUTPUT_BASE / letter
-    return OUTPUT_BASE / f"{letter}{LOWERCASE_SUFFIX}"
+def write_meta(out_base: Path, font_path: Path) -> None:
+    """Write `_meta.json` next to the per-letter folders so consumers
+    can detect a font swap and trigger a re-bake."""
+    font_hash = hashlib.sha256(font_path.read_bytes()).hexdigest()
+    (out_base / "_meta.json").write_text(json.dumps({
+        "fontPath": str(font_path),
+        "fontSha256": font_hash,
+        "generator": "generate_strokes_auto.py",
+    }, indent=2))
+    print(f"  _meta.json: font sha256 {font_hash[:12]}…")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    """CLI entry point. Bakes one or more letters; with `--debug`,
+    saves `/tmp/polyline_<L>.png` overlays."""
+    parser = argparse.ArgumentParser(
+        description="Bake hand-authored polyline strokes.json files.")
     parser.add_argument("letters", nargs="*",
-                        help="Letters to generate. Default: all 59.")
+                        help="Letters to bake. Default: every entry in LETTERS.")
     parser.add_argument("--font", default=str(DEFAULT_FONT),
                         help="OTF / TTF font path. Default: Primae-Regular.")
     parser.add_argument("--out", default=None,
@@ -2638,7 +493,7 @@ def main() -> int:
     parser.add_argument("--no-overwrite", action="store_true",
                         help="Skip letters whose strokes.json already exists.")
     parser.add_argument("--debug", action="store_true",
-                        help="Save /tmp/auto_<L>.png debug overlay per letter.")
+                        help="Save /tmp/polyline_<L>.png overlays.")
     args = parser.parse_args()
 
     font_path = Path(args.font)
@@ -2646,7 +501,7 @@ def main() -> int:
         print(f"Font not found: {font_path}")
         return 1
     out_base = Path(args.out) if args.out else OUTPUT_BASE
-    letters = args.letters or ALL_LETTERS
+    letters = args.letters or list(LETTERS.keys())
 
     ok = 0
     fail = 0
@@ -2659,7 +514,7 @@ def main() -> int:
             print(f"  {letter}: skipped (exists)")
             continue
         try:
-            data, debug = generate_for_letter(letter, font_path)
+            data = bake_letter(letter, font_path)
         except Exception as e:
             print(f"  {letter}: FAIL — {e}")
             fail += 1
@@ -2669,18 +524,11 @@ def main() -> int:
         n_pts = sum(len(s["checkpoints"]) for s in data["strokes"])
         print(f"  {letter}: ✓ {len(data['strokes'])} strokes, {n_pts} checkpoints")
         if args.debug:
-            debug_overlay(letter, debug, Path(f"/tmp/auto_{letter}.png"))
+            save_overlay(letter, font_path, Path(f"/tmp/polyline_{letter}.png"))
         ok += 1
     if ok > 0:
-        manifest = out_base / "_meta.json"
         try:
-            font_hash = hashlib.sha256(font_path.read_bytes()).hexdigest()
-            manifest.write_text(json.dumps({
-                "fontPath": str(font_path),
-                "fontSha256": font_hash,
-                "generator": "generate_strokes_auto.py",
-            }, indent=2))
-            print(f"  _meta.json: font sha256 {font_hash[:12]}…")
+            write_meta(out_base, font_path)
         except Exception as e:
             print(f"  _meta.json: FAIL — {e}")
     print(f"\nDone — {ok} ok, {fail} failed.")
