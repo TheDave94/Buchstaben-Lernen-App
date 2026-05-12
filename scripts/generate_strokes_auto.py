@@ -820,21 +820,23 @@ def snap_to_medial_axis(point: tuple[int, int], mask: np.ndarray,
 def extend_to_boundary(point: tuple[int, int],
                        direction: tuple[float, float],
                        mask: np.ndarray,
+                       dt: np.ndarray,
                        max_steps: int = 200,
                        letter: str = "?",
                        anchor_name: str = "?") -> tuple[int, int]:
     """Walk outward from `point` along the unit `direction` in 1-px
-    steps, returning the last pixel still inside `mask` before exit.
-    Used to extend line-kind stroke endpoints from the snapped medial-
-    axis position out to the visual ink terminus, so the trace covers
-    the full stroke length. Extension is collinear with the existing
-    chord, so any adjacent fillet geometry is unaffected.
+    steps, then continue one local stroke half-width past the optical
+    ink boundary so the returned point lands at the rounded-cap visual
+    terminus. iPad draws round caps that extend outside the optical
+    glyph bbox by the cap radius (≈ stroke half-width); stopping at the
+    last in-ink pixel leaves the trace ~half-stroke-width short of the
+    visible cap end. The returned point sits in empty space at the cap
+    centerline terminus.
 
     `point` must already lie on ink; otherwise returns it unchanged and
     warns naming `letter` / `anchor_name`. If `max_steps` is exhausted
     without exiting the mask, warns and returns the last in-ink pixel
-    — indicates the direction never crosses an ink boundary (geometry
-    issue worth investigating)."""
+    (indicates the direction never crosses an ink boundary)."""
     col, row = int(round(point[0])), int(round(point[1]))
     h, w = mask.shape
     if not (0 <= row < h and 0 <= col < w and mask[row, col]):
@@ -842,18 +844,38 @@ def extend_to_boundary(point: tuple[int, int],
               f"start {point} not in ink — extension skipped")
         return col, row
     last_in = (col, row)
+    last_in_step = 0
+    exited_at_step: int | None = None
     for step in range(1, max_steps + 1):
         cf = point[0] + direction[0] * step
         rf = point[1] + direction[1] * step
         c = int(round(cf))
         r = int(round(rf))
         if not (0 <= r < h and 0 <= c < w) or not mask[r, c]:
-            return last_in
+            exited_at_step = step
+            break
         last_in = (c, r)
-    print(f"  warning: {letter}/{anchor_name} extend_to_boundary "
-          f"hit max_steps={max_steps} without exiting ink "
-          f"from {point} dir=({direction[0]:.3f},{direction[1]:.3f})")
-    return last_in
+        last_in_step = step
+    if exited_at_step is None:
+        print(f"  warning: {letter}/{anchor_name} extend_to_boundary "
+              f"hit max_steps={max_steps} without exiting ink "
+              f"from {point} dir=({direction[0]:.3f},{direction[1]:.3f})")
+        return last_in
+    # Compute the cap extension distance from the local stroke half-
+    # width at the last in-ink pixel (max DT in a 30×30 window). Project
+    # that many additional pixels along `direction` past `last_in`.
+    lc, lr = last_in
+    r0 = max(0, lr - 15); r1 = min(h, lr + 16)
+    c0 = max(0, lc - 15); c1 = min(w, lc + 16)
+    cap_extension = 0.0
+    if r1 > r0 and c1 > c0:
+        cap_extension = float(dt[r0:r1, c0:c1].max())
+    if cap_extension <= 0.0:
+        return last_in
+    final_step = last_in_step + cap_extension
+    cf = point[0] + direction[0] * final_step
+    rf = point[1] + direction[1] * final_step
+    return int(round(cf)), int(round(rf))
 
 
 def centerline_path(start: tuple[int, int], end: tuple[int, int],
@@ -999,11 +1021,14 @@ def bake_letter(letter: str, font_path: Path
     mask = rasterize(letter, font_path)
     bbox = bbox_from_mask(mask)
     dt = distance_transform_edt(mask)
-    # The medial axis is used here purely as an anchor-snap lookup —
-    # never as a routable graph. The Y-bifurcation artefacts came from
-    # *traversing* the medial axis; pointwise nearest-neighbour lookups
-    # have no such failure mode.
-    skeleton = morph.medial_axis(mask)
+    # `skeletonize` instead of `medial_axis`: medial_axis is
+    # non-deterministic in skimage (different pixel counts per call on
+    # the same mask, polluting re-bakes with 1-2 px endpoint drift).
+    # `skeletonize` produces a deterministic 1-pixel-wide centerline.
+    # snap_to_medial_axis only consumes this as a boolean "is this
+    # pixel on the centerline?" lookup, so the topological differences
+    # between the two skeletonisers don't matter for our use.
+    skeleton = morph.skeletonize(mask)
 
     stroke_pixel_chains: list[list[tuple[int, int]]] = []
     json_strokes: list[dict] = []
@@ -1058,7 +1083,7 @@ def bake_letter(letter: str, font_path: Path
                 L = math.hypot(dx, dy)
                 if L > 1e-9:
                     snapped[0] = extend_to_boundary(
-                        p0, (dx / L, dy / L), mask,
+                        p0, (dx / L, dy / L), mask, dt,
                         letter=letter, anchor_name=names[0])
                 else:
                     print(f"  warning: {letter}/{names[0]} degenerate "
@@ -1068,7 +1093,7 @@ def bake_letter(letter: str, font_path: Path
                 L = math.hypot(dx, dy)
                 if L > 1e-9:
                     snapped[-1] = extend_to_boundary(
-                        pN, (dx / L, dy / L), mask,
+                        pN, (dx / L, dy / L), mask, dt,
                         letter=letter, anchor_name=names[-1])
                 else:
                     print(f"  warning: {letter}/{names[-1]} degenerate "
