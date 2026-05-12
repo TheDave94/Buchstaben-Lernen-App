@@ -606,6 +606,160 @@ def line_sampler(anchors: list[tuple[int, int]],
     return points
 
 
+def fillet_arc(p_prev: tuple[float, float],
+               p_joint: tuple[float, float],
+               p_next: tuple[float, float],
+               radius: float) -> list[tuple[float, float]]:
+    """Sample the circular fillet arc that rounds the corner at
+    `p_joint`, tangent to segments `p_prev→p_joint` and `p_joint→p_next`
+    with the given `radius`. Returns the arc as a list of `(x, y)`
+    floats sampled at ~1 px arc-length spacing, with both tangent points
+    included exactly as the first and last elements. Returns `[p_joint]`
+    on a near-straight (≈π) or degenerate (≈0) corner."""
+    jx, jy = float(p_joint[0]), float(p_joint[1])
+    v1 = (float(p_prev[0]) - jx, float(p_prev[1]) - jy)
+    v2 = (float(p_next[0]) - jx, float(p_next[1]) - jy)
+    L1 = math.hypot(v1[0], v1[1])
+    L2 = math.hypot(v2[0], v2[1])
+    if L1 < 1e-9 or L2 < 1e-9:
+        return [(jx, jy)]
+    u1 = (v1[0] / L1, v1[1] / L1)
+    u2 = (v2[0] / L2, v2[1] / L2)
+    cos_full = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
+    full_angle = math.acos(cos_full)
+    if full_angle > math.pi - 1e-3:
+        return [(jx, jy)]
+    if full_angle < 1e-3:
+        print(f"  warning: fillet_arc fold-back at ({jx:.1f}, {jy:.1f}); "
+              f"leaving joint sharp")
+        return [(jx, jy)]
+
+    half_angle = full_angle / 2.0
+    tan_dist = radius / math.tan(half_angle)
+    center_dist = radius / math.sin(half_angle)
+
+    t_prev = (jx + u1[0] * tan_dist, jy + u1[1] * tan_dist)
+    t_next = (jx + u2[0] * tan_dist, jy + u2[1] * tan_dist)
+
+    bx = u1[0] + u2[0]
+    by = u1[1] + u2[1]
+    bl = math.hypot(bx, by)
+    if bl < 1e-9:
+        return [(jx, jy)]
+    bx /= bl; by /= bl
+    cx = jx + bx * center_dist
+    cy = jy + by * center_dist
+
+    a_start = math.atan2(t_prev[1] - cy, t_prev[0] - cx)
+    a_end = math.atan2(t_next[1] - cy, t_next[0] - cx)
+    sweep = a_end - a_start
+    # Normalise sweep to [-π, π] so we always take the short arc between
+    # the two tangent points (sweep magnitude = π - full_angle).
+    while sweep > math.pi:
+        sweep -= 2.0 * math.pi
+    while sweep < -math.pi:
+        sweep += 2.0 * math.pi
+
+    n_samples = max(2, int(round(abs(sweep) * radius)))
+    out: list[tuple[float, float]] = []
+    for k in range(n_samples + 1):
+        t = k / n_samples
+        a = a_start + sweep * t
+        out.append((cx + math.cos(a) * radius, cy + math.sin(a) * radius))
+    return out
+
+
+def polyline_with_filleted_joints(
+        positions: list[tuple[float, float]],
+        radii: list[float]) -> list[tuple[int, int]]:
+    """Build a 1-px-spaced integer polyline through `positions`, with
+    each interior joint replaced by a tangent circular arc whose radius
+    is taken from `radii` (which must have `len(positions) - 2` entries,
+    one per interior joint). Straight portions are line-sampled; arcs
+    arrive pre-sampled at ~1 px from `fillet_arc`.
+
+    Per-joint radius is capped down so each tangent point sits at most
+    45 % of the way along its adjoining segment — prevents an arc from
+    swallowing an entire short segment when the snapped centerline runs
+    are tight (e.g. M's narrow valley). A capping event prints an info
+    line. A joint with radius 0 / degenerate geometry stays sharp."""
+    n = len(positions)
+    if n < 2:
+        return [(int(round(p[0])), int(round(p[1]))) for p in positions]
+    if n == 2:
+        return line_sampler(
+            [(int(round(p[0])), int(round(p[1]))) for p in positions])
+
+    arcs: list[list[tuple[float, float]] | None] = []
+    for i in range(1, n - 1):
+        p_prev = positions[i - 1]
+        p_joint = positions[i]
+        p_next = positions[i + 1]
+        r = radii[i - 1]
+        if r <= 0.0:
+            print(f"  warning: radius=0 at joint {i} {p_joint} — sharp vertex")
+            arcs.append(None)
+            continue
+        v1 = (p_prev[0] - p_joint[0], p_prev[1] - p_joint[1])
+        v2 = (p_next[0] - p_joint[0], p_next[1] - p_joint[1])
+        L1 = math.hypot(v1[0], v1[1]); L2 = math.hypot(v2[0], v2[1])
+        if L1 < 1e-9 or L2 < 1e-9:
+            arcs.append(None)
+            continue
+        cos_full = max(-1.0, min(1.0,
+                                  (v1[0] * v2[0] + v1[1] * v2[1]) / (L1 * L2)))
+        full_angle = math.acos(cos_full)
+        if full_angle > math.pi - 1e-3 or full_angle < 1e-3:
+            arcs.append(None)
+            continue
+        half_angle = full_angle / 2.0
+        tan_dist = r / math.tan(half_angle)
+        max_tan_dist = 0.45 * min(L1, L2)
+        if tan_dist > max_tan_dist:
+            new_r = max_tan_dist * math.tan(half_angle)
+            print(f"  info: joint {i} radius capped {r:.1f}→{new_r:.1f}")
+            r = new_r
+        arc = fillet_arc(p_prev, p_joint, p_next, r)
+        arcs.append(arc if len(arc) >= 2 else None)
+
+    out: list[tuple[int, int]] = []
+
+    def append_line(p: tuple[float, float], q: tuple[float, float]) -> None:
+        p_int = (int(round(p[0])), int(round(p[1])))
+        q_int = (int(round(q[0])), int(round(q[1])))
+        if p_int == q_int:
+            if not out:
+                out.append(p_int)
+            return
+        pts = line_sampler([p_int, q_int])
+        start = 1 if out and out[-1] == pts[0] else 0
+        out.extend(pts[start:])
+
+    def append_arc(arc: list[tuple[float, float]]) -> None:
+        pts = [(int(round(p[0])), int(round(p[1]))) for p in arc]
+        start = 1 if out and out[-1] == pts[0] else 0
+        out.extend(pts[start:])
+
+    for i in range(n - 1):
+        seg_start = (positions[0] if i == 0
+                     else (arcs[i - 1][-1] if arcs[i - 1] is not None
+                           else positions[i]))
+        seg_end = (positions[-1] if i == n - 2
+                   else (arcs[i][0] if arcs[i] is not None
+                         else positions[i + 1]))
+        append_line(seg_start, seg_end)
+        if i < n - 2:
+            arc = arcs[i]
+            if arc is None:
+                v = positions[i + 1]
+                v_int = (int(round(v[0])), int(round(v[1])))
+                if not out or out[-1] != v_int:
+                    out.append(v_int)
+            else:
+                append_arc(arc)
+    return out
+
+
 def snap_to_medial_axis(point: tuple[int, int], mask: np.ndarray,
                         dt: np.ndarray, skeleton: np.ndarray,
                         letter: str = "?",
@@ -854,7 +1008,25 @@ def bake_letter(letter: str, font_path: Path
                                     letter=letter, anchor_name=n)
                 for p, n in zip(anchors, names)
             ]
-            chain = line_sampler(snapped)
+            if len(snapped) >= 3:
+                # Fillet radius per interior joint = local stroke
+                # half-width at the snapped joint position. Matches the
+                # rounded outer-ink corner so the centerline curve and
+                # the boundary curve share a radius.
+                h_, w_ = mask.shape
+                radii: list[float] = []
+                for j in range(1, len(snapped) - 1):
+                    sc, sr = snapped[j]
+                    r0 = max(0, sr - 15); r1 = min(h_, sr + 16)
+                    c0 = max(0, sc - 15); c1 = min(w_, sc + 16)
+                    if r1 <= r0 or c1 <= c0:
+                        radii.append(0.0)
+                    else:
+                        radii.append(float(dt[r0:r1, c0:c1].max()))
+                chain = polyline_with_filleted_joints(
+                    [(float(p[0]), float(p[1])) for p in snapped], radii)
+            else:
+                chain = line_sampler(snapped)
         else:
             chain = []
             for si in range(len(anchors) - 1):
