@@ -817,6 +817,45 @@ def snap_to_medial_axis(point: tuple[int, int], mask: np.ndarray,
     return int(abs_cols[pick]), int(abs_rows[pick])
 
 
+def extend_to_boundary(point: tuple[int, int],
+                       direction: tuple[float, float],
+                       mask: np.ndarray,
+                       max_steps: int = 200,
+                       letter: str = "?",
+                       anchor_name: str = "?") -> tuple[int, int]:
+    """Walk outward from `point` along the unit `direction` in 1-px
+    steps, returning the last pixel still inside `mask` before exit.
+    Used to extend line-kind stroke endpoints from the snapped medial-
+    axis position out to the visual ink terminus, so the trace covers
+    the full stroke length. Extension is collinear with the existing
+    chord, so any adjacent fillet geometry is unaffected.
+
+    `point` must already lie on ink; otherwise returns it unchanged and
+    warns naming `letter` / `anchor_name`. If `max_steps` is exhausted
+    without exiting the mask, warns and returns the last in-ink pixel
+    — indicates the direction never crosses an ink boundary (geometry
+    issue worth investigating)."""
+    col, row = int(round(point[0])), int(round(point[1]))
+    h, w = mask.shape
+    if not (0 <= row < h and 0 <= col < w and mask[row, col]):
+        print(f"  warning: {letter}/{anchor_name} extend_to_boundary "
+              f"start {point} not in ink — extension skipped")
+        return col, row
+    last_in = (col, row)
+    for step in range(1, max_steps + 1):
+        cf = point[0] + direction[0] * step
+        rf = point[1] + direction[1] * step
+        c = int(round(cf))
+        r = int(round(rf))
+        if not (0 <= r < h and 0 <= c < w) or not mask[r, c]:
+            return last_in
+        last_in = (c, r)
+    print(f"  warning: {letter}/{anchor_name} extend_to_boundary "
+          f"hit max_steps={max_steps} without exiting ink "
+          f"from {point} dir=({direction[0]:.3f},{direction[1]:.3f})")
+    return last_in
+
+
 def centerline_path(start: tuple[int, int], end: tuple[int, int],
                     mask: np.ndarray, dt: np.ndarray
                     ) -> list[tuple[int, int]]:
@@ -1008,6 +1047,32 @@ def bake_letter(letter: str, font_path: Path
                                     letter=letter, anchor_name=n)
                 for p, n in zip(anchors, names)
             ]
+            # Extend first / last anchor outward along the endpoint
+            # chord to reach the ink terminus — the medial-axis snap
+            # alone lands ~half-stroke-width short of the visible band
+            # end. Collinear with the adjacent chord, so fillets at
+            # snapped[1] / snapped[-2] stay tangent.
+            if len(snapped) >= 2:
+                p0, p1 = snapped[0], snapped[1]
+                dx, dy = p0[0] - p1[0], p0[1] - p1[1]
+                L = math.hypot(dx, dy)
+                if L > 1e-9:
+                    snapped[0] = extend_to_boundary(
+                        p0, (dx / L, dy / L), mask,
+                        letter=letter, anchor_name=names[0])
+                else:
+                    print(f"  warning: {letter}/{names[0]} degenerate "
+                          f"endpoint chord — skipped extension")
+                pN, pM = snapped[-1], snapped[-2]
+                dx, dy = pN[0] - pM[0], pN[1] - pM[1]
+                L = math.hypot(dx, dy)
+                if L > 1e-9:
+                    snapped[-1] = extend_to_boundary(
+                        pN, (dx / L, dy / L), mask,
+                        letter=letter, anchor_name=names[-1])
+                else:
+                    print(f"  warning: {letter}/{names[-1]} degenerate "
+                          f"endpoint chord — skipped extension")
             if len(snapped) >= 3:
                 # Fillet radius per interior joint = local stroke
                 # half-width at the snapped joint position. Matches the
