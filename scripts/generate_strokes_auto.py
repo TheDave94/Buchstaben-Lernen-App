@@ -258,39 +258,32 @@ LETTERS: dict[str, list[StrokeSpec]] = {
     # when the curve workstream lands. l_l/strokes.json on disk is the
     # bd4e2d5 version and will be overwritten then.
     "v": [
-        # Asymmetric LSQ-fit trim (start=0.50 cap-side): the medial axis
-        # bows toward the cap caps on TL/TR; trimming 50% of cap-side
-        # pixels rotates the fitted line to point at the true apex,
-        # bringing the math-intersection from 5px outside to 1px inside.
+        # Plain straight_line arms — LSQ fit through the natural medial
+        # axis gives the diagonal direction without LSQ-trim tilt; the
+        # fillet joint owns apex placement. Math intersection V sits ~7px
+        # below the visible v-tip outline (the arms extrapolate past the
+        # cap rounding); trim_back=24 lands the Bézier arc apex ~3px
+        # above the v-tip outline (apex_dt ≈ 3, in target 1-3 range).
         {"kind": "line", "anchors": ["TL", "BC", "TR"],
-         "arms": [
-             {"strategy": "straight_line",
-              "fit_trim_start_pct": 0.50},
-             {"strategy": "straight_line",
-              "fit_trim_end_pct": 0.50},
-         ],
-         "joints": ["sharp_meeting_at_intersection"]},
+         "arms": ["straight_line", "straight_line"],
+         "joints": [{"strategy": "fillet_at_intersection",
+                      "trim_back": 24.0}]},
     ],
     "w": [
-        # Asymmetric LSQ-fit trim (cap_pct=0.60 toward apex-near pixels).
-        # Outer arms trim the cap side; inner arms trim the TC side to
-        # bias the fit toward the BL/BR apex pixels. TC apex +23 inside,
-        # BL +1 inside, BR -1 (covered by sharp_meeting skip window).
-        # cap70 fully resolves the apex sign but introduces visible
-        # polyline tilt (15 gate-1 overshoots); cap60 is the minimum
-        # that keeps gates clean.
+        # Plain straight_line arms; fillet joint trim_back=40 uniform at
+        # all three joints (BL valley, TC inner peak, BR valley). The
+        # valleys are deeper than v's so V sits 7-10px below the outline
+        # and a larger trim_back is needed to push the arc apex up
+        # through the cap rounding. Prima's rendered w glyph is slightly
+        # asymmetric (BR valley deeper than BL): at tb=40 BL lands +4 and
+        # BR +1 above outline — accepted as good-enough given the glyph
+        # asymmetry. TC's V sits INSIDE the cap (convex peak case), so
+        # the same trim_back produces an arc apex at mid-stroke dt that
+        # traces the inner peak smoothly.
         {"kind": "line", "anchors": ["TL", "BL", "TC", "BR", "TR"],
-         "arms": [
-             {"strategy": "straight_line",
-              "fit_trim_start_pct": 0.60},
-             {"strategy": "straight_line",
-              "fit_trim_end_pct": 0.60},
-             {"strategy": "straight_line",
-              "fit_trim_start_pct": 0.60},
-             {"strategy": "straight_line",
-              "fit_trim_end_pct": 0.60},
-         ],
-         "joints": ["sharp_meeting_at_intersection"] * 3},
+         "arms": ["straight_line"] * 4,
+         "joints": [{"strategy": "fillet_at_intersection",
+                      "trim_back": 40.0}] * 3},
     ],
     "x": [
         {"kind": "line", "anchors": ["TL", "BR"],
@@ -2021,6 +2014,113 @@ def joint_sharp_meeting_at_intersection(
             "skip_indices": skip_indices}
 
 
+def joint_fillet_at_intersection(
+        arm_prev: list[tuple[float, float]],
+        arm_next: list[tuple[float, float]], *,
+        mask: np.ndarray, dt: np.ndarray,
+        anchor: tuple[int, int],
+        trim_back: float = 8.0,
+        ) -> dict | None:
+    """Fillet-style joint: cubic Bézier arc between trim points offset
+    `trim_back` pixels back from the math intersection V along each
+    arm's tangent. Both Bézier control points sit at V, so the arc
+    interpolates with tangent continuity at the seams and the midpoint
+    sits 3/4 of the way from the chord-midpoint to V.
+
+    Construction:
+      V = math intersection of arm_prev's and arm_next's fitted lines
+      d_prev = unit vector from arm_prev[0] to arm_prev[-1]
+      d_next = unit vector from arm_next[0] to arm_next[-1]
+      P_end_trim   = V - trim_back * d_prev   (back from V along arm_prev)
+      P_start_trim = V + trim_back * d_next   (forward from V along arm_next)
+      Cubic Bézier: P0 = P_end_trim, C1 = C2 = V, P3 = P_start_trim
+
+    Bridge segments stitch arm_prev[-1] → P_end_trim and
+    P_start_trim → arm_next[0] (straight lines along the arm tangents)
+    so the chain remains continuous even when trim_back doesn't match
+    the natural arm endpoint exactly. Returns None when arms are
+    parallel or |trim_back| exceeds the |V−arm[-1]| distance (which
+    would force a reversal)."""
+    if len(arm_prev) < 2 or len(arm_next) < 2:
+        return None
+    mh, mw = mask.shape
+    p1a = arm_prev[0]; p1b = arm_prev[-1]
+    d1x = p1b[0] - p1a[0]; d1y = p1b[1] - p1a[1]
+    L1 = math.hypot(d1x, d1y)
+    if L1 < 1e-6:
+        return None
+    d1x /= L1; d1y /= L1
+    p2a = arm_next[0]; p2b = arm_next[-1]
+    d2x = p2b[0] - p2a[0]; d2y = p2b[1] - p2a[1]
+    L2 = math.hypot(d2x, d2y)
+    if L2 < 1e-6:
+        return None
+    d2x /= L2; d2y /= L2
+    det = d1x * (-d2y) - d1y * (-d2x)
+    if abs(det) < 1e-6:
+        return None
+    dx_ = p2a[0] - p1a[0]; dy_ = p2a[1] - p1a[1]
+    t_param = (dx_ * (-d2y) - dy_ * (-d2x)) / det
+    V = (p1a[0] + t_param * d1x, p1a[1] + t_param * d1y)
+    # Trim points: trim_back pixels back from V along each arm tangent.
+    P_end_trim = (V[0] - trim_back * d1x, V[1] - trim_back * d1y)
+    P_start_trim = (V[0] + trim_back * d2x, V[1] + trim_back * d2y)
+    # Bridges from natural arm endpoints to trim points. If the trim
+    # point sits BEHIND the natural arm endpoint (i.e., trim_back is
+    # larger than the |V − arm_prev[-1]| distance along d_prev), the
+    # bridge would walk backward — bail out so callers can pick a
+    # smaller trim_back.
+    bridge_prev_signed = (
+        (P_end_trim[0] - p1b[0]) * d1x
+        + (P_end_trim[1] - p1b[1]) * d1y
+    )
+    bridge_next_signed = (
+        (p2a[0] - P_start_trim[0]) * d2x
+        + (p2a[1] - P_start_trim[1]) * d2y
+    )
+    if bridge_prev_signed < -0.5 or bridge_next_signed < -0.5:
+        return None
+    # Sample the bridges + Bézier into one continuous polyline.
+    samples: list[tuple[float, float]] = []
+
+    def _extend(seg: list[tuple[float, float]]):
+        if not samples:
+            samples.extend((float(x), float(y)) for x, y in seg)
+            return
+        last = samples[-1]
+        start = 1 if (int(round(seg[0][0])), int(round(seg[0][1]))) == (
+            int(round(last[0])), int(round(last[1]))) else 0
+        samples.extend((float(x), float(y)) for x, y in seg[start:])
+
+    a = (int(round(p1b[0])), int(round(p1b[1])))
+    b = (int(round(P_end_trim[0])), int(round(P_end_trim[1])))
+    if a != b:
+        _extend(line_sampler([a, b]))
+    else:
+        samples.append((float(p1b[0]), float(p1b[1])))
+    bez = sample_cubic_bezier(P_end_trim, V, V, P_start_trim)
+    _extend([(int(round(x)), int(round(y))) for x, y in bez])
+    c = (int(round(P_start_trim[0])), int(round(P_start_trim[1])))
+    d = (int(round(p2a[0])), int(round(p2a[1])))
+    if c != d:
+        _extend(line_sampler([c, d]))
+    # Mark any out-of-mask samples as skip indices. For concave valleys
+    # the entire arc sits inside the mask (V inside, bezier interpolates
+    # within); for convex peaks the arc may briefly leave the mask near
+    # V where the cap rounds off.
+    skip_indices: set[int] = set()
+    for s_i, (sx, sy) in enumerate(samples):
+        ic = int(round(sx)); ir = int(round(sy))
+        if not (0 <= ir < mh and 0 <= ic < mw and bool(mask[ir, ic])):
+            skip_indices.add(s_i)
+    return {"type": "fillet",
+            "P_end_trim": P_end_trim, "P_start_trim": P_start_trim,
+            "V": V, "trim_back": trim_back,
+            "tangent_prev": (d1x, d1y),
+            "tangent_next": (d2x, d2y),
+            "samples": samples, "skip_indices": skip_indices}
+
+
 # --- Registries -------------------------------------------------------------
 
 ARM_STRATEGIES = {
@@ -2038,6 +2138,7 @@ JOINT_STRATEGIES = {
     "cubic_bezier_clamped": joint_cubic_bezier_clamped,
     "sharp_meeting": joint_sharp_meeting,
     "sharp_meeting_at_intersection": joint_sharp_meeting_at_intersection,
+    "fillet_at_intersection": joint_fillet_at_intersection,
 }
 
 # Default pair matches the byte-identical line-kind output shipping at
