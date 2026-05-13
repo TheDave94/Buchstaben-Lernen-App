@@ -1892,6 +1892,38 @@ def bake_letter(letter: str, font_path: Path
     # an out-of-mask window; concave valleys collapse to just the apex).
     sharp_skip_indices_per_stroke: list[set[int]] = []
 
+    # Per-letter anchor caches. Same `name` referenced across multiple
+    # strokes resolves once and re-uses the same pixel — required for
+    # multi-stroke shared-meeting-point letters (e.g. T-architecture
+    # variants). Key on `(kind, name)` because curve-kind passes `dt`
+    # to `resolve_anchor` and applies `extend_tip_inward` for tip
+    # anchors, returning a different pixel than line-kind.
+    anchor_cache: dict[tuple[str, str], tuple[int, int]] = {}
+    snap_cache: dict[str, tuple[int, int]] = {}
+    total_resolve_calls = 0
+    total_snap_calls = 0
+
+    def _cached_resolve(name: str, kind_: str,
+                        anchor_dt: np.ndarray | None
+                        ) -> tuple[int, int]:
+        nonlocal total_resolve_calls
+        total_resolve_calls += 1
+        key = (kind_, name)
+        if key not in anchor_cache:
+            anchor_cache[key] = resolve_anchor(name, mask, bbox,
+                                                dt=anchor_dt)
+        return anchor_cache[key]
+
+    def _cached_snap(p: tuple[int, int],
+                     name: str) -> tuple[int, int]:
+        nonlocal total_snap_calls
+        total_snap_calls += 1
+        if name not in snap_cache:
+            snap_cache[name] = snap_to_medial_axis(
+                p, mask, dt, skeleton,
+                letter=letter, anchor_name=name)
+        return snap_cache[name]
+
     for i, spec in enumerate(specs, start=1):
         if "kind" in spec:
             kind = spec["kind"]
@@ -1915,7 +1947,7 @@ def bake_letter(letter: str, font_path: Path
         labelled: list[tuple[str, tuple[int, int]]] = []
         for name in names:
             try:
-                pos = resolve_anchor(name, mask, bbox, dt=anchor_dt)
+                pos = _cached_resolve(name, kind, anchor_dt)
             except (KeyError, ValueError) as e:
                 raise ValueError(
                     f"{letter} stroke {i}: anchor {name!r} failed — {e}"
@@ -1931,9 +1963,7 @@ def bake_letter(letter: str, font_path: Path
             # per-arm and per-joint overrides come from spec["arms"] and
             # spec["joints"].
             rough_snapped: list[tuple[int, int]] = [
-                snap_to_medial_axis(p, mask, dt, skeleton,
-                                    letter=letter, anchor_name=n)
-                for p, n in zip(anchors, names)
+                _cached_snap(p, n) for p, n in zip(anchors, names)
             ]
             n_arms = len(rough_snapped) - 1
 
@@ -2068,6 +2098,10 @@ def bake_letter(letter: str, font_path: Path
         "joint_arcs_per_stroke": joint_arcs_per_stroke,
         "smoothed_paths_per_stroke": smoothed_paths_per_stroke,
         "sharp_skip_indices_per_stroke": sharp_skip_indices_per_stroke,
+        "anchor_cache_size": len(anchor_cache),
+        "snap_cache_size": len(snap_cache),
+        "total_resolve_calls": total_resolve_calls,
+        "total_snap_calls": total_snap_calls,
     }
     return data, debug
 
