@@ -1269,10 +1269,131 @@ def bake_letter(letter: str, font_path: Path
                     return _snap_endpoint(o, names[idx])
                 return (jc, jr)
 
-            # Snap every anchor to the medial axis up front.
-            snapped: list[tuple[int, int]] = [
+            # Rough medial-axis snap per anchor.
+            rough_snapped: list[tuple[int, int]] = [
                 _snap_endpoint(p, n) for p, n in zip(anchors, names)
             ]
+
+            # LSQ-correct snap positions: for each arm between
+            # consecutive rough snaps, BFS the skeleton, trim 20 % from
+            # each end (to drop cap-area branches), fit a total-least-
+            # squares line to the remaining medial-axis pixels. Project
+            # endpoint anchors onto their one arm's line; interior
+            # joints onto the intersection of adjacent arm lines.
+            # Catches up-to-9 px drift caused by quantization of the
+            # rough snap onto a single skeleton pixel.
+            def _bfs_skeleton_path(a, b):
+                h_, w_ = skeleton.shape
+                ax, ay = a; bx, by = b
+                if not (0 <= ay < h_ and 0 <= ax < w_
+                        and skeleton[ay, ax]):
+                    return None
+                if not (0 <= by < h_ and 0 <= bx < w_
+                        and skeleton[by, bx]):
+                    return None
+                from collections import deque
+                parent: dict[tuple[int, int], tuple[int, int] | None] = {
+                    (ay, ax): None}
+                q = deque([(ax, ay)])
+                found = False
+                while q:
+                    cc, cr = q.popleft()
+                    if (cc, cr) == (bx, by):
+                        found = True
+                        break
+                    for dr, dc in NEIGHBOURS_8:
+                        nc, nr = cc + dc, cr + dr
+                        if not (0 <= nr < h_ and 0 <= nc < w_):
+                            continue
+                        if not skeleton[nr, nc]:
+                            continue
+                        if (nr, nc) in parent:
+                            continue
+                        parent[(nr, nc)] = (cr, cc)
+                        q.append((nc, nr))
+                if not found:
+                    return None
+                p: list[tuple[int, int]] = []
+                cur: tuple[int, int] | None = (by, bx)
+                while cur is not None:
+                    p.append((cur[1], cur[0]))
+                    cur = parent[cur]
+                p.reverse()
+                return p
+
+            def _fit_arm_line(rA, rB):
+                """Return (origin, direction) unit-vector line fitted
+                to the trimmed BFS skeleton path between rA and rB, or
+                None if the fit can't be computed."""
+                path = _bfs_skeleton_path(rA, rB)
+                if path is None or len(path) < 10:
+                    return None
+                trim = int(len(path) * 0.20)
+                pts = path[trim:len(path) - trim] if trim > 0 else path
+                if len(pts) < 5:
+                    return None
+                arr = np.array(pts, dtype=float)
+                centroid = arr.mean(axis=0)
+                centered = arr - centroid
+                _, _, vt = np.linalg.svd(centered, full_matrices=False)
+                direction = vt[0]
+                return ((float(centroid[0]), float(centroid[1])),
+                        (float(direction[0]), float(direction[1])))
+
+            def _project(p, line):
+                origin, d = line
+                vx = p[0] - origin[0]; vy = p[1] - origin[1]
+                t = vx * d[0] + vy * d[1]
+                return (origin[0] + t * d[0], origin[1] + t * d[1])
+
+            def _line_intersect(line_a, line_b):
+                (p1x, p1y), (d1x, d1y) = line_a
+                (p2x, p2y), (d2x, d2y) = line_b
+                det = d1x * (-d2y) - d1y * (-d2x)
+                if abs(det) < 1e-9:
+                    return None
+                dx = p2x - p1x; dy = p2y - p1y
+                t = (dx * (-d2y) - dy * (-d2x)) / det
+                return (p1x + t * d1x, p1y + t * d1y)
+
+            arm_lines: list[tuple | None] = []
+            for k in range(len(rough_snapped) - 1):
+                arm_lines.append(_fit_arm_line(rough_snapped[k],
+                                               rough_snapped[k + 1]))
+
+            corrected: list[tuple[float, float] | None] = [None] * len(rough_snapped)
+            for k, line in enumerate(arm_lines):
+                if line is None:
+                    continue
+                # Project endpoints onto this arm's line.
+                if corrected[k] is None:
+                    corrected[k] = _project(rough_snapped[k], line)
+                # Interior joint at k+1 shared with next arm.
+                if k + 1 < len(rough_snapped) - 1:
+                    next_line = arm_lines[k + 1]
+                    if next_line is not None:
+                        xpt = _line_intersect(line, next_line)
+                        if xpt is not None:
+                            corrected[k + 1] = xpt
+                            continue
+                # Last anchor of this arm: project (will be overwritten
+                # by next arm's intersection if it exists).
+                if corrected[k + 1] is None:
+                    corrected[k + 1] = _project(rough_snapped[k + 1], line)
+
+            snapped: list[tuple[int, int]] = []
+            for k, c in enumerate(corrected):
+                if c is None:
+                    snapped.append(rough_snapped[k])
+                else:
+                    sc = int(round(c[0])); sr = int(round(c[1]))
+                    # Containment check; fall back to rough if outside
+                    # mask (shouldn't happen on well-fit arms).
+                    if (0 <= sr < mh and 0 <= sc < mw
+                            and mask[sr, sc]):
+                        snapped.append((sc, sr))
+                    else:
+                        snapped.append(rough_snapped[k])
             snap_first = snapped[0]
             snap_last = snapped[-1]
 
