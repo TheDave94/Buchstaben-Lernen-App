@@ -136,6 +136,48 @@ LETTERS: dict[str, list[StrokeSpec]] = {
                     "t_junction_start": 0,  # crossbar left meets stroke 0 (BL→T)
                     "t_junction_end": 1}]},  # crossbar right meets stroke 1 (BR→T)
     ],
+    "E": [
+        {"kind": "line", "anchors": ["TL", "BL"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["TL", "TR"],
+         "arms": [{"strategy": "straight_line",
+                    "t_junction_start": 0}]},
+        {"kind": "line", "anchors": ["ML", "MR"],
+         "arms": [{"strategy": "straight_line",
+                    "t_junction_start": 0}]},
+        {"kind": "line", "anchors": ["BL", "BR"],
+         "arms": [{"strategy": "straight_line",
+                    "t_junction_start": 0}]},
+    ],
+    "F": [
+        {"kind": "line", "anchors": ["TL", "BL"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["TL", "TR"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["ML", "MR"],
+         "arms": [{"strategy": "straight_line", "t_junction_start": 0}]},
+    ],
+    "H": [
+        {"kind": "line", "anchors": ["TL", "BL"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["TR", "BR"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["ML", "MR"],
+         "arms": [{"strategy": "straight_line",
+                    "t_junction_start": 0,
+                    "t_junction_end": 1}]},
+    ],
+    "I": [
+        {"kind": "line", "anchors": ["TC", "BC"],
+         "arms": ["straight_line"]},
+    ],
+    "L": [
+        {"kind": "line", "anchors": ["TL", "BL"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["BL", "BR"],
+         "arms": [{"strategy": "straight_line",
+                    "t_junction_start": 0}]},
+    ],
     "N": [
         {"kind": "line", "anchors": ["BL", "TL", "BR", "TR"],
          "arms": ["straight_line", "straight_line", "straight_line"],
@@ -144,11 +186,37 @@ LETTERS: dict[str, list[StrokeSpec]] = {
              "sharp_meeting_at_intersection",  # BR inner corner
          ]},
     ],
+    "T": [
+        {"kind": "line", "anchors": ["TL", "TR"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["TC", "BC"],
+         "arms": [{"strategy": "straight_line", "t_junction_start": 0}]},
+    ],
     "V": [
         {"kind": "line", "anchors": ["TL", "BC", "TR"],
          "arms": ["straight_line", "straight_line"],
          "joints": [
              "sharp_meeting_at_intersection",  # BC valley
+         ]},
+    ],
+    "X": [
+        {"kind": "line", "anchors": ["TL", "BR"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["TR", "BL"],
+         "arms": ["straight_line"]},
+    ],
+    # Y deferred — TC interior-anchor-on-one-stroke /
+    # endpoint-on-another isn't supported by the shared-apex
+    # pre-compute (endpoint-anchor only). Reopen with either:
+    # (a) extend shared-apex resolution to interior anchors, or
+    # (b) introduce a curve workstream so the trailing stem can
+    # round into the descender baseline as Prima's design shows.
+    "Z": [
+        {"kind": "line", "anchors": ["TL", "TR", "BL", "BR"],
+         "arms": ["straight_line", "straight_line", "straight_line"],
+         "joints": [
+             "sharp_meeting_at_intersection",
+             "sharp_meeting_at_intersection",
          ]},
     ],
     "M": [
@@ -169,6 +237,73 @@ LETTERS: dict[str, list[StrokeSpec]] = {
              "sharp_meeting_at_intersection",  # BR valley
          ]},
     ],
+    "l": [
+        # FLAG: lowercase l has a rounded bottom curl per Prima docs.
+        # Authored as TC→BC→BR continuous: straight vertical, then
+        # default cubic_bezier joint at BC rounding into a short
+        # straight segment ending at BR (curl tip). VERIFY curl-end
+        # position against /tmp/druck_hires/ — BR may not land on the
+        # design curl tip.
+        {"kind": "line", "anchors": ["TC", "BC", "BR"],
+         "arms": ["straight_line", "straight_line"]},
+    ],
+    "v": [
+        # Asymmetric LSQ-fit trim (start=0.50 cap-side): the medial axis
+        # bows toward the cap caps on TL/TR; trimming 50% of cap-side
+        # pixels rotates the fitted line to point at the true apex,
+        # bringing the math-intersection from 5px outside to 1px inside.
+        {"kind": "line", "anchors": ["TL", "BC", "TR"],
+         "arms": [
+             {"strategy": "straight_line",
+              "fit_trim_start_pct": 0.50},
+             {"strategy": "straight_line",
+              "fit_trim_end_pct": 0.50},
+         ],
+         "joints": ["sharp_meeting_at_intersection"]},
+    ],
+    "w": [
+        # Asymmetric LSQ-fit trim (cap_pct=0.60 toward apex-near pixels).
+        # Outer arms trim the cap side; inner arms trim the TC side to
+        # bias the fit toward the BL/BR apex pixels. TC apex +23 inside,
+        # BL +1 inside, BR -1 (covered by sharp_meeting skip window).
+        # cap70 fully resolves the apex sign but introduces visible
+        # polyline tilt (15 gate-1 overshoots); cap60 is the minimum
+        # that keeps gates clean.
+        {"kind": "line", "anchors": ["TL", "BL", "TC", "BR", "TR"],
+         "arms": [
+             {"strategy": "straight_line",
+              "fit_trim_start_pct": 0.60},
+             {"strategy": "straight_line",
+              "fit_trim_end_pct": 0.60},
+             {"strategy": "straight_line",
+              "fit_trim_start_pct": 0.60},
+             {"strategy": "straight_line",
+              "fit_trim_end_pct": 0.60},
+         ],
+         "joints": ["sharp_meeting_at_intersection"] * 3},
+    ],
+    "x": [
+        {"kind": "line", "anchors": ["TL", "BR"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["TR", "BL"],
+         "arms": ["straight_line"]},
+    ],
+    # y deferred — BC resolves to the descender bottom because the
+    # column-extremum resolver finds the lowest pixel in the glyph,
+    # not the x-height baseline. Reopen with either:
+    # (a) a baseline-aware anchor resolver that distinguishes
+    # x-height from descender extent, or
+    # (b) a new anchor (e.g. DESC_BOTTOM) and a curve-kind stroke
+    # for the descender hook.
+    "z": [
+        {"kind": "line", "anchors": ["TL", "TR", "BL", "BR"],
+         "arms": ["straight_line"] * 3,
+         "joints": ["sharp_meeting_at_intersection"] * 2},
+    ],
+    # ß deferred — Druckschrift design has a compound left vertical
+    # plus right-side double-bowl that doesn't decompose cleanly into
+    # the current line/curve primitives. Reopen with a dedicated
+    # curve-kind authoring once Prima reference is consulted.
     "b": [
         {"path": ["T", "LOWER_TOUCH"]},
         {"path": ["UPPER_TOUCH", "RIGHT_MID", "LOWER_TOUCH"]},
@@ -1388,6 +1523,8 @@ def arm_straight_line(rough_a: tuple[int, int],
                       mask: np.ndarray, dt: np.ndarray,
                       skeleton: np.ndarray,
                       trim_pct: float = 0.20,
+                      fit_trim_start_pct: float = 0.0,
+                      fit_trim_end_pct: float = 0.0,
                       start_pixel: tuple[float, float] | None = None,
                       end_pixel: tuple[float, float] | None = None,
                       ) -> list[tuple[float, float]] | None:
@@ -1396,6 +1533,12 @@ def arm_straight_line(rough_a: tuple[int, int],
     the joint-adjacent end(s) by `trim_pct` of the segment length, and
     return the rasterized straight segment (sampled at 1-px spacing by
     `line_sampler`).
+
+    `fit_trim_start_pct` / `fit_trim_end_pct`: discard this fraction of
+    BFS pixels from the rough_a-side / rough_b-side BEFORE the LSQ fit.
+    Use asymmetric trimming to exclude cap-rounding pixels that bias
+    line direction on one end while preserving the apex-side pixels on
+    the other. If trimming leaves <5 points, the full path is used.
 
     `start_pixel` / `end_pixel`: optional float pixel overrides
     replacing the (trimmed) projected endpoint on the respective side.
@@ -1409,7 +1552,14 @@ def arm_straight_line(rough_a: tuple[int, int],
     pts = _bfs_skeleton_path(rough_a, rough_b, skeleton)
     if pts is None or len(pts) < 5:
         return None
-    arr = np.array(pts, dtype=float)
+    n_pts = len(pts)
+    n_start = int(n_pts * fit_trim_start_pct) if fit_trim_start_pct > 0.0 else 0
+    n_end = int(n_pts * fit_trim_end_pct) if fit_trim_end_pct > 0.0 else 0
+    if n_start + n_end > 0 and n_pts - n_start - n_end >= 5:
+        fit_pts = pts[n_start:n_pts - n_end] if n_end > 0 else pts[n_start:]
+    else:
+        fit_pts = pts
+    arr = np.array(fit_pts, dtype=float)
     centroid = arr.mean(axis=0)
     _, _, vt = np.linalg.svd(arr - centroid, full_matrices=False)
     direction = vt[0]
