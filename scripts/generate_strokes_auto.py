@@ -888,6 +888,27 @@ def extend_to_boundary(point: tuple[int, int],
     return int(round(cf)), int(round(rf))
 
 
+def sample_quadratic_bezier(p0: tuple[float, float],
+                            c1: tuple[float, float],
+                            p2: tuple[float, float]
+                            ) -> list[tuple[float, float]]:
+    """Sample a quadratic Bezier B(t) = (1−t)² P0 + 2(1−t)t C1 + t² P2
+    at ~1 px arc-length spacing. Length estimated by 16 uniform-t
+    samples; resampled with N = max(8, ceil(length)) segments. P0
+    first, P2 last."""
+    def _b(t: float) -> tuple[float, float]:
+        u = 1.0 - t
+        u2 = u * u; t2 = t * t
+        return (u2 * p0[0] + 2.0 * u * t * c1[0] + t2 * p2[0],
+                u2 * p0[1] + 2.0 * u * t * c1[1] + t2 * p2[1])
+    pts16 = [_b(i / 16.0) for i in range(17)]
+    arc_len = sum(math.hypot(pts16[i + 1][0] - pts16[i][0],
+                             pts16[i + 1][1] - pts16[i][1])
+                  for i in range(16))
+    n = max(8, int(math.ceil(arc_len)))
+    return [_b(i / n) for i in range(n + 1)]
+
+
 def sample_cubic_bezier(p0: tuple[float, float],
                         c1: tuple[float, float],
                         c2: tuple[float, float],
@@ -1184,6 +1205,8 @@ def bake_letter(letter: str, font_path: Path
     stroke_pixel_chains: list[list[tuple[int, int]]] = []
     json_strokes: list[dict] = []
     resolved_anchors: list[list[tuple[str, tuple[int, int]]]] = []
+    joint_arcs_per_stroke: list[list[dict | None]] = []
+    smoothed_paths_per_stroke: list[list[list[tuple[float, float]] | None]] = []
 
     for i, spec in enumerate(specs, start=1):
         if "kind" in spec:
@@ -1218,56 +1241,20 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # Family-A band-side inscribed fillet at the medial-axis
-            # joint. T1, T2 sit just 1–3 px back from s_joint along the
-            # band-side arms (chord directions u1_in, u2_in). Apex is
-            # on the band-side chord bisector, opposite the cap, at
-            # `MAX_APEX_OFFSET × sin(α/2)` from s_joint — angle-adaptive
-            # so sharp peaks pinch near-sharp and obtuse joints round
-            # gently. Standard inscribed-fillet geometry; tangent at
-            # T1, T2 holds exactly by construction. Straights stay on
-            # the medial axis for ~99 % of arm length (gate 4 verifies).
-            MAX_APEX_OFFSET = 4.0
-            FIXED_APEX_DIST = 8.0  # (unused on this branch; kept for the
-                                   # fallback)
+            # Joint construction at each interior corner is a quadratic
+            # Bézier B(t) = (1−t)² P_end + 2(1−t)t V + t² P_start, where
+            # V is the intersection of the two arm tangent lines (forward
+            # extension of arm_prev's tangent at P_end, back-extension of
+            # arm_next's tangent at P_start). By Bézier algebra B'(0) ∝
+            # V − P_end and B'(1) ∝ P_start − V, so tangent continuity at
+            # both seams is exact within float precision. Falls back to a
+            # straight bridge if the tangent lines are near-parallel or V
+            # is unstable.
             mh, mw = mask.shape
 
             def _snap_endpoint(p, n):
                 return snap_to_medial_axis(p, mask, dt, skeleton,
                                            letter=letter, anchor_name=n)
-
-            def _fallback_joint(idx):
-                # Cap-inset bisector placement used when the medial-axis
-                # walk can't find a plateau (e.g. tiny letters); apex
-                # falls 5 px short of the visible cap.
-                o = anchors[idx]
-                v1 = (anchors[idx - 1][0] - o[0],
-                      anchors[idx - 1][1] - o[1])
-                v2 = (anchors[idx + 1][0] - o[0],
-                      anchors[idx + 1][1] - o[1])
-                L1 = math.hypot(*v1); L2 = math.hypot(*v2)
-                if L1 < 1e-9 or L2 < 1e-9:
-                    return _snap_endpoint(o, names[idx])
-                bx = v1[0] / L1 + v2[0] / L2
-                by = v1[1] / L1 + v2[1] / L2
-                bl = math.hypot(bx, by)
-                if bl < 1e-6:
-                    return _snap_endpoint(o, names[idx])
-                ix, iy = bx / bl, by / bl
-                oc, orow = o
-                r0 = max(0, orow - 30); r1 = min(mh, orow + 31)
-                c0 = max(0, oc - 30); c1 = min(mw, oc + 31)
-                h = (float(dt[r0:r1, c0:c1].max())
-                     if (r1 > r0 and c1 > c0) else 0.0)
-                d = h - MAX_APEX_OFFSET
-                if d <= 0.0:
-                    return _snap_endpoint(o, names[idx])
-                jc = int(round(oc + d * ix))
-                jr = int(round(orow + d * iy))
-                if (jr < 0 or jr >= mh or jc < 0 or jc >= mw
-                        or not mask[jr, jc]):
-                    return _snap_endpoint(o, names[idx])
-                return (jc, jr)
 
             # Rough medial-axis snap per anchor.
             rough_snapped: list[tuple[int, int]] = [
@@ -1354,118 +1341,72 @@ def bake_letter(letter: str, font_path: Path
                 smoothed_paths.append(
                     _smooth_path(bfs_path, left_pct, right_pct))
 
-            min_deg = math.radians(1.0)
-            max_deg = math.radians(89.0)
+            # Per interior joint: bridge P_end → P_start with a
+            # quadratic Bézier whose control point V is the intersection
+            # of the two arm tangent lines. Arms terminate on the
+            # smoothed medial-axis ridge; the Bézier handles C0 and C1
+            # continuity at both seams by construction (B'(0) ∝ V − P_end,
+            # B'(1) ∝ P_start − V).
             joint_arcs: list[dict | None] = []
             for j in range(1, len(anchors) - 1):
-                o = anchors[j]
                 arm_prev = smoothed_paths[j - 1]
                 arm_next = smoothed_paths[j]
-                if arm_prev is None or arm_next is None or len(arm_prev) < 6 or len(arm_next) < 6:
+                if (arm_prev is None or arm_next is None
+                        or len(arm_prev) < 6 or len(arm_next) < 6):
                     joint_arcs.append(None)
                     continue
-                # P_end at end of arm_prev's trimmed smoothed path;
-                # P_start at start of arm_next's trimmed path.
                 P_end = arm_prev[-1]
                 P_start = arm_next[0]
-                # Tangent at P_end pointing BACK along arm_prev (away
-                # from joint): from a point ~5 steps before the end.
+                # tangent_prev at P_end pointing INTO the joint
+                # (direction of travel arriving at P_end).
                 back_idx = max(0, len(arm_prev) - 6)
-                t1x = arm_prev[back_idx][0] - P_end[0]
-                t1y = arm_prev[back_idx][1] - P_end[1]
-                t1_len = math.hypot(t1x, t1y)
-                if t1_len < 1e-6:
+                tpx = P_end[0] - arm_prev[back_idx][0]
+                tpy = P_end[1] - arm_prev[back_idx][1]
+                tp_len = math.hypot(tpx, tpy)
+                if tp_len < 1e-6:
                     joint_arcs.append(None)
                     continue
-                u1_in = (t1x / t1_len, t1y / t1_len)
-                # Tangent at P_start pointing FORWARD along arm_next.
+                tangent_prev = (tpx / tp_len, tpy / tp_len)
+                # tangent_next at P_start pointing AWAY from joint
+                # (direction of travel leaving P_start).
                 fwd_idx = min(len(arm_next) - 1, 5)
-                t2x = arm_next[fwd_idx][0] - P_start[0]
-                t2y = arm_next[fwd_idx][1] - P_start[1]
-                t2_len = math.hypot(t2x, t2y)
-                if t2_len < 1e-6:
+                tnx = arm_next[fwd_idx][0] - P_start[0]
+                tny = arm_next[fwd_idx][1] - P_start[1]
+                tn_len = math.hypot(tnx, tny)
+                if tn_len < 1e-6:
                     joint_arcs.append(None)
                     continue
-                u2_in = (t2x / t2_len, t2y / t2_len)
-                # Band bisector (sum of u1_in + u2_in, both pointing
-                # away from joint into band).
-                bb_x = u1_in[0] + u2_in[0]
-                bb_y = u1_in[1] + u2_in[1]
-                bb_len = math.hypot(bb_x, bb_y)
-                if bb_len < 1e-6:
+                tangent_next = (tnx / tn_len, tny / tn_len)
+                # Solve P_end + s·tangent_prev = P_start − t·tangent_next.
+                # det = tangent_prev × tangent_next; near-parallel ⇒ fall
+                # back to a straight bridge.
+                cross = (tangent_prev[0] * tangent_next[1]
+                         - tangent_prev[1] * tangent_next[0])
+                if abs(cross) < 1e-3:
                     joint_arcs.append(None)
                     continue
-                band_bisector = (bb_x / bb_len, bb_y / bb_len)
-                # Joint position at uniform depth from outer cap.
-                or_, oc_ = o[1], o[0]
-                r0 = max(0, or_ - 30); r1 = min(mh, or_ + 31)
-                c0 = max(0, oc_ - 30); c1 = min(mw, oc_ + 31)
-                if r1 <= r0 or c1 <= c0:
-                    joint_arcs.append(None)
-                    continue
-                h_target = float(dt[r0:r1, c0:c1].max())
-                if h_target < 4.0:
-                    joint_arcs.append(None)
-                    continue
-                jx = float(o[0]) + band_bisector[0] * h_target
-                jy = float(o[1]) + band_bisector[1] * h_target
-                jc = int(round(jx)); jr = int(round(jy))
-                if not (0 <= jr < mh and 0 <= jc < mw
-                        and mask[jr, jc]):
-                    joint_arcs.append(None)
-                    continue
-                joint_pos = (jx, jy)
-                # Family-A fillet parameters.
-                cos_half = max(-1.0, min(1.0,
-                                          u1_in[0] * band_bisector[0]
-                                          + u1_in[1] * band_bisector[1]))
-                half_angle = math.acos(cos_half)
-                if half_angle < min_deg or half_angle > max_deg:
-                    joint_arcs.append(None)
-                    continue
-                sin_h = math.sin(half_angle)
-                if sin_h < 1e-6 or (1.0 - sin_h) < 1e-6:
-                    joint_arcs.append(None)
-                    continue
-                apex_target = MAX_APEX_OFFSET * sin_h
-                r = apex_target * sin_h / (1.0 - sin_h)
-                tan_dist = r / math.tan(half_angle)
-                # Overshoot guard against arm path lengths.
-                if tan_dist > 0.5 * min(len(arm_prev), len(arm_next)):
-                    joint_arcs.append(None)
-                    continue
-                T1 = (P_end[0] + u1_in[0] * tan_dist,
-                      P_end[1] + u1_in[1] * tan_dist)
-                T2 = (P_start[0] + u2_in[0] * tan_dist,
-                      P_start[1] + u2_in[1] * tan_dist)
-                apex = (joint_pos[0] + band_bisector[0] * apex_target,
-                        joint_pos[1] + band_bisector[1] * apex_target)
-                # Mask containment on T1, T2, apex
-                t1r_ = int(round(T1[1])); t1c_ = int(round(T1[0]))
-                t2r_ = int(round(T2[1])); t2c_ = int(round(T2[0]))
-                apr = int(round(apex[1])); apc = int(round(apex[0]))
-                if not (0 <= t1r_ < mh and 0 <= t1c_ < mw
-                        and 0 <= t2r_ < mh and 0 <= t2c_ < mw
-                        and 0 <= apr < mh and 0 <= apc < mw
-                        and mask[t1r_, t1c_] and mask[t2r_, t2c_]
-                        and mask[apr, apc]):
+                dx_ = P_start[0] - P_end[0]
+                dy_ = P_start[1] - P_end[1]
+                chord_len = math.hypot(dx_, dy_)
+                s = (dx_ * tangent_next[1] - dy_ * tangent_next[0]) / cross
+                V = (P_end[0] + s * tangent_prev[0],
+                     P_end[1] + s * tangent_prev[1])
+                d_v_end = math.hypot(V[0] - P_end[0], V[1] - P_end[1])
+                d_v_start = math.hypot(V[0] - P_start[0],
+                                       V[1] - P_start[1])
+                if chord_len > 1e-6 and (d_v_end > 5.0 * chord_len
+                                          or d_v_start > 5.0 * chord_len):
                     joint_arcs.append(None)
                     continue
                 joint_arcs.append({
-                    "T1": T1, "T2": T2, "apex": apex,
-                    "joint_pos": joint_pos,
-                    "P_end": P_end, "P_start": P_start,
-                    "u1_in": u1_in, "u2_in": u2_in,
-                    "half_angle": half_angle, "tan_dist": tan_dist,
-                    "apex_target": apex_target, "h_target": h_target,
-                    "band_bisector": band_bisector,
+                    "P_end": P_end, "P_start": P_start, "V": V,
+                    "tangent_prev": tangent_prev,
+                    "tangent_next": tangent_next,
                 })
 
-            # Chain assembly: walk smoothed paths and emit arcs at
-            # joints. For each arm, find the indices closest to the
-            # T2 (start of arm, from previous joint) and T1 (end of
-            # arm, into next joint), and emit the smoothed-path
-            # subsequence between them.
+            # Chain assembly: emit each arm's smoothed path, then bridge
+            # consecutive arms with a quadratic Bézier (or straight line
+            # if the joint fell back).
             chain: list[tuple[int, int]] = []
 
             def _emit_pts(pts: list[tuple[float, float]]) -> None:
@@ -1485,59 +1426,30 @@ def bake_letter(letter: str, font_path: Path
                 start = 1 if chain and chain[-1] == seg[0] else 0
                 chain.extend(seg[start:])
 
-            def _closest_idx(path, p):
-                return min(range(len(path)),
-                           key=lambda i: (path[i][0] - p[0]) ** 2
-                                          + (path[i][1] - p[1]) ** 2)
-
-            # Endpoint positions (start of first arm, end of last arm)
-            if smoothed_paths[0] is not None:
-                snap_first = smoothed_paths[0][0]
-            else:
-                snap_first = rough_snapped[0]
-            if smoothed_paths[-1] is not None:
-                snap_last = smoothed_paths[-1][-1]
-            else:
-                snap_last = rough_snapped[-1]
-
             for k in range(n_arms):
                 arm_path = smoothed_paths[k]
-                if arm_path is None:
-                    # Fallback: chord from snap to next snap
-                    a = rough_snapped[k]
-                    b = rough_snapped[k + 1]
-                    _emit_line(a, b)
-                    continue
-                # Start index: 0 unless we just emitted T2 from previous arc.
-                if k > 0 and (k - 1) < len(joint_arcs) and joint_arcs[k - 1] is not None:
-                    start_idx = _closest_idx(arm_path,
-                                              joint_arcs[k - 1]["T2"])
+                arm_start = (arm_path[0] if arm_path is not None
+                             else rough_snapped[k])
+                arm_end = (arm_path[-1] if arm_path is not None
+                           else rough_snapped[k + 1])
+                # Bridge from previous arm into this arm at joint k-1.
+                if k > 0:
+                    jd_prev = (joint_arcs[k - 1]
+                               if (k - 1) < len(joint_arcs) else None)
+                    if jd_prev is not None:
+                        bez = sample_quadratic_bezier(
+                            jd_prev["P_end"], jd_prev["V"],
+                            jd_prev["P_start"])
+                        _emit_pts(bez)
+                    elif chain:
+                        _emit_line(chain[-1], arm_start)
+                # Emit this arm.
+                if arm_path is not None:
+                    _emit_pts(arm_path)
                 else:
-                    start_idx = 0
-                # End index: len-1 unless we'll emit T1 into next arc.
-                if k < len(joint_arcs) and joint_arcs[k] is not None:
-                    end_idx = _closest_idx(arm_path,
-                                            joint_arcs[k]["T1"])
-                else:
-                    end_idx = len(arm_path) - 1
-                if start_idx <= end_idx:
-                    _emit_pts(arm_path[start_idx:end_idx + 1])
-                # Arc to next joint
-                if k < len(joint_arcs) and joint_arcs[k] is not None:
-                    jd = joint_arcs[k]
-                    # Emit T1 explicitly if not on path
-                    ip = (int(round(jd["T1"][0])), int(round(jd["T1"][1])))
-                    if not chain or chain[-1] != ip:
-                        chain.append(ip)
-                    circle = circle_through_three(
-                        jd["T1"], jd["apex"], jd["T2"])
-                    if circle is None:
-                        _emit_line(jd["T1"], jd["T2"])
-                    else:
-                        arc_pts = sample_arc_p1_p3_p2(
-                            jd["T1"], jd["apex"], jd["T2"],
-                            (circle[0], circle[1]), circle[2])
-                        _emit_pts(arc_pts)
+                    _emit_line(arm_start, arm_end)
+            joint_arcs_per_stroke.append(joint_arcs)
+            smoothed_paths_per_stroke.append(smoothed_paths)
         else:
             chain = []
             for si in range(len(anchors) - 1):
@@ -1550,6 +1462,8 @@ def bake_letter(letter: str, font_path: Path
                 if chain and seg and chain[-1] == seg[0]:
                     seg = seg[1:]
                 chain.extend(seg)
+            joint_arcs_per_stroke.append([])
+            smoothed_paths_per_stroke.append([])
         stroke_pixel_chains.append(chain)
 
         resampled = resample_uniform(chain, CHECKPOINT_COUNT)
@@ -1574,9 +1488,13 @@ def bake_letter(letter: str, font_path: Path
     }
     debug = {
         "mask": mask,
+        "dt": dt,
         "bbox": bbox,
         "stroke_chains": stroke_pixel_chains,
+        "stroke_pixel_chains": stroke_pixel_chains,
         "resolved_anchors": resolved_anchors,
+        "joint_arcs_per_stroke": joint_arcs_per_stroke,
+        "smoothed_paths_per_stroke": smoothed_paths_per_stroke,
     }
     return data, debug
 
