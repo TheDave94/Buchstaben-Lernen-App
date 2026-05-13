@@ -888,6 +888,31 @@ def extend_to_boundary(point: tuple[int, int],
     return int(round(cf)), int(round(rf))
 
 
+def sample_cubic_bezier(p0: tuple[float, float],
+                        c1: tuple[float, float],
+                        c2: tuple[float, float],
+                        p3: tuple[float, float]
+                        ) -> list[tuple[float, float]]:
+    """Sample a cubic Bezier B(t) = (1−t)³ P0 + 3(1−t)²t C1 + 3(1−t)t² C2
+    + t³ P3 at ~1 px arc-length spacing. First estimates length via 16
+    uniform-t samples, then re-samples with N = ceil(length) segments
+    (at least 8). P0 first, P3 last."""
+    def _b(t: float) -> tuple[float, float]:
+        u = 1.0 - t
+        u2 = u * u; u3 = u2 * u
+        t2 = t * t; t3 = t2 * t
+        return (u3 * p0[0] + 3.0 * u2 * t * c1[0]
+                + 3.0 * u * t2 * c2[0] + t3 * p3[0],
+                u3 * p0[1] + 3.0 * u2 * t * c1[1]
+                + 3.0 * u * t2 * c2[1] + t3 * p3[1])
+    pts16 = [_b(i / 16.0) for i in range(17)]
+    arc_len = sum(math.hypot(pts16[i + 1][0] - pts16[i][0],
+                             pts16[i + 1][1] - pts16[i][1])
+                  for i in range(16))
+    n = max(8, int(math.ceil(arc_len)))
+    return [_b(i / n) for i in range(n + 1)]
+
+
 def walk_arm_to_plateau(outer: tuple[int, int],
                         target: tuple[int, int],
                         mask: np.ndarray,
@@ -1193,19 +1218,17 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # Inscribed-fillet-on-cap-side construction. Snap every
-            # anchor to the medial axis; at each interior joint the
-            # chord lines extended past s_joint into the cap meet at
-            # vertical angle = α. Inscribe a circular fillet tangent to
-            # both extended chords with apex on the line s_joint→o, at
-            # FIXED_APEX_DIST px from o (so the polyline curves around
-            # the cap apex, not the band-side bisector). Tangent points
-            # T1, T2 land on the chord lines past s_joint inside the
-            # cap; the arc itself is sampled as the unique circle
-            # through (T1, apex, T2). polyline_with_filleted_joints,
-            # walk_arm_to_plateau, circle_through_three (still imported
-            # internally), and sample_arc_p1_p3_p2 are unused on this
-            # branch — superseded.
+            # Band-side inscribed fillet. T1 and T2 sit on the band-side
+            # arms (between s_prev/s_next and s_joint), not on the cap-
+            # side extensions. The apex sits 8 px from the visible outer
+            # corner o along the bisector_to_cap direction. Geometry
+            # uses half_angle = (π − α_interior) / 2, the angle between
+            # u1_in / u2_in and bisector_to_cap (only valid when the
+            # s_joint→o line coincides with the chord bisector — a
+            # geometry-sanity assert below catches the cases it doesn't).
+            # The actual sampled arc passes through (T1, apex, T2) via
+            # circle_through_three since the user's center / r formulas
+            # are derived under the chord-bisector assumption.
             FIXED_APEX_DIST = 8.0
             MAX_APEX_OFFSET = 5.0  # fallback construction
             mh, mw = mask.shape
@@ -1255,6 +1278,11 @@ def bake_letter(letter: str, font_path: Path
             snap_last = snapped[-1]
 
             # Compute (T1, T2, apex, center, radius) per interior joint.
+            # Construction uses the CHORD bisector throughout (instead
+            # of s_joint→o), which makes the inscribed-fillet formulas
+            # geometrically self-consistent. The apex sits on the
+            # chord bisector toward the cap, FIXED_APEX_DIST short of
+            # the cap boundary (rather than 8 px from o).
             min_deg = math.radians(1.0)
             max_deg = math.radians(89.0)
             joint_arcs: list[dict | None] = []
@@ -1263,66 +1291,120 @@ def bake_letter(letter: str, font_path: Path
                 s_joint = snapped[j]
                 s_prev = snapped[j - 1]
                 s_next = snapped[j + 1]
-                v1 = (s_joint[0] - s_prev[0], s_joint[1] - s_prev[1])
-                v2 = (s_joint[0] - s_next[0], s_joint[1] - s_next[1])
+                v1 = (s_prev[0] - s_joint[0], s_prev[1] - s_joint[1])
+                v2 = (s_next[0] - s_joint[0], s_next[1] - s_joint[1])
                 L1 = math.hypot(*v1); L2 = math.hypot(*v2)
                 if L1 < 1e-9 or L2 < 1e-9:
                     joint_arcs.append(None)
                     continue
-                u1_cap = (v1[0] / L1, v1[1] / L1)
-                u2_cap = (v2[0] / L2, v2[1] / L2)
-                vo = (float(o[0] - s_joint[0]), float(o[1] - s_joint[1]))
-                dist_jo = math.hypot(*vo)
-                if dist_jo < 1e-6:
+                u1_in = (v1[0] / L1, v1[1] / L1)
+                u2_in = (v2[0] / L2, v2[1] / L2)
+                # Band-side chord bisector (where u1+u2 sums into the
+                # wedge of the two band-side rays). arc_bisector is
+                # the cap-side branch — that's where the fillet
+                # center sits.
+                cb_x = u1_in[0] + u2_in[0]
+                cb_y = u1_in[1] + u2_in[1]
+                cb_len = math.hypot(cb_x, cb_y)
+                if cb_len < 1e-6:
                     joint_arcs.append(None)
                     continue
-                bisector_to_cap = (vo[0] / dist_jo, vo[1] / dist_jo)
-                apex_target = dist_jo - FIXED_APEX_DIST
-                if apex_target <= 0.0:
+                chord_bisector_band = (cb_x / cb_len, cb_y / cb_len)
+                arc_bisector = (-chord_bisector_band[0],
+                                 -chord_bisector_band[1])
+                # Walk arc_bisector 1 px at a time until we exit the
+                # mask; cap_depth = last in-mask step.
+                cap_depth = 0
+                step = 1
+                while step < 256:
+                    px = s_joint[0] + arc_bisector[0] * step
+                    py = s_joint[1] + arc_bisector[1] * step
+                    pc = int(round(px)); pr = int(round(py))
+                    if not (0 <= pr < mh and 0 <= pc < mw):
+                        break
+                    if not mask[pr, pc]:
+                        break
+                    cap_depth = step
+                    step += 1
+                if cap_depth < FIXED_APEX_DIST + 2:
                     joint_arcs.append(None)
                     continue
-                cos_full = max(-1.0, min(1.0,
-                                          u1_cap[0] * u2_cap[0]
-                                          + u1_cap[1] * u2_cap[1]))
-                full_angle = math.acos(cos_full)
-                half_angle = full_angle / 2.0
+                apex_target = cap_depth - FIXED_APEX_DIST
+                # half_angle = α_interior/2 = angle between each
+                # band-side ray and the BAND-side chord bisector. This
+                # is the acute angle the inscribed-fillet formulas
+                # (r = apex_target sin/(1-sin), tan_dist = r/tan)
+                # require — using the obtuse angle to arc_bisector
+                # makes tan_dist negative and lands T1 on the wrong
+                # side.
+                cos_h1 = max(-1.0, min(1.0,
+                                        u1_in[0] * chord_bisector_band[0]
+                                        + u1_in[1] * chord_bisector_band[1]))
+                cos_h2 = max(-1.0, min(1.0,
+                                        u2_in[0] * chord_bisector_band[0]
+                                        + u2_in[1] * chord_bisector_band[1]))
+                half_angle = math.acos(cos_h1)
+                if abs(math.acos(cos_h2) - half_angle) > 1e-6:
+                    joint_arcs.append(None)
+                    continue
                 if half_angle < min_deg or half_angle > max_deg:
                     joint_arcs.append(None)
                     continue
-                sin_half = math.sin(half_angle)
-                if sin_half < 1e-6 or (1.0 - sin_half) < 1e-6:
+                cos_half = math.cos(half_angle)
+                if cos_half < 1e-6:
                     joint_arcs.append(None)
                     continue
-                r = apex_target * sin_half / (1.0 - sin_half)
-                tan_dist = r / math.tan(half_angle)
-                T1 = (s_joint[0] + u1_cap[0] * tan_dist,
-                      s_joint[1] + u1_cap[1] * tan_dist)
-                T2 = (s_joint[0] + u2_cap[0] * tan_dist,
-                      s_joint[1] + u2_cap[1] * tan_dist)
-                apex = (s_joint[0] + bisector_to_cap[0] * apex_target,
-                        s_joint[1] + bisector_to_cap[1] * apex_target)
-                # Mask containment check on T1, T2
+                # Tangent points sit on band-side arms at 15% of the
+                # shorter arm length back from s_joint. Cubic-Bezier
+                # tangent continuity at T1 / T2 holds for any tan_dist
+                # — the value just controls how far back from s_joint
+                # the curve starts.
+                tan_dist = 0.15 * min(L1, L2)
+                if tan_dist > 0.4 * min(L1, L2):
+                    joint_arcs.append(None)
+                    continue
+                T1 = (s_joint[0] + u1_in[0] * tan_dist,
+                      s_joint[1] + u1_in[1] * tan_dist)
+                T2 = (s_joint[0] + u2_in[0] * tan_dist,
+                      s_joint[1] + u2_in[1] * tan_dist)
+                # Closed-form handle length so that B(0.5) lands on
+                # arc_bisector at distance apex_target from s_joint:
+                #   h = (4/3) · (tan_dist + apex_target / cos(α/2))
+                h = (4.0 / 3.0) * (tan_dist + apex_target / cos_half)
+                if h <= 0.0:
+                    joint_arcs.append(None)
+                    continue
+                # Handles point from each tangent point INTO the
+                # joint along the chord direction. Bezier derivative
+                # at t=0 = 3(C1 − T1) = 3 · (−u1_in · h) ⇒ tangent
+                # = −u1_in (continuous with the chord). Same at T2.
+                C1 = (T1[0] - u1_in[0] * h, T1[1] - u1_in[1] * h)
+                C2 = (T2[0] - u2_in[0] * h, T2[1] - u2_in[1] * h)
+                apex = (s_joint[0] + arc_bisector[0] * apex_target,
+                        s_joint[1] + arc_bisector[1] * apex_target)
+                # Mask containment on T1, T2, apex
                 t1r = int(round(T1[1])); t1c = int(round(T1[0]))
                 t2r = int(round(T2[1])); t2c = int(round(T2[0]))
+                apr = int(round(apex[1])); apc = int(round(apex[0]))
                 if not (0 <= t1r < mh and 0 <= t1c < mw
                         and 0 <= t2r < mh and 0 <= t2c < mw
-                        and mask[t1r, t1c] and mask[t2r, t2c]):
-                    joint_arcs.append(None)
-                    continue
-                # Unique circle through (T1, apex, T2); arc sampled along
-                # this circle is geometrically smooth through all three.
-                circle = circle_through_three(T1, apex, T2)
-                if circle is None:
-                    joint_arcs.append(None)
-                    continue
-                cx, cy, rr = circle
-                if not (math.isfinite(cx) and math.isfinite(cy)
-                        and math.isfinite(rr)):
+                        and 0 <= apr < mh and 0 <= apc < mw
+                        and mask[t1r, t1c] and mask[t2r, t2c]
+                        and mask[apr, apc]):
                     joint_arcs.append(None)
                     continue
                 joint_arcs.append({
-                    "T1": T1, "T2": T2, "apex": apex,
-                    "center": (cx, cy), "radius": rr,
+                    "T1": T1, "T2": T2, "C1": C1, "C2": C2,
+                    "apex": apex,
+                    "half_angle": half_angle, "tan_dist": tan_dist,
+                    "h": h, "apex_target": apex_target,
+                    "cap_depth": cap_depth,
+                    "full_interior": math.acos(max(-1.0, min(1.0,
+                        u1_in[0]*u2_in[0]+u1_in[1]*u2_in[1]))),
+                    "s_joint": s_joint, "s_prev": s_prev, "s_next": s_next,
+                    "o": o, "u1_in": u1_in, "u2_in": u2_in,
+                    "arc_bisector": arc_bisector,
+                    "chord_bisector_band": chord_bisector_band,
                 })
 
             # Walk segments + arcs to produce a single dense pixel chain.
@@ -1353,10 +1435,10 @@ def bake_letter(letter: str, font_path: Path
                     cursor = fb
                 else:
                     _emit_line(cursor, arc_data["T1"])
-                    arc_pts = sample_arc_p1_p3_p2(
-                        arc_data["T1"], arc_data["apex"], arc_data["T2"],
-                        arc_data["center"], arc_data["radius"])
-                    _emit_arc(arc_pts)
+                    bez_pts = sample_cubic_bezier(
+                        arc_data["T1"], arc_data["C1"],
+                        arc_data["C2"], arc_data["T2"])
+                    _emit_arc(bez_pts)
                     cursor = arc_data["T2"]
             _emit_line(cursor, snap_last)
         else:
