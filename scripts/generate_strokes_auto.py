@@ -1173,6 +1173,451 @@ def build_skeleton_and_adj(stroke_pixel_chains: list[list[tuple[int, int]]],
 
 
 # -----------------------------------------------------------------------------
+# Arm and joint construction primitives
+# -----------------------------------------------------------------------------
+#
+# Line-kind strokes are built by composing one arm primitive (per arm) with
+# one joint primitive (per interior corner). The default pairing —
+# `arm_smoothed_medial_axis` + `joint_cubic_bezier_clamped` with
+# `max_handle=70` — is what M/V/W/N currently ship. Authoring a new letter
+# can override per-arm or per-joint via the StrokeSpec keys `"arms"` and
+# `"joints"` (parallel arrays; entries are either a strategy name string or
+# `{"strategy": "name", "<param>": <value>, ...}`).
+
+def _bfs_skeleton_path(a: tuple[int, int], b: tuple[int, int],
+                       skeleton: np.ndarray
+                       ) -> list[tuple[int, int]] | None:
+    """Deterministic BFS path on the skeleton from `a` to `b`. Returns
+    the ordered list of (col, row) pixels, or `None` if either endpoint
+    is off-skeleton or unreachable."""
+    h_, w_ = skeleton.shape
+    ax, ay = a; bx, by = b
+    if not (0 <= ay < h_ and 0 <= ax < w_ and skeleton[ay, ax]):
+        return None
+    if not (0 <= by < h_ and 0 <= bx < w_ and skeleton[by, bx]):
+        return None
+    from collections import deque
+    parent: dict[tuple[int, int], tuple[int, int] | None] = {(ay, ax): None}
+    q = deque([(ax, ay)])
+    found = False
+    while q:
+        cc, cr = q.popleft()
+        if (cc, cr) == (bx, by):
+            found = True
+            break
+        for dr, dc in NEIGHBOURS_8:
+            nc, nr = cc + dc, cr + dr
+            if not (0 <= nr < h_ and 0 <= nc < w_):
+                continue
+            if not skeleton[nr, nc]:
+                continue
+            if (nr, nc) in parent:
+                continue
+            parent[(nr, nc)] = (cr, cc)
+            q.append((nc, nr))
+    if not found:
+        return None
+    pts: list[tuple[int, int]] = []
+    cur: tuple[int, int] | None = (by, bx)
+    while cur is not None:
+        pts.append((cur[1], cur[0]))
+        cur = parent[cur]
+    pts.reverse()
+    return pts
+
+
+def _smooth_path(pts: list[tuple[int, int]],
+                 left_trim_pct: float, right_trim_pct: float,
+                 window: int = 5
+                 ) -> list[tuple[float, float]] | None:
+    """Trim `left_trim_pct` from the front and `right_trim_pct` from the
+    back, then moving-average smooth with the given odd window. Returns
+    `None` if the trimmed path is too short."""
+    if len(pts) < 10:
+        return None
+    left = int(len(pts) * left_trim_pct)
+    right = int(len(pts) * right_trim_pct)
+    trimmed = pts[left:len(pts) - right] if right > 0 else pts[left:]
+    if len(trimmed) < 5:
+        return None
+    half = window // 2
+    smoothed: list[tuple[float, float]] = []
+    for i in range(len(trimmed)):
+        lo = max(0, i - half); hi = min(len(trimmed), i + half + 1)
+        sx = sum(p[0] for p in trimmed[lo:hi]) / (hi - lo)
+        sy = sum(p[1] for p in trimmed[lo:hi]) / (hi - lo)
+        smoothed.append((sx, sy))
+    return smoothed
+
+
+def _arm_endpoint_tangents(arm_prev: list[tuple[float, float]],
+                           arm_next: list[tuple[float, float]],
+                           lookback: int = 5, lookahead: int = 5
+                           ) -> tuple[tuple[float, float],
+                                       tuple[float, float]] | None:
+    """Unit tangent at arm_prev's last point pointing INTO the joint
+    (direction of travel arriving at P_end), and at arm_next's first
+    point pointing AWAY (direction of travel leaving P_start). Returns
+    `(tangent_prev, tangent_next)` or `None` if any vector is degenerate."""
+    if len(arm_prev) < lookback + 1 or len(arm_next) < lookahead + 1:
+        return None
+    P_end = arm_prev[-1]
+    back_idx = max(0, len(arm_prev) - lookback - 1)
+    tpx = P_end[0] - arm_prev[back_idx][0]
+    tpy = P_end[1] - arm_prev[back_idx][1]
+    tp_len = math.hypot(tpx, tpy)
+    if tp_len < 1e-6:
+        return None
+    P_start = arm_next[0]
+    fwd_idx = min(len(arm_next) - 1, lookahead)
+    tnx = arm_next[fwd_idx][0] - P_start[0]
+    tny = arm_next[fwd_idx][1] - P_start[1]
+    tn_len = math.hypot(tnx, tny)
+    if tn_len < 1e-6:
+        return None
+    return ((tpx / tp_len, tpy / tp_len), (tnx / tn_len, tny / tn_len))
+
+
+# --- Arm primitives ---------------------------------------------------------
+
+def arm_chord(rough_a: tuple[int, int], rough_b: tuple[int, int],
+              k: int, n_arms: int, *,
+              mask: np.ndarray, dt: np.ndarray, skeleton: np.ndarray,
+              ) -> list[tuple[float, float]]:
+    """Straight chord between rough_a and rough_b — 2-point polyline."""
+    return [(float(rough_a[0]), float(rough_a[1])),
+            (float(rough_b[0]), float(rough_b[1]))]
+
+
+def arm_bfs_raw(rough_a: tuple[int, int], rough_b: tuple[int, int],
+                k: int, n_arms: int, *,
+                mask: np.ndarray, dt: np.ndarray, skeleton: np.ndarray,
+                ) -> list[tuple[float, float]] | None:
+    """BFS skeleton path from rough_a to rough_b, cast to float, no
+    smoothing or trimming. Returns `None` if BFS fails."""
+    pts = _bfs_skeleton_path(rough_a, rough_b, skeleton)
+    if pts is None:
+        return None
+    return [(float(c), float(r)) for c, r in pts]
+
+
+def arm_lsq_line(rough_a: tuple[int, int], rough_b: tuple[int, int],
+                 k: int, n_arms: int, *,
+                 mask: np.ndarray, dt: np.ndarray, skeleton: np.ndarray,
+                 trim_pct: float = 0.20,
+                 ) -> list[tuple[float, float]] | None:
+    """Total-least-squares (SVD) line through BFS skeleton pixels between
+    rough_a and rough_b, with `trim_pct` trimmed from each end before
+    fitting. Endpoints are rough_a and rough_b projected onto the fitted
+    line. Returns a 2-point polyline `[proj_a, proj_b]`, or `None` if
+    the BFS or SVD can't be computed. Construction from bf3273a."""
+    pts = _bfs_skeleton_path(rough_a, rough_b, skeleton)
+    if pts is None or len(pts) < 10:
+        return None
+    trim = int(len(pts) * trim_pct)
+    sample = pts[trim:len(pts) - trim] if trim > 0 else pts
+    if len(sample) < 5:
+        return None
+    arr = np.array(sample, dtype=float)
+    centroid = arr.mean(axis=0)
+    _, _, vt = np.linalg.svd(arr - centroid, full_matrices=False)
+    direction = vt[0]
+    ox, oy = float(centroid[0]), float(centroid[1])
+    dx, dy = float(direction[0]), float(direction[1])
+    def _proj(p: tuple[int, int]) -> tuple[float, float]:
+        vx = p[0] - ox; vy = p[1] - oy
+        t = vx * dx + vy * dy
+        return (ox + t * dx, oy + t * dy)
+    return [_proj(rough_a), _proj(rough_b)]
+
+
+def arm_smoothed_medial_axis(rough_a: tuple[int, int],
+                             rough_b: tuple[int, int],
+                             k: int, n_arms: int, *,
+                             mask: np.ndarray, dt: np.ndarray,
+                             skeleton: np.ndarray,
+                             trim_pct: float = 0.20,
+                             window: int = 5,
+                             ) -> list[tuple[float, float]] | None:
+    """BFS skeleton path, trimmed `trim_pct` on the joint-adjacent side(s)
+    only (no trim on endpoint-adjacent sides for arm 0 / last arm), then
+    moving-average smoothed with the given window. The construction
+    shipping on M/V/W/N at 6cf5740."""
+    pts = _bfs_skeleton_path(rough_a, rough_b, skeleton)
+    if pts is None:
+        return None
+    left_pct = 0.0 if k == 0 else trim_pct
+    right_pct = 0.0 if k == n_arms - 1 else trim_pct
+    return _smooth_path(pts, left_pct, right_pct, window=window)
+
+
+# --- Joint primitives -------------------------------------------------------
+
+def joint_sharp(arm_prev: list[tuple[float, float]],
+                arm_next: list[tuple[float, float]], *,
+                mask: np.ndarray, dt: np.ndarray,
+                anchor: tuple[int, int],
+                ) -> dict:
+    """No curve — line-sampled bridge from P_end straight to P_start."""
+    P_end = arm_prev[-1]
+    P_start = arm_next[0]
+    a = (int(round(P_end[0])), int(round(P_end[1])))
+    b = (int(round(P_start[0])), int(round(P_start[1])))
+    if a == b:
+        samples: list[tuple[float, float]] = [P_end]
+    else:
+        samples = [(float(c), float(r)) for c, r in line_sampler([a, b])]
+    return {"type": "line", "P_end": P_end, "P_start": P_start,
+            "samples": samples}
+
+
+def joint_family_a_fillet(arm_prev: list[tuple[float, float]],
+                          arm_next: list[tuple[float, float]], *,
+                          mask: np.ndarray, dt: np.ndarray,
+                          anchor: tuple[int, int],
+                          apex_offset: float = 4.0,
+                          ) -> dict | None:
+    """Family-A band-side inscribed fillet at the medial-axis joint.
+    Tangent points T1/T2 sit back along the band-side arms, apex on the
+    band-side chord bisector at `apex_offset · sin(α/2)` from the joint
+    position. Construction from 4d6c286. Returns `None` if geometry is
+    degenerate or any sample falls outside the mask."""
+    tt = _arm_endpoint_tangents(arm_prev, arm_next)
+    if tt is None:
+        return None
+    tangent_prev, tangent_next = tt
+    # `u1_in` and `u2_in` here are the BACK / FORWARD chord directions
+    # used by the original Family-A construction: u1_in points away
+    # from the joint along arm_prev, u2_in points away along arm_next.
+    u1_in = (-tangent_prev[0], -tangent_prev[1])
+    u2_in = tangent_next
+    P_end = arm_prev[-1]
+    P_start = arm_next[0]
+    bb_x = u1_in[0] + u2_in[0]
+    bb_y = u1_in[1] + u2_in[1]
+    bb_len = math.hypot(bb_x, bb_y)
+    if bb_len < 1e-6:
+        return None
+    band_bisector = (bb_x / bb_len, bb_y / bb_len)
+    mh, mw = mask.shape
+    oc, or_ = int(anchor[0]), int(anchor[1])
+    r0 = max(0, or_ - 30); r1 = min(mh, or_ + 31)
+    c0 = max(0, oc - 30); c1 = min(mw, oc + 31)
+    if r1 <= r0 or c1 <= c0:
+        return None
+    h_target = float(dt[r0:r1, c0:c1].max())
+    if h_target < 4.0:
+        return None
+    jx = float(anchor[0]) + band_bisector[0] * h_target
+    jy = float(anchor[1]) + band_bisector[1] * h_target
+    jc = int(round(jx)); jr = int(round(jy))
+    if not (0 <= jr < mh and 0 <= jc < mw and mask[jr, jc]):
+        return None
+    joint_pos = (jx, jy)
+    cos_half = max(-1.0, min(1.0,
+                              u1_in[0] * band_bisector[0]
+                              + u1_in[1] * band_bisector[1]))
+    half_angle = math.acos(cos_half)
+    min_deg = math.radians(1.0); max_deg = math.radians(89.0)
+    if half_angle < min_deg or half_angle > max_deg:
+        return None
+    sin_h = math.sin(half_angle)
+    if sin_h < 1e-6 or (1.0 - sin_h) < 1e-6:
+        return None
+    apex_target = apex_offset * sin_h
+    r = apex_target * sin_h / (1.0 - sin_h)
+    tan_dist = r / math.tan(half_angle)
+    if tan_dist > 0.5 * min(len(arm_prev), len(arm_next)):
+        return None
+    T1 = (P_end[0] + u1_in[0] * tan_dist,
+          P_end[1] + u1_in[1] * tan_dist)
+    T2 = (P_start[0] + u2_in[0] * tan_dist,
+          P_start[1] + u2_in[1] * tan_dist)
+    apex = (joint_pos[0] + band_bisector[0] * apex_target,
+            joint_pos[1] + band_bisector[1] * apex_target)
+    t1c, t1r = int(round(T1[0])), int(round(T1[1]))
+    t2c, t2r = int(round(T2[0])), int(round(T2[1]))
+    apc, apr = int(round(apex[0])), int(round(apex[1]))
+    if not (0 <= t1r < mh and 0 <= t1c < mw
+            and 0 <= t2r < mh and 0 <= t2c < mw
+            and 0 <= apr < mh and 0 <= apc < mw
+            and mask[t1r, t1c] and mask[t2r, t2c] and mask[apr, apc]):
+        return None
+    circle = circle_through_three(T1, apex, T2)
+    if circle is None:
+        return None
+    arc_pts = sample_arc_p1_p3_p2(T1, apex, T2,
+                                  (circle[0], circle[1]), circle[2])
+    # Pre-/post-line segments so chain emission can directly _emit_pts.
+    samples: list[tuple[float, float]] = []
+    pa = (int(round(P_end[0])), int(round(P_end[1])))
+    pb = (int(round(T1[0])), int(round(T1[1])))
+    if pa != pb:
+        samples.extend((float(c), float(r))
+                       for c, r in line_sampler([pa, pb]))
+    else:
+        samples.append(P_end)
+    samples.extend(arc_pts)
+    pa = (int(round(T2[0])), int(round(T2[1])))
+    pb = (int(round(P_start[0])), int(round(P_start[1])))
+    if pa != pb:
+        samples.extend((float(c), float(r))
+                       for c, r in line_sampler([pa, pb]))
+    else:
+        samples.append(P_start)
+    return {"type": "arc", "P_end": P_end, "P_start": P_start,
+            "T1": T1, "T2": T2, "apex": apex,
+            "joint_pos": joint_pos, "h_target": h_target,
+            "half_angle": half_angle, "tan_dist": tan_dist,
+            "apex_target": apex_target,
+            "band_bisector": band_bisector, "samples": samples}
+
+
+def _joint_tangent_intersection(arm_prev: list[tuple[float, float]],
+                                arm_next: list[tuple[float, float]]
+                                ) -> dict | None:
+    """Shared geometry used by both Bézier joint primitives: tangent
+    vectors at P_end / P_start, intersection point V of their forward
+    extensions, signed handle lengths `s_v` / `s_v_alt`. Returns `None`
+    on degeneracy or unstable intersection."""
+    tt = _arm_endpoint_tangents(arm_prev, arm_next)
+    if tt is None:
+        return None
+    tangent_prev, tangent_next = tt
+    cross = (tangent_prev[0] * tangent_next[1]
+             - tangent_prev[1] * tangent_next[0])
+    if abs(cross) < 1e-3:
+        return None
+    P_end = arm_prev[-1]; P_start = arm_next[0]
+    dx_ = P_start[0] - P_end[0]
+    dy_ = P_start[1] - P_end[1]
+    chord_len = math.hypot(dx_, dy_)
+    s_param = (dx_ * tangent_next[1] - dy_ * tangent_next[0]) / cross
+    V = (P_end[0] + s_param * tangent_prev[0],
+         P_end[1] + s_param * tangent_prev[1])
+    s_v = ((V[0] - P_end[0]) * tangent_prev[0]
+           + (V[1] - P_end[1]) * tangent_prev[1])
+    s_v_alt = ((P_start[0] - V[0]) * tangent_next[0]
+               + (P_start[1] - V[1]) * tangent_next[1])
+    if s_v <= 0.0 or s_v_alt <= 0.0:
+        return None
+    d_v_end = math.hypot(V[0] - P_end[0], V[1] - P_end[1])
+    d_v_start = math.hypot(V[0] - P_start[0], V[1] - P_start[1])
+    if chord_len > 1e-6 and (d_v_end > 5.0 * chord_len
+                              or d_v_start > 5.0 * chord_len):
+        return None
+    return {"P_end": P_end, "P_start": P_start, "V": V,
+            "tangent_prev": tangent_prev, "tangent_next": tangent_next,
+            "s_v": s_v, "s_v_alt": s_v_alt, "chord_len": chord_len}
+
+
+def joint_quadratic_bezier_at_V(arm_prev: list[tuple[float, float]],
+                                arm_next: list[tuple[float, float]], *,
+                                mask: np.ndarray, dt: np.ndarray,
+                                anchor: tuple[int, int],
+                                ) -> dict | None:
+    """Quadratic Bézier with control point V at the intersection of the
+    two arm tangent lines. Tangent continuity at both seams is exact by
+    Bézier algebra (B'(0) ∝ V − P_end, B'(1) ∝ P_start − V).
+    Construction from 5592b63."""
+    g = _joint_tangent_intersection(arm_prev, arm_next)
+    if g is None:
+        return None
+    samples = sample_quadratic_bezier(g["P_end"], g["V"], g["P_start"])
+    return {"type": "qbez", "P_end": g["P_end"], "P_start": g["P_start"],
+            "V": g["V"], "tangent_prev": g["tangent_prev"],
+            "tangent_next": g["tangent_next"],
+            "samples": samples}
+
+
+def joint_cubic_bezier_clamped(arm_prev: list[tuple[float, float]],
+                               arm_next: list[tuple[float, float]], *,
+                               mask: np.ndarray, dt: np.ndarray,
+                               anchor: tuple[int, int],
+                               max_handle: float = 70.0,
+                               ) -> dict | None:
+    """Cubic Bézier with two independent control points along the arm
+    tangent lines, each handle clamped to `max_handle`. Tangent
+    continuity at both seams is exact (B'(0) ∝ C1 − P_end, B'(1) ∝
+    P_start − C2). Construction shipping at 6cf5740."""
+    g = _joint_tangent_intersection(arm_prev, arm_next)
+    if g is None:
+        return None
+    tp = g["tangent_prev"]; tn = g["tangent_next"]
+    h1 = min(g["s_v"], max_handle)
+    h2 = min(g["s_v_alt"], max_handle)
+    P_end = g["P_end"]; P_start = g["P_start"]
+    C1 = (P_end[0] + tp[0] * h1, P_end[1] + tp[1] * h1)
+    C2 = (P_start[0] - tn[0] * h2, P_start[1] - tn[1] * h2)
+    samples = sample_cubic_bezier(P_end, C1, C2, P_start)
+    return {"type": "cbez", "P_end": P_end, "P_start": P_start,
+            "V": g["V"], "C1": C1, "C2": C2,
+            "tangent_prev": tp, "tangent_next": tn,
+            "s_v": g["s_v"], "s_v_alt": g["s_v_alt"],
+            "h1": h1, "h2": h2, "samples": samples}
+
+
+# --- Registries -------------------------------------------------------------
+
+ARM_STRATEGIES = {
+    "chord": arm_chord,
+    "bfs_raw": arm_bfs_raw,
+    "lsq_line": arm_lsq_line,
+    "smoothed_medial_axis": arm_smoothed_medial_axis,
+}
+
+JOINT_STRATEGIES = {
+    "sharp": joint_sharp,
+    "family_a_fillet": joint_family_a_fillet,
+    "quadratic_bezier_at_V": joint_quadratic_bezier_at_V,
+    "cubic_bezier_clamped": joint_cubic_bezier_clamped,
+}
+
+# Default pair matches the byte-identical line-kind output shipping at
+# 6cf5740 — change the defaults only with a sweep + visual review.
+DEFAULT_ARM_STRATEGY: tuple[str, dict] = ("smoothed_medial_axis", {})
+DEFAULT_JOINT_STRATEGY: tuple[str, dict] = ("cubic_bezier_clamped",
+                                            {"max_handle": 70.0})
+
+
+def _resolve_strategy(entry, default: tuple[str, dict],
+                       registry: dict, slot_name: str
+                       ) -> tuple[str, dict]:
+    """Normalise a per-slot strategy override to `(name, params)`.
+    `entry` is either `None` (use default), a `str` (named strategy with
+    default params), or a `dict` `{"strategy": "name", **params}`."""
+    if entry is None:
+        return default
+    if isinstance(entry, str):
+        name = entry; params: dict = {}
+    elif isinstance(entry, dict):
+        name = entry.get("strategy")
+        if not isinstance(name, str):
+            raise ValueError(f"{slot_name}: missing 'strategy' key in {entry!r}")
+        params = {k: v for k, v in entry.items() if k != "strategy"}
+    else:
+        raise ValueError(f"{slot_name}: bad strategy entry {entry!r}")
+    if name not in registry:
+        raise ValueError(f"{slot_name}: unknown strategy {name!r} "
+                          f"(known: {sorted(registry)})")
+    return name, params
+
+
+def _resolve_per_slot(spec_list, n: int, default: tuple[str, dict],
+                       registry: dict, slot_name: str
+                       ) -> list[tuple[str, dict]]:
+    """Resolve a parallel-array strategy spec to length `n`. `spec_list`
+    may be `None` (all default) or a list of length `n`."""
+    if spec_list is None:
+        return [default] * n
+    if len(spec_list) != n:
+        raise ValueError(f"{slot_name}: expected {n} entries, got "
+                          f"{len(spec_list)}")
+    return [_resolve_strategy(e, default, registry, f"{slot_name}[{i}]")
+            for i, e in enumerate(spec_list)]
+
+
+# -----------------------------------------------------------------------------
 # Per-letter bake
 # -----------------------------------------------------------------------------
 
@@ -1241,187 +1686,50 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # Joint construction at each interior corner is a quadratic
-            # Bézier B(t) = (1−t)² P_end + 2(1−t)t V + t² P_start, where
-            # V is the intersection of the two arm tangent lines (forward
-            # extension of arm_prev's tangent at P_end, back-extension of
-            # arm_next's tangent at P_start). By Bézier algebra B'(0) ∝
-            # V − P_end and B'(1) ∝ P_start − V, so tangent continuity at
-            # both seams is exact within float precision. Falls back to a
-            # straight bridge if the tangent lines are near-parallel or V
-            # is unstable.
-            mh, mw = mask.shape
-
-            def _snap_endpoint(p, n):
-                return snap_to_medial_axis(p, mask, dt, skeleton,
-                                           letter=letter, anchor_name=n)
-
-            # Rough medial-axis snap per anchor.
+            # Line-kind dispatches into arm and joint primitives. The
+            # default pair (arm_smoothed_medial_axis +
+            # joint_cubic_bezier_clamped@70) is what M/V/W/N ship today;
+            # per-arm and per-joint overrides come from spec["arms"] and
+            # spec["joints"].
             rough_snapped: list[tuple[int, int]] = [
-                _snap_endpoint(p, n) for p, n in zip(anchors, names)
+                snap_to_medial_axis(p, mask, dt, skeleton,
+                                    letter=letter, anchor_name=n)
+                for p, n in zip(anchors, names)
             ]
-
-            # Per-arm smoothed medial-axis path. The polyline FOLLOWS
-            # the actual ridge pixel-by-pixel (with moving-average
-            # smoothing), not a chord between snap points. Prima M/V/W
-            # have slightly curved medial axes near cap regions; chord
-            # construction produced visible bowing on those letters
-            # while N (whose medial axis happens to be near-straight)
-            # looked correct.
-            def _bfs_skeleton_path(a, b):
-                h_, w_ = skeleton.shape
-                ax, ay = a; bx, by = b
-                if not (0 <= ay < h_ and 0 <= ax < w_
-                        and skeleton[ay, ax]):
-                    return None
-                if not (0 <= by < h_ and 0 <= bx < w_
-                        and skeleton[by, bx]):
-                    return None
-                from collections import deque
-                parent: dict[tuple[int, int], tuple[int, int] | None] = {
-                    (ay, ax): None}
-                q = deque([(ax, ay)])
-                found = False
-                while q:
-                    cc, cr = q.popleft()
-                    if (cc, cr) == (bx, by):
-                        found = True
-                        break
-                    for dr, dc in NEIGHBOURS_8:
-                        nc, nr = cc + dc, cr + dr
-                        if not (0 <= nr < h_ and 0 <= nc < w_):
-                            continue
-                        if not skeleton[nr, nc]:
-                            continue
-                        if (nr, nc) in parent:
-                            continue
-                        parent[(nr, nc)] = (cr, cc)
-                        q.append((nc, nr))
-                if not found:
-                    return None
-                p: list[tuple[int, int]] = []
-                cur: tuple[int, int] | None = (by, bx)
-                while cur is not None:
-                    p.append((cur[1], cur[0]))
-                    cur = parent[cur]
-                p.reverse()
-                return p
-
-            def _smooth_path(pts: list[tuple[int, int]],
-                              left_trim_pct: float,
-                              right_trim_pct: float
-                              ) -> list[tuple[float, float]] | None:
-                """Trim and apply moving-average smoothing (window 5)
-                to a BFS path. Returns None if the path is too short."""
-                if len(pts) < 10:
-                    return None
-                left = int(len(pts) * left_trim_pct)
-                right = int(len(pts) * right_trim_pct)
-                trimmed = pts[left:len(pts) - right] if right > 0 else pts[left:]
-                if len(trimmed) < 5:
-                    return None
-                smoothed: list[tuple[float, float]] = []
-                for i in range(len(trimmed)):
-                    lo = max(0, i - 2); hi = min(len(trimmed), i + 3)
-                    sx = sum(p[0] for p in trimmed[lo:hi]) / (hi - lo)
-                    sy = sum(p[1] for p in trimmed[lo:hi]) / (hi - lo)
-                    smoothed.append((sx, sy))
-                return smoothed
-
             n_arms = len(rough_snapped) - 1
-            smoothed_paths: list[list[tuple[float, float]] | None] = []
-            for k in range(n_arms):
-                bfs_path = _bfs_skeleton_path(rough_snapped[k],
-                                              rough_snapped[k + 1])
-                if bfs_path is None:
-                    smoothed_paths.append(None)
-                    continue
-                left_pct = 0.0 if k == 0 else 0.20
-                right_pct = 0.0 if k == n_arms - 1 else 0.20
-                smoothed_paths.append(
-                    _smooth_path(bfs_path, left_pct, right_pct))
 
-            # Per interior joint: bridge P_end → P_start with a CUBIC
-            # Bézier whose two control points sit along the arm tangent
-            # lines. C1 = P_end + tangent_prev · min(s_v, MAX_HANDLE);
-            # C2 = P_start − tangent_next · min(s_v_alt, MAX_HANDLE).
-            # s_v = (V − P_end) · tangent_prev, with V the intersection
-            # of the two tangent lines. By cubic-Bézier algebra B'(0) ∝
-            # C1 − P_end = tangent_prev and B'(1) ∝ P_start − C2 =
-            # tangent_next, so tangent continuity at both seams is exact
-            # within float precision. Independent handle distances keep
-            # GATE 3 intact even when one side is clamped.
-            MAX_HANDLE = 70.0  # cubic-handle clamp; sweep-tuned
-            joint_arcs: list[dict | None] = []
-            for j in range(1, len(anchors) - 1):
-                arm_prev = smoothed_paths[j - 1]
-                arm_next = smoothed_paths[j]
+            arm_strategies = _resolve_per_slot(
+                spec.get("arms"), n_arms, DEFAULT_ARM_STRATEGY,
+                ARM_STRATEGIES, "arms")
+            joint_strategies = _resolve_per_slot(
+                spec.get("joints"), max(0, n_arms - 1),
+                DEFAULT_JOINT_STRATEGY, JOINT_STRATEGIES, "joints")
+
+            arms: list[list[tuple[float, float]] | None] = []
+            for k in range(n_arms):
+                name, params = arm_strategies[k]
+                fn = ARM_STRATEGIES[name]
+                arms.append(fn(rough_snapped[k], rough_snapped[k + 1],
+                               k, n_arms,
+                               mask=mask, dt=dt, skeleton=skeleton,
+                               **params))
+
+            joints: list[dict | None] = []
+            for j in range(n_arms - 1):
+                arm_prev = arms[j]; arm_next = arms[j + 1]
                 if (arm_prev is None or arm_next is None
                         or len(arm_prev) < 6 or len(arm_next) < 6):
-                    joint_arcs.append(None)
+                    joints.append(None)
                     continue
-                P_end = arm_prev[-1]
-                P_start = arm_next[0]
-                back_idx = max(0, len(arm_prev) - 6)
-                tpx = P_end[0] - arm_prev[back_idx][0]
-                tpy = P_end[1] - arm_prev[back_idx][1]
-                tp_len = math.hypot(tpx, tpy)
-                if tp_len < 1e-6:
-                    joint_arcs.append(None)
-                    continue
-                tangent_prev = (tpx / tp_len, tpy / tp_len)
-                fwd_idx = min(len(arm_next) - 1, 5)
-                tnx = arm_next[fwd_idx][0] - P_start[0]
-                tny = arm_next[fwd_idx][1] - P_start[1]
-                tn_len = math.hypot(tnx, tny)
-                if tn_len < 1e-6:
-                    joint_arcs.append(None)
-                    continue
-                tangent_next = (tnx / tn_len, tny / tn_len)
-                cross = (tangent_prev[0] * tangent_next[1]
-                         - tangent_prev[1] * tangent_next[0])
-                if abs(cross) < 1e-3:
-                    joint_arcs.append(None)
-                    continue
-                dx_ = P_start[0] - P_end[0]
-                dy_ = P_start[1] - P_end[1]
-                chord_len = math.hypot(dx_, dy_)
-                s_param = (dx_ * tangent_next[1]
-                           - dy_ * tangent_next[0]) / cross
-                V = (P_end[0] + s_param * tangent_prev[0],
-                     P_end[1] + s_param * tangent_prev[1])
-                s_v = ((V[0] - P_end[0]) * tangent_prev[0]
-                       + (V[1] - P_end[1]) * tangent_prev[1])
-                s_v_alt = ((P_start[0] - V[0]) * tangent_next[0]
-                           + (P_start[1] - V[1]) * tangent_next[1])
-                if s_v <= 0.0 or s_v_alt <= 0.0:
-                    joint_arcs.append(None)
-                    continue
-                d_v_end = math.hypot(V[0] - P_end[0], V[1] - P_end[1])
-                d_v_start = math.hypot(V[0] - P_start[0],
-                                       V[1] - P_start[1])
-                if chord_len > 1e-6 and (d_v_end > 5.0 * chord_len
-                                          or d_v_start > 5.0 * chord_len):
-                    joint_arcs.append(None)
-                    continue
-                h1 = min(s_v, MAX_HANDLE)
-                h2 = min(s_v_alt, MAX_HANDLE)
-                C1 = (P_end[0] + tangent_prev[0] * h1,
-                      P_end[1] + tangent_prev[1] * h1)
-                C2 = (P_start[0] - tangent_next[0] * h2,
-                      P_start[1] - tangent_next[1] * h2)
-                joint_arcs.append({
-                    "P_end": P_end, "P_start": P_start,
-                    "V": V, "C1": C1, "C2": C2,
-                    "s_v": s_v, "s_v_alt": s_v_alt,
-                    "h1": h1, "h2": h2,
-                    "tangent_prev": tangent_prev,
-                    "tangent_next": tangent_next,
-                })
+                name, params = joint_strategies[j]
+                fn = JOINT_STRATEGIES[name]
+                joints.append(fn(arm_prev, arm_next,
+                                  mask=mask, dt=dt,
+                                  anchor=anchors[j + 1], **params))
 
-            # Chain assembly: emit each arm's smoothed path, then bridge
-            # consecutive arms with a cubic Bézier (or straight line if
-            # the joint fell back).
+            # Chain assembly: emit each arm path, bridge with the joint's
+            # pre-sampled polyline. Fall back to a straight line bridge
+            # when the joint primitive returned None.
             chain: list[tuple[int, int]] = []
 
             def _emit_pts(pts: list[tuple[float, float]]) -> None:
@@ -1442,27 +1750,24 @@ def bake_letter(letter: str, font_path: Path
                 chain.extend(seg[start:])
 
             for k in range(n_arms):
-                arm_path = smoothed_paths[k]
+                arm_path = arms[k]
                 arm_start = (arm_path[0] if arm_path is not None
                              else rough_snapped[k])
                 arm_end = (arm_path[-1] if arm_path is not None
                            else rough_snapped[k + 1])
                 if k > 0:
-                    jd_prev = (joint_arcs[k - 1]
-                               if (k - 1) < len(joint_arcs) else None)
+                    jd_prev = (joints[k - 1]
+                               if (k - 1) < len(joints) else None)
                     if jd_prev is not None:
-                        bez = sample_cubic_bezier(
-                            jd_prev["P_end"], jd_prev["C1"],
-                            jd_prev["C2"], jd_prev["P_start"])
-                        _emit_pts(bez)
+                        _emit_pts(jd_prev["samples"])
                     elif chain:
                         _emit_line(chain[-1], arm_start)
                 if arm_path is not None:
                     _emit_pts(arm_path)
                 else:
                     _emit_line(arm_start, arm_end)
-            joint_arcs_per_stroke.append(joint_arcs)
-            smoothed_paths_per_stroke.append(smoothed_paths)
+            joint_arcs_per_stroke.append(joints)
+            smoothed_paths_per_stroke.append(arms)
         else:
             chain = []
             for si in range(len(anchors) - 1):
