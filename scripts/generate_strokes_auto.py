@@ -145,18 +145,18 @@ LETTERS: dict[str, list[StrokeSpec]] = {
         {"kind": "line", "anchors": ["BL", "TL", "BC", "TR", "BR"],
          "arms": ["straight_line"] * 4,
          "joints": [
-             {"strategy": "cubic_bezier_clamped", "max_handle": 70.0},  # TL convex peak
-             "sharp_meeting_at_intersection",                            # BC concave valley
-             {"strategy": "cubic_bezier_clamped", "max_handle": 70.0},  # TR convex peak
+             "sharp_meeting_at_intersection",  # TL peak (V clamped to cap top)
+             "sharp_meeting_at_intersection",  # BC valley
+             "sharp_meeting_at_intersection",  # TR peak (V clamped to cap top)
          ]},
     ],
     "W": [
         {"kind": "line", "anchors": ["TL", "BL", "TC", "BR", "TR"],
          "arms": ["straight_line"] * 4,
          "joints": [
-             "sharp_meeting_at_intersection",                            # BL concave valley
-             {"strategy": "cubic_bezier_clamped", "max_handle": 70.0},  # TC convex peak
-             "sharp_meeting_at_intersection",                            # BR concave valley
+             "sharp_meeting_at_intersection",  # BL valley
+             "sharp_meeting_at_intersection",  # TC peak (V clamped to cap top)
+             "sharp_meeting_at_intersection",  # BR valley
          ]},
     ],
     "b": [
@@ -1705,14 +1705,21 @@ def joint_sharp_meeting_at_intersection(
         mask: np.ndarray, dt: np.ndarray,
         anchor: tuple[int, int],
         ) -> dict | None:
-    """Sharp angular meeting whose apex is the intersection of the two
-    arm fitted lines. Recovers each arm's line direction from the arm
-    polyline's first and last points — pairs naturally with
-    `arm_straight_line`, whose polyline lies on the LSQ-fit centerline
-    by construction. Returns `None` if the lines are parallel or the
-    intersection falls outside the mask."""
+    """Sharp angular meeting at the math intersection of the two arm
+    fitted lines. `apex = V` unconditionally — no walk-clamp, no
+    h_target. The two straight arms naturally meet at V whether V is
+    inside or outside the mask. Concave valleys: V is in-mask, the
+    polyline kinks at apex with one out-of-mask sample (apex itself
+    may sit at low dt but is in-mask). Convex peaks: V is above the
+    cap top, outside the mask; samples near apex are out-of-mask in
+    a contiguous window. That window is recorded in `skip_indices`
+    so gates 1 and 2 ignore intentional out-of-mask / kinked samples
+    at the apex.
+
+    Returns `None` if the arm lines are parallel."""
     if len(arm_prev) < 2 or len(arm_next) < 2:
         return None
+    mh, mw = mask.shape
     p1a = arm_prev[0]; p1b = arm_prev[-1]
     d1x = p1b[0] - p1a[0]; d1y = p1b[1] - p1a[1]
     L1 = math.hypot(d1x, d1y)
@@ -1730,11 +1737,9 @@ def joint_sharp_meeting_at_intersection(
         return None
     dx_ = p2a[0] - p1a[0]; dy_ = p2a[1] - p1a[1]
     t = (dx_ * (-d2y) - dy_ * (-d2x)) / det
-    apex = (p1a[0] + t * d1x, p1a[1] + t * d1y)
-    mh, mw = mask.shape
-    apr = int(round(apex[1])); apc = int(round(apex[0]))
-    if not (0 <= apr < mh and 0 <= apc < mw and mask[apr, apc]):
-        return None
+    V_apex = (p1a[0] + t * d1x, p1a[1] + t * d1y)
+    apex = V_apex
+    apc = int(round(apex[0])); apr = int(round(apex[1]))
     P_end = arm_prev[-1]
     P_start = arm_next[0]
     a = (int(round(P_end[0])), int(round(P_end[1])))
@@ -1755,11 +1760,32 @@ def joint_sharp_meeting_at_intersection(
         samples.extend(seg)
     else:
         samples.append(P_start)
+    # Skip window: apex_index plus contiguous out-of-mask samples on
+    # either side. Concave valleys with V in-mask collapse to just
+    # {apex_index}. Convex peaks expand to include the cap-overshoot
+    # window around the apex.
+    skip_indices: set[int] = {apex_index}
+
+    def _in_mask(p: tuple[float, float]) -> bool:
+        ic = int(round(p[0])); ir = int(round(p[1]))
+        return (0 <= ir < mh and 0 <= ic < mw and mask[ir, ic])
+
+    j = apex_index - 1
+    while j >= 0 and not _in_mask(samples[j]):
+        skip_indices.add(j)
+        j -= 1
+    j = apex_index + 1
+    while j < len(samples) and not _in_mask(samples[j]):
+        skip_indices.add(j)
+        j += 1
+    v_in_mask = (0 <= apr < mh and 0 <= apc < mw and mask[apr, apc])
     return {"type": "sharp_meeting",
             "P_end": P_end, "P_start": P_start, "apex": apex,
+            "V": V_apex, "v_in_mask": v_in_mask,
             "tangent_prev": (d1x, d1y),
             "tangent_next": (d2x, d2y),
-            "samples": samples, "apex_index": apex_index}
+            "samples": samples, "apex_index": apex_index,
+            "skip_indices": skip_indices}
 
 
 # --- Registries -------------------------------------------------------------
@@ -1860,10 +1886,11 @@ def bake_letter(letter: str, font_path: Path
     resolved_anchors: list[list[tuple[str, tuple[int, int]]]] = []
     joint_arcs_per_stroke: list[list[dict | None]] = []
     smoothed_paths_per_stroke: list[list[list[tuple[float, float]] | None]] = []
-    # Chain indices that correspond to apex samples of `sharp_meeting`
-    # joints. Gate 2 (reversal check) skips these — the polyline
-    # intentionally kinks at the apex of an angular meeting.
-    sharp_apex_indices_per_stroke: list[set[int]] = []
+    # Chain indices to skip in gates 1 (overshoot) and 2 (reversal) for
+    # sharp_meeting joints. Covers the apex sample plus any contiguous
+    # out-of-mask samples around it (convex peaks at the cap top emit
+    # an out-of-mask window; concave valleys collapse to just the apex).
+    sharp_skip_indices_per_stroke: list[set[int]] = []
 
     for i, spec in enumerate(specs, start=1):
         if "kind" in spec:
@@ -1943,20 +1970,21 @@ def bake_letter(letter: str, font_path: Path
             # pre-sampled polyline. Fall back to a straight line bridge
             # when the joint primitive returned None.
             chain: list[tuple[int, int]] = []
-            stroke_apex_indices: set[int] = set()
+            stroke_skip_indices: set[int] = set()
 
             def _emit_pts(pts: list[tuple[float, float]],
-                          apex_sample_idx: int | None = None) -> None:
+                          skip_sample_indices: set[int] | None = None
+                          ) -> None:
                 for s_i, p in enumerate(pts):
                     ip = (int(round(p[0])), int(round(p[1])))
                     if not chain or chain[-1] != ip:
                         chain.append(ip)
-                    if (apex_sample_idx is not None
-                            and s_i == apex_sample_idx):
-                        # Apex chain index is the last chain index
+                    if (skip_sample_indices is not None
+                            and s_i in skip_sample_indices):
+                        # Sample's chain index is the last chain index
                         # whether we just appended or dedup'd against
                         # chain[-1].
-                        stroke_apex_indices.add(len(chain) - 1)
+                        stroke_skip_indices.add(len(chain) - 1)
 
             def _emit_line(p_start, p_end):
                 a = (int(round(p_start[0])), int(round(p_start[1])))
@@ -1979,11 +2007,11 @@ def bake_letter(letter: str, font_path: Path
                     jd_prev = (joints[k - 1]
                                if (k - 1) < len(joints) else None)
                     if jd_prev is not None:
-                        apex_idx = (jd_prev.get("apex_index")
-                                    if jd_prev.get("type") == "sharp_meeting"
-                                    else None)
+                        skip = (jd_prev.get("skip_indices")
+                                if jd_prev.get("type") == "sharp_meeting"
+                                else None)
                         _emit_pts(jd_prev["samples"],
-                                  apex_sample_idx=apex_idx)
+                                  skip_sample_indices=skip)
                     elif chain:
                         _emit_line(chain[-1], arm_start)
                 if arm_path is not None:
@@ -1992,7 +2020,7 @@ def bake_letter(letter: str, font_path: Path
                     _emit_line(arm_start, arm_end)
             joint_arcs_per_stroke.append(joints)
             smoothed_paths_per_stroke.append(arms)
-            sharp_apex_indices_per_stroke.append(stroke_apex_indices)
+            sharp_skip_indices_per_stroke.append(stroke_skip_indices)
         else:
             chain = []
             for si in range(len(anchors) - 1):
@@ -2007,7 +2035,7 @@ def bake_letter(letter: str, font_path: Path
                 chain.extend(seg)
             joint_arcs_per_stroke.append([])
             smoothed_paths_per_stroke.append([])
-            sharp_apex_indices_per_stroke.append(set())
+            sharp_skip_indices_per_stroke.append(set())
         stroke_pixel_chains.append(chain)
 
         resampled = resample_uniform(chain, CHECKPOINT_COUNT)
@@ -2039,7 +2067,7 @@ def bake_letter(letter: str, font_path: Path
         "resolved_anchors": resolved_anchors,
         "joint_arcs_per_stroke": joint_arcs_per_stroke,
         "smoothed_paths_per_stroke": smoothed_paths_per_stroke,
-        "sharp_apex_indices_per_stroke": sharp_apex_indices_per_stroke,
+        "sharp_skip_indices_per_stroke": sharp_skip_indices_per_stroke,
     }
     return data, debug
 
