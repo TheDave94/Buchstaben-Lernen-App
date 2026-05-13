@@ -127,16 +127,37 @@ StrokeSpec = dict  # {"kind": "line", "anchors": [...]} | {"path": [...]}
 
 LETTERS: dict[str, list[StrokeSpec]] = {
     "N": [
-        {"kind": "line", "anchors": ["BL", "TL", "BR", "TR"]},
+        {"kind": "line", "anchors": ["BL", "TL", "BR", "TR"],
+         "arms": ["straight_line", "straight_line", "straight_line"],
+         "joints": [
+             "sharp_meeting_at_intersection",  # TL inner corner
+             "sharp_meeting_at_intersection",  # BR inner corner
+         ]},
     ],
     "V": [
-        {"kind": "line", "anchors": ["TL", "BC", "TR"]},
+        {"kind": "line", "anchors": ["TL", "BC", "TR"],
+         "arms": ["straight_line", "straight_line"],
+         "joints": [
+             "sharp_meeting_at_intersection",  # BC valley
+         ]},
     ],
     "M": [
-        {"kind": "line", "anchors": ["BL", "TL", "BC", "TR", "BR"]},
+        {"kind": "line", "anchors": ["BL", "TL", "BC", "TR", "BR"],
+         "arms": ["straight_line"] * 4,
+         "joints": [
+             {"strategy": "cubic_bezier_clamped", "max_handle": 70.0},  # TL convex peak
+             "sharp_meeting_at_intersection",                            # BC concave valley
+             {"strategy": "cubic_bezier_clamped", "max_handle": 70.0},  # TR convex peak
+         ]},
     ],
     "W": [
-        {"kind": "line", "anchors": ["TL", "BL", "TC", "BR", "TR"]},
+        {"kind": "line", "anchors": ["TL", "BL", "TC", "BR", "TR"],
+         "arms": ["straight_line"] * 4,
+         "joints": [
+             "sharp_meeting_at_intersection",                            # BL concave valley
+             {"strategy": "cubic_bezier_clamped", "max_handle": 70.0},  # TC convex peak
+             "sharp_meeting_at_intersection",                            # BR concave valley
+         ]},
     ],
     "b": [
         {"path": ["T", "LOWER_TOUCH"]},
@@ -1351,6 +1372,57 @@ def arm_smoothed_medial_axis(rough_a: tuple[int, int],
     return _smooth_path(pts, left_pct, right_pct, window=window)
 
 
+def arm_straight_line(rough_a: tuple[int, int],
+                      rough_b: tuple[int, int],
+                      k: int, n_arms: int, *,
+                      mask: np.ndarray, dt: np.ndarray,
+                      skeleton: np.ndarray,
+                      trim_pct: float = 0.20,
+                      ) -> list[tuple[float, float]] | None:
+    """LSQ-fit a straight line through the skeleton pixels between
+    `rough_a` and `rough_b`, project both endpoints onto the line, trim
+    the joint-adjacent end(s) by `trim_pct` of the segment length, and
+    return the rasterized straight segment (sampled at 1-px spacing by
+    `line_sampler`). The arm's polyline endpoints define the fitted
+    line — downstream joint primitives can recover it from `arm[0]` /
+    `arm[-1]` without re-running the SVD."""
+    pts = _bfs_skeleton_path(rough_a, rough_b, skeleton)
+    if pts is None or len(pts) < 5:
+        return None
+    arr = np.array(pts, dtype=float)
+    centroid = arr.mean(axis=0)
+    _, _, vt = np.linalg.svd(arr - centroid, full_matrices=False)
+    direction = vt[0]
+    ox, oy = float(centroid[0]), float(centroid[1])
+    dx, dy = float(direction[0]), float(direction[1])
+
+    def _proj(p):
+        vx = p[0] - ox; vy = p[1] - oy
+        t = vx * dx + vy * dy
+        return (ox + t * dx, oy + t * dy)
+
+    a_proj = _proj(rough_a)
+    b_proj = _proj(rough_b)
+    seg_dx = b_proj[0] - a_proj[0]
+    seg_dy = b_proj[1] - a_proj[1]
+    L = math.hypot(seg_dx, seg_dy)
+    if L < 1e-6:
+        return None
+    ux, uy = seg_dx / L, seg_dy / L
+    left_pct = 0.0 if k == 0 else trim_pct
+    right_pct = 0.0 if k == n_arms - 1 else trim_pct
+    a_trim = (a_proj[0] + ux * L * left_pct,
+              a_proj[1] + uy * L * left_pct)
+    b_trim = (b_proj[0] - ux * L * right_pct,
+              b_proj[1] - uy * L * right_pct)
+    ia = (int(round(a_trim[0])), int(round(a_trim[1])))
+    ib = (int(round(b_trim[0])), int(round(b_trim[1])))
+    if ia == ib:
+        return [(float(ia[0]), float(ia[1]))]
+    seg = line_sampler([ia, ib])
+    return [(float(c), float(r)) for c, r in seg]
+
+
 # --- Joint primitives -------------------------------------------------------
 
 def joint_sharp(arm_prev: list[tuple[float, float]],
@@ -1627,6 +1699,69 @@ def joint_sharp_meeting(arm_prev: list[tuple[float, float]],
             "samples": samples}
 
 
+def joint_sharp_meeting_at_intersection(
+        arm_prev: list[tuple[float, float]],
+        arm_next: list[tuple[float, float]], *,
+        mask: np.ndarray, dt: np.ndarray,
+        anchor: tuple[int, int],
+        ) -> dict | None:
+    """Sharp angular meeting whose apex is the intersection of the two
+    arm fitted lines. Recovers each arm's line direction from the arm
+    polyline's first and last points — pairs naturally with
+    `arm_straight_line`, whose polyline lies on the LSQ-fit centerline
+    by construction. Returns `None` if the lines are parallel or the
+    intersection falls outside the mask."""
+    if len(arm_prev) < 2 or len(arm_next) < 2:
+        return None
+    p1a = arm_prev[0]; p1b = arm_prev[-1]
+    d1x = p1b[0] - p1a[0]; d1y = p1b[1] - p1a[1]
+    L1 = math.hypot(d1x, d1y)
+    if L1 < 1e-6:
+        return None
+    d1x /= L1; d1y /= L1
+    p2a = arm_next[0]; p2b = arm_next[-1]
+    d2x = p2b[0] - p2a[0]; d2y = p2b[1] - p2a[1]
+    L2 = math.hypot(d2x, d2y)
+    if L2 < 1e-6:
+        return None
+    d2x /= L2; d2y /= L2
+    det = d1x * (-d2y) - d1y * (-d2x)
+    if abs(det) < 1e-6:
+        return None
+    dx_ = p2a[0] - p1a[0]; dy_ = p2a[1] - p1a[1]
+    t = (dx_ * (-d2y) - dy_ * (-d2x)) / det
+    apex = (p1a[0] + t * d1x, p1a[1] + t * d1y)
+    mh, mw = mask.shape
+    apr = int(round(apex[1])); apc = int(round(apex[0]))
+    if not (0 <= apr < mh and 0 <= apc < mw and mask[apr, apc]):
+        return None
+    P_end = arm_prev[-1]
+    P_start = arm_next[0]
+    a = (int(round(P_end[0])), int(round(P_end[1])))
+    b = (apc, apr)
+    c = (int(round(P_start[0])), int(round(P_start[1])))
+    samples: list[tuple[float, float]] = []
+    if a != b:
+        samples.extend((float(cc), float(rr))
+                       for cc, rr in line_sampler([a, b]))
+    else:
+        samples.append(P_end)
+    apex_index = len(samples) - 1
+    if b != c:
+        seg = [(float(cc), float(rr))
+               for cc, rr in line_sampler([b, c])]
+        if samples and seg and samples[-1] == seg[0]:
+            seg = seg[1:]
+        samples.extend(seg)
+    else:
+        samples.append(P_start)
+    return {"type": "sharp_meeting",
+            "P_end": P_end, "P_start": P_start, "apex": apex,
+            "tangent_prev": (d1x, d1y),
+            "tangent_next": (d2x, d2y),
+            "samples": samples, "apex_index": apex_index}
+
+
 # --- Registries -------------------------------------------------------------
 
 ARM_STRATEGIES = {
@@ -1634,6 +1769,7 @@ ARM_STRATEGIES = {
     "bfs_raw": arm_bfs_raw,
     "lsq_line": arm_lsq_line,
     "smoothed_medial_axis": arm_smoothed_medial_axis,
+    "straight_line": arm_straight_line,
 }
 
 JOINT_STRATEGIES = {
@@ -1642,6 +1778,7 @@ JOINT_STRATEGIES = {
     "quadratic_bezier_at_V": joint_quadratic_bezier_at_V,
     "cubic_bezier_clamped": joint_cubic_bezier_clamped,
     "sharp_meeting": joint_sharp_meeting,
+    "sharp_meeting_at_intersection": joint_sharp_meeting_at_intersection,
 }
 
 # Default pair matches the byte-identical line-kind output shipping at
@@ -1723,6 +1860,10 @@ def bake_letter(letter: str, font_path: Path
     resolved_anchors: list[list[tuple[str, tuple[int, int]]]] = []
     joint_arcs_per_stroke: list[list[dict | None]] = []
     smoothed_paths_per_stroke: list[list[list[tuple[float, float]] | None]] = []
+    # Chain indices that correspond to apex samples of `sharp_meeting`
+    # joints. Gate 2 (reversal check) skips these — the polyline
+    # intentionally kinks at the apex of an angular meeting.
+    sharp_apex_indices_per_stroke: list[set[int]] = []
 
     for i, spec in enumerate(specs, start=1):
         if "kind" in spec:
@@ -1802,12 +1943,20 @@ def bake_letter(letter: str, font_path: Path
             # pre-sampled polyline. Fall back to a straight line bridge
             # when the joint primitive returned None.
             chain: list[tuple[int, int]] = []
+            stroke_apex_indices: set[int] = set()
 
-            def _emit_pts(pts: list[tuple[float, float]]) -> None:
-                for p in pts:
+            def _emit_pts(pts: list[tuple[float, float]],
+                          apex_sample_idx: int | None = None) -> None:
+                for s_i, p in enumerate(pts):
                     ip = (int(round(p[0])), int(round(p[1])))
                     if not chain or chain[-1] != ip:
                         chain.append(ip)
+                    if (apex_sample_idx is not None
+                            and s_i == apex_sample_idx):
+                        # Apex chain index is the last chain index
+                        # whether we just appended or dedup'd against
+                        # chain[-1].
+                        stroke_apex_indices.add(len(chain) - 1)
 
             def _emit_line(p_start, p_end):
                 a = (int(round(p_start[0])), int(round(p_start[1])))
@@ -1830,7 +1979,11 @@ def bake_letter(letter: str, font_path: Path
                     jd_prev = (joints[k - 1]
                                if (k - 1) < len(joints) else None)
                     if jd_prev is not None:
-                        _emit_pts(jd_prev["samples"])
+                        apex_idx = (jd_prev.get("apex_index")
+                                    if jd_prev.get("type") == "sharp_meeting"
+                                    else None)
+                        _emit_pts(jd_prev["samples"],
+                                  apex_sample_idx=apex_idx)
                     elif chain:
                         _emit_line(chain[-1], arm_start)
                 if arm_path is not None:
@@ -1839,6 +1992,7 @@ def bake_letter(letter: str, font_path: Path
                     _emit_line(arm_start, arm_end)
             joint_arcs_per_stroke.append(joints)
             smoothed_paths_per_stroke.append(arms)
+            sharp_apex_indices_per_stroke.append(stroke_apex_indices)
         else:
             chain = []
             for si in range(len(anchors) - 1):
@@ -1853,6 +2007,7 @@ def bake_letter(letter: str, font_path: Path
                 chain.extend(seg)
             joint_arcs_per_stroke.append([])
             smoothed_paths_per_stroke.append([])
+            sharp_apex_indices_per_stroke.append(set())
         stroke_pixel_chains.append(chain)
 
         resampled = resample_uniform(chain, CHECKPOINT_COUNT)
@@ -1884,6 +2039,7 @@ def bake_letter(letter: str, font_path: Path
         "resolved_anchors": resolved_anchors,
         "joint_arcs_per_stroke": joint_arcs_per_stroke,
         "smoothed_paths_per_stroke": smoothed_paths_per_stroke,
+        "sharp_apex_indices_per_stroke": sharp_apex_indices_per_stroke,
     }
     return data, debug
 
