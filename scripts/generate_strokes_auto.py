@@ -1341,12 +1341,17 @@ def bake_letter(letter: str, font_path: Path
                 smoothed_paths.append(
                     _smooth_path(bfs_path, left_pct, right_pct))
 
-            # Per interior joint: bridge P_end → P_start with a
-            # quadratic Bézier whose control point V is the intersection
-            # of the two arm tangent lines. Arms terminate on the
-            # smoothed medial-axis ridge; the Bézier handles C0 and C1
-            # continuity at both seams by construction (B'(0) ∝ V − P_end,
-            # B'(1) ∝ P_start − V).
+            # Per interior joint: bridge P_end → P_start with a CUBIC
+            # Bézier whose two control points sit along the arm tangent
+            # lines. C1 = P_end + tangent_prev · min(s_v, MAX_HANDLE);
+            # C2 = P_start − tangent_next · min(s_v_alt, MAX_HANDLE).
+            # s_v = (V − P_end) · tangent_prev, with V the intersection
+            # of the two tangent lines. By cubic-Bézier algebra B'(0) ∝
+            # C1 − P_end = tangent_prev and B'(1) ∝ P_start − C2 =
+            # tangent_next, so tangent continuity at both seams is exact
+            # within float precision. Independent handle distances keep
+            # GATE 3 intact even when one side is clamped.
+            MAX_HANDLE = 70.0  # cubic-handle clamp; sweep-tuned
             joint_arcs: list[dict | None] = []
             for j in range(1, len(anchors) - 1):
                 arm_prev = smoothed_paths[j - 1]
@@ -1357,8 +1362,6 @@ def bake_letter(letter: str, font_path: Path
                     continue
                 P_end = arm_prev[-1]
                 P_start = arm_next[0]
-                # tangent_prev at P_end pointing INTO the joint
-                # (direction of travel arriving at P_end).
                 back_idx = max(0, len(arm_prev) - 6)
                 tpx = P_end[0] - arm_prev[back_idx][0]
                 tpy = P_end[1] - arm_prev[back_idx][1]
@@ -1367,8 +1370,6 @@ def bake_letter(letter: str, font_path: Path
                     joint_arcs.append(None)
                     continue
                 tangent_prev = (tpx / tp_len, tpy / tp_len)
-                # tangent_next at P_start pointing AWAY from joint
-                # (direction of travel leaving P_start).
                 fwd_idx = min(len(arm_next) - 1, 5)
                 tnx = arm_next[fwd_idx][0] - P_start[0]
                 tny = arm_next[fwd_idx][1] - P_start[1]
@@ -1377,9 +1378,6 @@ def bake_letter(letter: str, font_path: Path
                     joint_arcs.append(None)
                     continue
                 tangent_next = (tnx / tn_len, tny / tn_len)
-                # Solve P_end + s·tangent_prev = P_start − t·tangent_next.
-                # det = tangent_prev × tangent_next; near-parallel ⇒ fall
-                # back to a straight bridge.
                 cross = (tangent_prev[0] * tangent_next[1]
                          - tangent_prev[1] * tangent_next[0])
                 if abs(cross) < 1e-3:
@@ -1388,9 +1386,17 @@ def bake_letter(letter: str, font_path: Path
                 dx_ = P_start[0] - P_end[0]
                 dy_ = P_start[1] - P_end[1]
                 chord_len = math.hypot(dx_, dy_)
-                s = (dx_ * tangent_next[1] - dy_ * tangent_next[0]) / cross
-                V = (P_end[0] + s * tangent_prev[0],
-                     P_end[1] + s * tangent_prev[1])
+                s_param = (dx_ * tangent_next[1]
+                           - dy_ * tangent_next[0]) / cross
+                V = (P_end[0] + s_param * tangent_prev[0],
+                     P_end[1] + s_param * tangent_prev[1])
+                s_v = ((V[0] - P_end[0]) * tangent_prev[0]
+                       + (V[1] - P_end[1]) * tangent_prev[1])
+                s_v_alt = ((P_start[0] - V[0]) * tangent_next[0]
+                           + (P_start[1] - V[1]) * tangent_next[1])
+                if s_v <= 0.0 or s_v_alt <= 0.0:
+                    joint_arcs.append(None)
+                    continue
                 d_v_end = math.hypot(V[0] - P_end[0], V[1] - P_end[1])
                 d_v_start = math.hypot(V[0] - P_start[0],
                                        V[1] - P_start[1])
@@ -1398,15 +1404,24 @@ def bake_letter(letter: str, font_path: Path
                                           or d_v_start > 5.0 * chord_len):
                     joint_arcs.append(None)
                     continue
+                h1 = min(s_v, MAX_HANDLE)
+                h2 = min(s_v_alt, MAX_HANDLE)
+                C1 = (P_end[0] + tangent_prev[0] * h1,
+                      P_end[1] + tangent_prev[1] * h1)
+                C2 = (P_start[0] - tangent_next[0] * h2,
+                      P_start[1] - tangent_next[1] * h2)
                 joint_arcs.append({
-                    "P_end": P_end, "P_start": P_start, "V": V,
+                    "P_end": P_end, "P_start": P_start,
+                    "V": V, "C1": C1, "C2": C2,
+                    "s_v": s_v, "s_v_alt": s_v_alt,
+                    "h1": h1, "h2": h2,
                     "tangent_prev": tangent_prev,
                     "tangent_next": tangent_next,
                 })
 
             # Chain assembly: emit each arm's smoothed path, then bridge
-            # consecutive arms with a quadratic Bézier (or straight line
-            # if the joint fell back).
+            # consecutive arms with a cubic Bézier (or straight line if
+            # the joint fell back).
             chain: list[tuple[int, int]] = []
 
             def _emit_pts(pts: list[tuple[float, float]]) -> None:
@@ -1432,18 +1447,16 @@ def bake_letter(letter: str, font_path: Path
                              else rough_snapped[k])
                 arm_end = (arm_path[-1] if arm_path is not None
                            else rough_snapped[k + 1])
-                # Bridge from previous arm into this arm at joint k-1.
                 if k > 0:
                     jd_prev = (joint_arcs[k - 1]
                                if (k - 1) < len(joint_arcs) else None)
                     if jd_prev is not None:
-                        bez = sample_quadratic_bezier(
-                            jd_prev["P_end"], jd_prev["V"],
-                            jd_prev["P_start"])
+                        bez = sample_cubic_bezier(
+                            jd_prev["P_end"], jd_prev["C1"],
+                            jd_prev["C2"], jd_prev["P_start"])
                         _emit_pts(bez)
                     elif chain:
                         _emit_line(chain[-1], arm_start)
-                # Emit this arm.
                 if arm_path is not None:
                     _emit_pts(arm_path)
                 else:
