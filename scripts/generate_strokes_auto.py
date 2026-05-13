@@ -137,25 +137,36 @@ LETTERS: dict[str, list[StrokeSpec]] = {
                     "t_junction_end": 1}]},  # crossbar right meets stroke 1 (BR→T)
     ],
     "E": [
+        # All three horizontal bars terminate at dt=5 from the right
+        # outline (≈ stroke half-radius), so each tip sits just inside
+        # its own cap rounding without bulging past it. Without
+        # `end_distance_from_outline`, LSQ projection of TR/MR/BR onto
+        # each bar's fitted line lands at varying x positions
+        # (col 627 vs 574 vs 587 on the M-letter family at 1024×1024).
         {"kind": "line", "anchors": ["TL", "BL"],
          "arms": ["straight_line"]},
         {"kind": "line", "anchors": ["TL", "TR"],
          "arms": [{"strategy": "straight_line",
-                    "t_junction_start": 0}]},
+                    "t_junction_start": 0,
+                    "end_distance_from_outline": 5.0}]},
         {"kind": "line", "anchors": ["ML", "MR"],
          "arms": [{"strategy": "straight_line",
-                    "t_junction_start": 0}]},
+                    "t_junction_start": 0,
+                    "end_distance_from_outline": 5.0}]},
         {"kind": "line", "anchors": ["BL", "BR"],
          "arms": [{"strategy": "straight_line",
-                    "t_junction_start": 0}]},
+                    "t_junction_start": 0,
+                    "end_distance_from_outline": 5.0}]},
     ],
     "F": [
         {"kind": "line", "anchors": ["TL", "BL"],
          "arms": ["straight_line"]},
         {"kind": "line", "anchors": ["TL", "TR"],
-         "arms": ["straight_line"]},
+         "arms": [{"strategy": "straight_line",
+                    "end_distance_from_outline": 5.0}]},
         {"kind": "line", "anchors": ["ML", "MR"],
-         "arms": [{"strategy": "straight_line", "t_junction_start": 0}]},
+         "arms": [{"strategy": "straight_line", "t_junction_start": 0,
+                    "end_distance_from_outline": 5.0}]},
     ],
     "H": [
         {"kind": "line", "anchors": ["TL", "BL"],
@@ -176,7 +187,8 @@ LETTERS: dict[str, list[StrokeSpec]] = {
          "arms": ["straight_line"]},
         {"kind": "line", "anchors": ["BL", "BR"],
          "arms": [{"strategy": "straight_line",
-                    "t_junction_start": 0}]},
+                    "t_junction_start": 0,
+                    "end_distance_from_outline": 5.0}]},
     ],
     "N": [
         {"kind": "line", "anchors": ["BL", "TL", "BR", "TR"],
@@ -237,16 +249,14 @@ LETTERS: dict[str, list[StrokeSpec]] = {
              "sharp_meeting_at_intersection",  # BR valley
          ]},
     ],
-    "l": [
-        # FLAG: lowercase l has a rounded bottom curl per Prima docs.
-        # Authored as TC→BC→BR continuous: straight vertical, then
-        # default cubic_bezier joint at BC rounding into a short
-        # straight segment ending at BR (curl tip). VERIFY curl-end
-        # position against /tmp/druck_hires/ — BR may not land on the
-        # design curl tip.
-        {"kind": "line", "anchors": ["TC", "BC", "BR"],
-         "arms": ["straight_line", "straight_line"]},
-    ],
+    # l deferred — structurally a straight stem plus a small curved
+    # foot at the baseline. Line-kind primitives can only approximate
+    # the curl by routing the polyline through a low-dt valley region,
+    # which traces visually wrong. l belongs in the curve workstream
+    # alongside t f j r i (all of which share the "mostly straight +
+    # small curve at one end" architecture). Author all five together
+    # when the curve workstream lands. l_l/strokes.json on disk is the
+    # bd4e2d5 version and will be overwritten then.
     "v": [
         # Asymmetric LSQ-fit trim (start=0.50 cap-side): the medial axis
         # bows toward the cap caps on TL/TR; trimming 50% of cap-side
@@ -1527,6 +1537,7 @@ def arm_straight_line(rough_a: tuple[int, int],
                       fit_trim_end_pct: float = 0.0,
                       start_pixel: tuple[float, float] | None = None,
                       end_pixel: tuple[float, float] | None = None,
+                      end_distance_from_outline: float | None = None,
                       ) -> list[tuple[float, float]] | None:
     """LSQ-fit a straight line through the skeleton pixels between
     `rough_a` and `rough_b`, project both endpoints onto the line, trim
@@ -1545,6 +1556,14 @@ def arm_straight_line(rough_a: tuple[int, int],
     Used by `bake_letter`'s shared-apex pre-compute to force two
     strokes' meeting endpoint onto the same pixel even though their
     individual LSQ projections would diverge.
+
+    `end_distance_from_outline`: optional target dt value at the end
+    pixel. When set, walk from the LSQ projection of `rough_b` back
+    along the fitted line direction and stop at the first pixel where
+    `dt >= end_distance_from_outline`. Used to make a group of arms
+    (e.g. E's three horizontal bars) terminate at the same distance
+    from the right outline regardless of where each individual LSQ
+    projection lands. Ignored when `end_pixel` is also set.
 
     The arm's polyline endpoints define the fitted line — downstream
     joint primitives can recover it from `arm[0]` / `arm[-1]` without
@@ -1589,6 +1608,34 @@ def arm_straight_line(rough_a: tuple[int, int],
         a_trim = (float(start_pixel[0]), float(start_pixel[1]))
     if end_pixel is not None:
         b_trim = (float(end_pixel[0]), float(end_pixel[1]))
+    elif end_distance_from_outline is not None:
+        # Walk from a_trim along the fitted line in the b direction.
+        # Record the LAST pixel where dt > target — the bar terminates
+        # at the first interior-side point before dt drops below
+        # `target`. Walking continues until we step off the canvas
+        # OR encounter a non-ink pixel (dt = 0 outside the mask), so
+        # short BFS paths between snapped anchors don't prematurely
+        # cap the walk before it reaches the actual cap interior.
+        target = float(end_distance_from_outline)
+        H_, W_ = dt.shape
+        last_in: tuple[float, float] | None = None
+        step = 0
+        max_steps = max(H_, W_) * 2
+        while step < max_steps:
+            fx = a_trim[0] + step * ux
+            fy = a_trim[1] + step * uy
+            ic = int(round(fx)); ir = int(round(fy))
+            if not (0 <= ir < H_ and 0 <= ic < W_):
+                break
+            d = float(dt[ir, ic])
+            if d > target:
+                last_in = (fx, fy)
+            elif d == 0.0:
+                # walked off the ink — no more bar to extend into.
+                break
+            step += 1
+        if last_in is not None:
+            b_trim = last_in
     ia = (int(round(a_trim[0])), int(round(a_trim[1])))
     ib = (int(round(b_trim[0])), int(round(b_trim[1])))
     if ia == ib:
@@ -1796,11 +1843,23 @@ def joint_cubic_bezier_clamped(arm_prev: list[tuple[float, float]],
     C1 = (P_end[0] + tp[0] * h1, P_end[1] + tp[1] * h1)
     C2 = (P_start[0] - tn[0] * h2, P_start[1] - tn[1] * h2)
     samples = sample_cubic_bezier(P_end, C1, C2, P_start)
+    # Mark any out-of-mask samples as skip indices. A cubic Bézier
+    # passes through exactly one apex region by construction, so any
+    # out-of-mask sample is part of the unavoidable chord overshoot at
+    # a sharp geometric apex (lowercase v/w valleys). Gates 1 and 2
+    # ignore these.
+    mh, mw = mask.shape
+    skip_indices: set[int] = set()
+    for s_i, (sx, sy) in enumerate(samples):
+        ic = int(round(sx)); ir = int(round(sy))
+        if not (0 <= ir < mh and 0 <= ic < mw and bool(mask[ir, ic])):
+            skip_indices.add(s_i)
     return {"type": "cbez", "P_end": P_end, "P_start": P_start,
             "V": g["V"], "C1": C1, "C2": C2,
             "tangent_prev": tp, "tangent_next": tn,
             "s_v": g["s_v"], "s_v_alt": g["s_v_alt"],
-            "h1": h1, "h2": h2, "samples": samples}
+            "h1": h1, "h2": h2, "samples": samples,
+            "skip_indices": skip_indices}
 
 
 def joint_sharp_meeting(arm_prev: list[tuple[float, float]],
@@ -2415,9 +2474,7 @@ def bake_letter(letter: str, font_path: Path
                     jd_prev = (joints[k - 1]
                                if (k - 1) < len(joints) else None)
                     if jd_prev is not None:
-                        skip = (jd_prev.get("skip_indices")
-                                if jd_prev.get("type") == "sharp_meeting"
-                                else None)
+                        skip = jd_prev.get("skip_indices")
                         _emit_pts(jd_prev["samples"],
                                   skip_sample_indices=skip)
                     elif chain:
