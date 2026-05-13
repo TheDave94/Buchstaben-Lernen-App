@@ -1557,6 +1557,76 @@ def joint_cubic_bezier_clamped(arm_prev: list[tuple[float, float]],
             "h1": h1, "h2": h2, "samples": samples}
 
 
+def joint_sharp_meeting(arm_prev: list[tuple[float, float]],
+                        arm_next: list[tuple[float, float]], *,
+                        mask: np.ndarray, dt: np.ndarray,
+                        anchor: tuple[int, int],
+                        depth_factor: float = 1.0,
+                        ) -> dict | None:
+    """True angular meeting at a design apex. The polyline runs
+    P_end → apex → P_start with line_sampler segments — tangent
+    continuity is INTENTIONALLY violated at `apex` (that's the point;
+    Prima's Druckschrift documentation specifies sharp inner corners).
+
+    `apex` is placed on the angle bisector from V (tangent-line
+    intersection) toward `anchor`, at distance `depth_factor *
+    h_target` past V, where h_target is the maximum dt in a 60×60
+    window centred on `anchor` (≈ half-stroke-width at the meeting).
+    `depth_factor=1.0` places apex one half-width inside the cap
+    outline; `0` leaves it at V; `>1` pushes deeper into the band.
+
+    Returns `None` if the tangent geometry is degenerate, the bisector
+    is degenerate, or apex falls outside the mask."""
+    g = _joint_tangent_intersection(arm_prev, arm_next)
+    if g is None:
+        return None
+    P_end = g["P_end"]; P_start = g["P_start"]; V = g["V"]
+    tp = g["tangent_prev"]; tn = g["tangent_next"]
+    mh, mw = mask.shape
+    oc, or_ = int(anchor[0]), int(anchor[1])
+    r0 = max(0, or_ - 30); r1 = min(mh, or_ + 31)
+    c0 = max(0, oc - 30); c1 = min(mw, oc + 31)
+    if r1 <= r0 or c1 <= c0:
+        return None
+    h_target = float(dt[r0:r1, c0:c1].max())
+    bx = float(anchor[0]) - V[0]
+    by = float(anchor[1]) - V[1]
+    bl = math.hypot(bx, by)
+    if bl < 1e-6:
+        return None
+    bisector = (bx / bl, by / bl)
+    step = depth_factor * h_target
+    apex = (V[0] + bisector[0] * step, V[1] + bisector[1] * step)
+    apr = int(round(apex[1])); apc = int(round(apex[0]))
+    if not (0 <= apr < mh and 0 <= apc < mw and mask[apr, apc]):
+        return None
+    a = (int(round(P_end[0])), int(round(P_end[1])))
+    b = (apc, apr)
+    c = (int(round(P_start[0])), int(round(P_start[1])))
+    samples: list[tuple[float, float]] = []
+    if a != b:
+        samples.extend((float(cc), float(rr))
+                       for cc, rr in line_sampler([a, b]))
+    else:
+        samples.append(P_end)
+    if b != c:
+        seg = [(float(cc), float(rr))
+               for cc, rr in line_sampler([b, c])]
+        # Skip the duplicate apex point so consecutive line_sampler
+        # segments don't double-emit b.
+        if samples and seg and samples[-1] == seg[0]:
+            seg = seg[1:]
+        samples.extend(seg)
+    else:
+        samples.append(P_start)
+    return {"type": "sharp_meeting",
+            "P_end": P_end, "P_start": P_start,
+            "V": V, "apex": apex,
+            "tangent_prev": tp, "tangent_next": tn,
+            "depth_factor": depth_factor, "h_target": h_target,
+            "samples": samples}
+
+
 # --- Registries -------------------------------------------------------------
 
 ARM_STRATEGIES = {
@@ -1571,6 +1641,7 @@ JOINT_STRATEGIES = {
     "family_a_fillet": joint_family_a_fillet,
     "quadratic_bezier_at_V": joint_quadratic_bezier_at_V,
     "cubic_bezier_clamped": joint_cubic_bezier_clamped,
+    "sharp_meeting": joint_sharp_meeting,
 }
 
 # Default pair matches the byte-identical line-kind output shipping at
