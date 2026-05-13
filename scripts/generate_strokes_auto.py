@@ -126,6 +126,16 @@ LOWERCASE_SUFFIX = "_l"
 StrokeSpec = dict  # {"kind": "line", "anchors": [...]} | {"path": [...]}
 
 LETTERS: dict[str, list[StrokeSpec]] = {
+    "A": [
+        {"kind": "line", "anchors": ["BL", "T"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["BR", "T"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["ML", "MR"],
+         "arms": [{"strategy": "straight_line",
+                    "t_junction_start": 0,  # crossbar left meets stroke 0 (BL→T)
+                    "t_junction_end": 1}]},  # crossbar right meets stroke 1 (BR→T)
+    ],
     "N": [
         {"kind": "line", "anchors": ["BL", "TL", "BR", "TR"],
          "arms": ["straight_line", "straight_line", "straight_line"],
@@ -1378,14 +1388,24 @@ def arm_straight_line(rough_a: tuple[int, int],
                       mask: np.ndarray, dt: np.ndarray,
                       skeleton: np.ndarray,
                       trim_pct: float = 0.20,
+                      start_pixel: tuple[float, float] | None = None,
+                      end_pixel: tuple[float, float] | None = None,
                       ) -> list[tuple[float, float]] | None:
     """LSQ-fit a straight line through the skeleton pixels between
     `rough_a` and `rough_b`, project both endpoints onto the line, trim
     the joint-adjacent end(s) by `trim_pct` of the segment length, and
     return the rasterized straight segment (sampled at 1-px spacing by
-    `line_sampler`). The arm's polyline endpoints define the fitted
-    line — downstream joint primitives can recover it from `arm[0]` /
-    `arm[-1]` without re-running the SVD."""
+    `line_sampler`).
+
+    `start_pixel` / `end_pixel`: optional float pixel overrides
+    replacing the (trimmed) projected endpoint on the respective side.
+    Used by `bake_letter`'s shared-apex pre-compute to force two
+    strokes' meeting endpoint onto the same pixel even though their
+    individual LSQ projections would diverge.
+
+    The arm's polyline endpoints define the fitted line — downstream
+    joint primitives can recover it from `arm[0]` / `arm[-1]` without
+    re-running the SVD."""
     pts = _bfs_skeleton_path(rough_a, rough_b, skeleton)
     if pts is None or len(pts) < 5:
         return None
@@ -1415,6 +1435,10 @@ def arm_straight_line(rough_a: tuple[int, int],
               a_proj[1] + uy * L * left_pct)
     b_trim = (b_proj[0] - ux * L * right_pct,
               b_proj[1] - uy * L * right_pct)
+    if start_pixel is not None:
+        a_trim = (float(start_pixel[0]), float(start_pixel[1]))
+    if end_pixel is not None:
+        b_trim = (float(end_pixel[0]), float(end_pixel[1]))
     ia = (int(round(a_trim[0])), int(round(a_trim[1])))
     ib = (int(round(b_trim[0])), int(round(b_trim[1])))
     if ia == ib:
@@ -1924,6 +1948,185 @@ def bake_letter(letter: str, font_path: Path
                 letter=letter, anchor_name=name)
         return snap_cache[name]
 
+    # ----- Letter-level line-fitting pre-pass -----
+    # Both shared-apex and T-junction pre-computes need each
+    # `straight_line` arm's LSQ-fitted line. Pre-fit once, cache by
+    # (stroke_idx, arm_idx), so neither pre-compute re-runs SVD on the
+    # same skeleton path. This pre-pass is invisible (no output
+    # change) for letters that don't use shared-apex or T-junction.
+
+    def _arm_strategy_name(spec_: dict, k_: int) -> str:
+        arms_ = spec_.get("arms")
+        if arms_ is None:
+            return DEFAULT_ARM_STRATEGY[0]
+        if k_ >= len(arms_):
+            return DEFAULT_ARM_STRATEGY[0]
+        entry = arms_[k_]
+        if entry is None:
+            return DEFAULT_ARM_STRATEGY[0]
+        if isinstance(entry, str):
+            return entry
+        if isinstance(entry, dict):
+            return entry.get("strategy") or DEFAULT_ARM_STRATEGY[0]
+        return DEFAULT_ARM_STRATEGY[0]
+
+    stroke_arm_lines: dict[tuple[int, int],
+                            tuple[tuple[float, float],
+                                  tuple[float, float]]] = {}
+    for s_idx, spec_ in enumerate(specs):
+        if spec_.get("kind") != "line":
+            continue
+        names_ = spec_.get("anchors") or []
+        if len(names_) < 2:
+            continue
+        n_arms_ = len(names_) - 1
+        for k_ in range(n_arms_):
+            if _arm_strategy_name(spec_, k_) != "straight_line":
+                continue
+            a_name = names_[k_]
+            b_name = names_[k_ + 1]
+            try:
+                a_raw = _cached_resolve(a_name, "line", None)
+                b_raw = _cached_resolve(b_name, "line", None)
+            except (KeyError, ValueError):
+                continue
+            a_snap = _cached_snap(a_raw, a_name)
+            b_snap = _cached_snap(b_raw, b_name)
+            bfs_pts = _bfs_skeleton_path(a_snap, b_snap, skeleton)
+            if bfs_pts is None or len(bfs_pts) < 5:
+                continue
+            arr = np.array(bfs_pts, dtype=float)
+            centroid = arr.mean(axis=0)
+            _, _, vt = np.linalg.svd(arr - centroid,
+                                      full_matrices=False)
+            direction = vt[0]
+            stroke_arm_lines[(s_idx, k_)] = (
+                (float(centroid[0]), float(centroid[1])),
+                (float(direction[0]), float(direction[1])),
+            )
+
+    # ----- Letter-level shared-apex pre-compute -----
+    # When an anchor name is referenced as an endpoint of multiple
+    # line-kind strokes whose endpoint arm is straight_line, both
+    # strokes should terminate at the SAME pixel. Compute the LSQ
+    # intersection of all relevant fitted arm lines and inject via
+    # arm_straight_line's start_pixel / end_pixel override.
+    candidate_uses: dict[str, list[tuple[int, str]]] = {}
+    for s_idx, spec_ in enumerate(specs):
+        if spec_.get("kind") != "line":
+            continue
+        names_ = spec_.get("anchors") or []
+        if len(names_) < 2:
+            continue
+        n_arms_ = len(names_) - 1
+        if _arm_strategy_name(spec_, 0) == "straight_line":
+            candidate_uses.setdefault(
+                names_[0], []).append((s_idx, "start"))
+        if _arm_strategy_name(spec_, n_arms_ - 1) == "straight_line":
+            candidate_uses.setdefault(
+                names_[-1], []).append((s_idx, "end"))
+
+    shared_apex_cache: dict[str, tuple[int, int] | None] = {}
+    for shared_name, uses in candidate_uses.items():
+        if len({u[0] for u in uses}) < 2:
+            continue
+        fitted_lines: list[tuple[tuple[float, float],
+                                  tuple[float, float]]] = []
+        for s_idx, side in uses:
+            n_arms_ = len(specs[s_idx]["anchors"]) - 1
+            arm_idx = 0 if side == "start" else n_arms_ - 1
+            line = stroke_arm_lines.get((s_idx, arm_idx))
+            if line is not None:
+                fitted_lines.append(line)
+        if len(fitted_lines) < 2:
+            shared_apex_cache[shared_name] = None
+            continue
+        if len(fitted_lines) == 2:
+            (p1x, p1y), (d1x, d1y) = fitted_lines[0]
+            (p2x, p2y), (d2x, d2y) = fitted_lines[1]
+            det = d1x * (-d2y) - d1y * (-d2x)
+            if abs(det) < 1e-9:
+                shared_apex_cache[shared_name] = None
+                continue
+            ddx = p2x - p1x; ddy = p2y - p1y
+            t = (ddx * (-d2y) - ddy * (-d2x)) / det
+            apex_f = (p1x + t * d1x, p1y + t * d1y)
+        else:
+            # LSQ for 3+ lines: minimise Σ perpendicular distances.
+            # Per line (point p, direction d), the perpendicular
+            # normal is n = (d_y, -d_x). Constraint n·x = n·p.
+            A_mat: list[list[float]] = []
+            b_vec: list[float] = []
+            for (px, py), (dx_, dy_) in fitted_lines:
+                nx, ny = dy_, -dx_
+                A_mat.append([nx, ny])
+                b_vec.append(nx * px + ny * py)
+            sol, *_ = np.linalg.lstsq(np.array(A_mat),
+                                       np.array(b_vec), rcond=None)
+            apex_f = (float(sol[0]), float(sol[1]))
+        ai = (int(round(apex_f[0])), int(round(apex_f[1])))
+        if (0 <= ai[1] < mask.shape[0]
+                and 0 <= ai[0] < mask.shape[1]
+                and mask[ai[1], ai[0]]):
+            shared_apex_cache[shared_name] = ai
+        else:
+            shared_apex_cache[shared_name] = None
+
+    # ----- Letter-level T-junction pre-compute -----
+    # A straight_line arm can declare its endpoint to be a T-junction
+    # meeting with another stroke's centerline via the arm strategy
+    # dict: {"strategy": "straight_line", "t_junction_start": <idx>,
+    # "t_junction_end": <idx>}. The endpoint pixel is the intersection
+    # of this arm's fitted line with the target stroke's fitted line
+    # (target stroke's arm 0 — single-arm assumption). Distinct from
+    # shared-apex (V-meeting between two strokes ending at the same
+    # named anchor); this is one stroke's centerline crossing another.
+    t_junction_cache: dict[tuple[int, int, str],
+                            tuple[int, int]] = {}
+    for s_idx, spec_ in enumerate(specs):
+        if spec_.get("kind") != "line":
+            continue
+        names_ = spec_.get("anchors") or []
+        if len(names_) < 2:
+            continue
+        arms_spec = spec_.get("arms")
+        if arms_spec is None:
+            continue
+        n_arms_ = len(names_) - 1
+        for k_ in range(n_arms_):
+            if k_ >= len(arms_spec):
+                continue
+            entry = arms_spec[k_]
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("strategy") != "straight_line":
+                continue
+            my_line = stroke_arm_lines.get((s_idx, k_))
+            if my_line is None:
+                continue
+            for field, side in (("t_junction_start", "start"),
+                                 ("t_junction_end", "end")):
+                target_idx = entry.get(field)
+                if target_idx is None:
+                    continue
+                target_line = stroke_arm_lines.get((target_idx, 0))
+                if target_line is None:
+                    continue  # target not straight_line; skip
+                (p1x, p1y), (d1x, d1y) = my_line
+                (p2x, p2y), (d2x, d2y) = target_line
+                det = d1x * (-d2y) - d1y * (-d2x)
+                if abs(det) < 1e-9:
+                    continue
+                ddx = p2x - p1x; ddy = p2y - p1y
+                t = (ddx * (-d2y) - ddy * (-d2x)) / det
+                ix_f = p1x + t * d1x
+                iy_f = p1y + t * d1y
+                ix = int(round(ix_f)); iy = int(round(iy_f))
+                if (0 <= iy < mask.shape[0]
+                        and 0 <= ix < mask.shape[1]
+                        and mask[iy, ix]):
+                    t_junction_cache[(s_idx, k_, side)] = (ix, iy)
+
     for i, spec in enumerate(specs, start=1):
         if "kind" in spec:
             kind = spec["kind"]
@@ -1978,10 +2181,35 @@ def bake_letter(letter: str, font_path: Path
             for k in range(n_arms):
                 name, params = arm_strategies[k]
                 fn = ARM_STRATEGIES[name]
+                call_params = dict(params)
+                # T-junction control fields are spec-level metadata;
+                # strip before forwarding to the arm primitive.
+                call_params.pop("t_junction_start", None)
+                call_params.pop("t_junction_end", None)
+                # Inject shared-apex / T-junction overrides only for
+                # arm_straight_line. Shared-apex takes priority when
+                # both apply to the same endpoint.
+                if name == "straight_line":
+                    left_name = names[k]
+                    right_name = names[k + 1]
+                    sp_left = shared_apex_cache.get(left_name)
+                    sp_right = shared_apex_cache.get(right_name)
+                    tj_left = t_junction_cache.get(
+                        (i - 1, k, "start"))
+                    tj_right = t_junction_cache.get(
+                        (i - 1, k, "end"))
+                    if sp_left is not None:
+                        call_params["start_pixel"] = sp_left
+                    elif tj_left is not None:
+                        call_params["start_pixel"] = tj_left
+                    if sp_right is not None:
+                        call_params["end_pixel"] = sp_right
+                    elif tj_right is not None:
+                        call_params["end_pixel"] = tj_right
                 arms.append(fn(rough_snapped[k], rough_snapped[k + 1],
                                k, n_arms,
                                mask=mask, dt=dt, skeleton=skeleton,
-                               **params))
+                               **call_params))
 
             joints: list[dict | None] = []
             for j in range(n_arms - 1):
@@ -2102,6 +2330,9 @@ def bake_letter(letter: str, font_path: Path
         "snap_cache_size": len(snap_cache),
         "total_resolve_calls": total_resolve_calls,
         "total_snap_calls": total_snap_calls,
+        "shared_apex_cache": dict(shared_apex_cache),
+        "t_junction_cache": dict(t_junction_cache),
+        "stroke_arm_lines": dict(stroke_arm_lines),
     }
     return data, debug
 
