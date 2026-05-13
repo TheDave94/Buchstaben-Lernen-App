@@ -100,3 +100,25 @@ xcodebuild test -project Primae.xcodeproj -scheme Primae \
 - German UI text (the app is for German-speaking children)
 - Child-facing screens (Schule / Werkstatt / Fortschritte / Onboarding / overlays during practice) must work via icons + animation + TTS, not text — the target audience is 5–6 yr-old Volksschule 1. Klasse children who can't or barely read. Text is fine for parent-area screens (Settings, ParentDashboard, ResearchDashboard, Datenexport).
 - Design tokens: read from `PrimaeNative/Theme/{Colors, Spacing, Radii, Fonts}.swift`. Color values are auto-flipping light/dark via `Color("name")` (Asset-Catalog colorsets); fonts via `Font.display(_:weight:)` / `Font.body(_:weight:)` / `Font.cursive(_:)`. The picker for the appearance override lives in the parent area as "Erscheinungsbild" (System / Hell / Dunkel).
+
+## Visual sweep workflow
+
+For any geometric or visual question with finite candidate options or a single tunable parameter, default to **render-and-compare BEFORE proposing or committing a specific construction**.
+
+Workflow:
+1. Identify candidate constructions or parameter values (4-6 typically; include current `main` as the baseline column).
+2. Implement each, bake the target letters.
+3. Run numeric gates (1 overshoot, 2 monotonicity, 3 tangent continuity, determinism, b firewall) as a filter; gate-failing candidates get a labelled `SKIPPED` cell in the grid.
+4. Render PNGs of passing candidates through the bake pipeline at iPad-equivalent style (dark ink ~#2D3748, red polyline ~#E53E3E).
+5. Build a contact-sheet grid (rows = letters, columns = candidates) at `/tmp/sweep/grid.png`.
+6. Present to David. Wait for selection.
+7. Set chosen value, bake, commit, push as a **single** commit.
+
+Numeric gates filter; visual judgment decides. Don't write prose arguments about which candidate is "correct" — let the grid speak.
+
+This applies to: joint construction parameters, arm strategy choice, anchor placement values, curve-fit primitive selection, and any other geometric question where multiple constructions are plausible.
+
+Primitives are registered in `scripts/generate_strokes_auto.py`:
+- `ARM_STRATEGIES`: `chord`, `bfs_raw`, `lsq_line`, `smoothed_medial_axis`
+- `JOINT_STRATEGIES`: `sharp`, `family_a_fillet`, `quadratic_bezier_at_V`, `cubic_bezier_clamped`
+- `DEFAULT_ARM_STRATEGY` / `DEFAULT_JOINT_STRATEGY` control the line-kind default; sweep via per-spec `"arms"` / `"joints"` overrides, not by mutating the defaults.
