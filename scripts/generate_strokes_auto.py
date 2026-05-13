@@ -888,6 +888,125 @@ def extend_to_boundary(point: tuple[int, int],
     return int(round(cf)), int(round(rf))
 
 
+def walk_arm_to_plateau(outer: tuple[int, int],
+                        target: tuple[int, int],
+                        mask: np.ndarray,
+                        dt: np.ndarray,
+                        max_steps: int = 300) -> tuple[int, int] | None:
+    """Sample the chord from `outer` toward `target` at 1-pixel
+    intervals, tracking dt at each step. Returns the first position
+    where dt reaches 95 % of the walk's running max (smoothed over a
+    ±2-step window) — the point where the cap rounding ends and the
+    arm's constant-width section begins.
+
+    The chord-from-outer formulation (instead of walking the medial-
+    axis graph) keeps each P1/P2 walk inside ONE arm by construction:
+    the chord direction toward a specific neighbour anchor stays
+    within that arm's band even when the medial axis is locally
+    merged at the cap. Returns `None` if the chord is too short, exits
+    the ink immediately, or fails to plateau."""
+    h, w = mask.shape
+    dx = target[0] - outer[0]
+    dy = target[1] - outer[1]
+    L = math.hypot(dx, dy)
+    if L < 1e-9:
+        return None
+    ux, uy = dx / L, dy / L
+    n_steps = min(int(round(L)), max_steps)
+    if n_steps < 10:
+        return None
+    path: list[tuple[int, int]] = []
+    dt_values: list[float] = []
+    for step in range(n_steps + 1):
+        cf = outer[0] + ux * step
+        rf = outer[1] + uy * step
+        c = int(round(cf)); r = int(round(rf))
+        if not (0 <= r < h and 0 <= c < w):
+            break
+        if not mask[r, c]:
+            if step < 3:
+                continue  # at the cap boundary, may step off briefly
+            break
+        path.append((c, r))
+        dt_values.append(float(dt[r, c]))
+    if len(path) < 5:
+        return None
+    # Derivative-based knee detection. In the cap rounding region dt
+    # rises sharply (~1 px / step). Once the chord crosses into the
+    # constant-width arm, dt growth slows abruptly. The cap-to-arm
+    # transition is the first step where the smoothed forward delta
+    # over a 5-step window drops below SLOPE_THRESHOLD. Pure 95-%-of-
+    # max plateau detection misses this because dt keeps drifting up
+    # along the arm when the chord direction isn't exactly along the
+    # arm's medial axis.
+    SLOPE_THRESHOLD = 0.20  # px of dt per px of chord
+    WINDOW = 5
+    if len(dt_values) <= WINDOW + 2:
+        return None
+    smoothed_slope: list[float] = []
+    for i in range(len(dt_values) - WINDOW):
+        smoothed_slope.append((dt_values[i + WINDOW] - dt_values[i]) / WINDOW)
+    for k in range(3, len(smoothed_slope)):
+        if smoothed_slope[k] < SLOPE_THRESHOLD:
+            return path[k]
+    return path[-1]
+
+
+def circle_through_three(p1: tuple[float, float],
+                         p2: tuple[float, float],
+                         p3: tuple[float, float]
+                         ) -> tuple[float, float, float] | None:
+    """Solve for the unique circle through three points. Returns
+    `(center_x, center_y, radius)` or `None` if the points are
+    collinear (determinant ≈ 0)."""
+    ax, ay = p1; bx, by = p2; cx, cy = p3
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-9:
+        return None
+    a2 = ax * ax + ay * ay
+    b2 = bx * bx + by * by
+    c2 = cx * cx + cy * cy
+    ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
+    r = math.hypot(ux - ax, uy - ay)
+    return (ux, uy, r)
+
+
+def sample_arc_p1_p3_p2(p1: tuple[float, float],
+                        p3: tuple[float, float],
+                        p2: tuple[float, float],
+                        center: tuple[float, float],
+                        radius: float) -> list[tuple[float, float]]:
+    """Sample the circular arc from p1 to p2 that passes through p3.
+    Sweep direction is the one whose angular sweep from p1 to p2 also
+    crosses p3 (ensures arc goes through the apex, not around the back
+    of the circle). Samples at ~1-pixel arc-length spacing, p1 first
+    and p2 last."""
+    cx, cy = center
+    a1 = math.atan2(p1[1] - cy, p1[0] - cx)
+    a2 = math.atan2(p2[1] - cy, p2[0] - cx)
+    a3 = math.atan2(p3[1] - cy, p3[0] - cx)
+    two_pi = 2.0 * math.pi
+
+    def _ccw(angle: float) -> float:
+        a = (angle - a1) % two_pi
+        return a
+
+    a3_ccw = _ccw(a3)
+    a2_ccw = _ccw(a2)
+    if a3_ccw <= a2_ccw:
+        sweep = a2_ccw           # CCW from p1 to p2 passes through p3
+    else:
+        sweep = a2_ccw - two_pi  # CW (negative sweep)
+    n_samples = max(2, int(round(abs(sweep) * radius)))
+    out: list[tuple[float, float]] = []
+    for k in range(n_samples + 1):
+        t = k / n_samples
+        a = a1 + sweep * t
+        out.append((cx + math.cos(a) * radius, cy + math.sin(a) * radius))
+    return out
+
+
 def centerline_path(start: tuple[int, int], end: tuple[int, int],
                     mask: np.ndarray, dt: np.ndarray
                     ) -> list[tuple[int, int]]:
@@ -1074,22 +1193,31 @@ def bake_letter(letter: str, font_path: Path
         resolved_anchors.append(labelled)
 
         if kind == "line":
-            # Endpoints snap to the medial axis (lands ~half-stroke
-            # inside the cap). Interior joints would ALSO be there, but
-            # the fillet apex sits MAX_APEX_OFFSET px deeper along the
-            # inward bisector — that extra inset shows up as a visible
-            # gap to the cap at peaks/valleys. Place interior joints at
-            # (h − MAX_APEX_OFFSET) inward from the raw boundary
-            # anchor so the fillet apex lands at the same depth as the
-            # endpoint snap.
-            MAX_APEX_OFFSET = 5.0
+            # Inscribed-fillet-on-cap-side construction. Snap every
+            # anchor to the medial axis; at each interior joint the
+            # chord lines extended past s_joint into the cap meet at
+            # vertical angle = α. Inscribe a circular fillet tangent to
+            # both extended chords with apex on the line s_joint→o, at
+            # FIXED_APEX_DIST px from o (so the polyline curves around
+            # the cap apex, not the band-side bisector). Tangent points
+            # T1, T2 land on the chord lines past s_joint inside the
+            # cap; the arc itself is sampled as the unique circle
+            # through (T1, apex, T2). polyline_with_filleted_joints,
+            # walk_arm_to_plateau, circle_through_three (still imported
+            # internally), and sample_arc_p1_p3_p2 are unused on this
+            # branch — superseded.
+            FIXED_APEX_DIST = 8.0
+            MAX_APEX_OFFSET = 5.0  # fallback construction
             mh, mw = mask.shape
 
             def _snap_endpoint(p, n):
                 return snap_to_medial_axis(p, mask, dt, skeleton,
                                            letter=letter, anchor_name=n)
 
-            def _cap_inset_joint(idx):
+            def _fallback_joint(idx):
+                # Cap-inset bisector placement used when the medial-axis
+                # walk can't find a plateau (e.g. tiny letters); apex
+                # falls 5 px short of the visible cap.
                 o = anchors[idx]
                 v1 = (anchors[idx - 1][0] - o[0],
                       anchors[idx - 1][1] - o[1])
@@ -1105,13 +1233,6 @@ def bake_letter(letter: str, font_path: Path
                     return _snap_endpoint(o, names[idx])
                 ix, iy = bx / bl, by / bl
                 oc, orow = o
-                # 60×60 window (30 px each side) so dt_max captures the
-                # full band half-width even at narrow caps where the
-                # medial axis lies up to ~28 px from the outer corner.
-                # The radii loop's 30×30 window centered on the snapped
-                # vertex finds the same depth because the snap is at
-                # the medial axis; centered on the outer corner, a
-                # smaller window can't reach the medial axis.
                 r0 = max(0, orow - 30); r1 = min(mh, orow + 31)
                 c0 = max(0, oc - 30); c1 = min(mw, oc + 31)
                 h = (float(dt[r0:r1, c0:c1].max())
@@ -1119,58 +1240,125 @@ def bake_letter(letter: str, font_path: Path
                 d = h - MAX_APEX_OFFSET
                 if d <= 0.0:
                     return _snap_endpoint(o, names[idx])
-                jx = oc + d * ix
-                jy = orow + d * iy
-                jc = int(round(jx)); jr = int(round(jy))
+                jc = int(round(oc + d * ix))
+                jr = int(round(orow + d * iy))
                 if (jr < 0 or jr >= mh or jc < 0 or jc >= mw
                         or not mask[jr, jc]):
                     return _snap_endpoint(o, names[idx])
                 return (jc, jr)
 
-            snapped: list[tuple[int, int]] = []
-            for i_a, (p, n) in enumerate(zip(anchors, names)):
-                if 0 < i_a < len(anchors) - 1:
-                    snapped.append(_cap_inset_joint(i_a))
+            # Snap every anchor to the medial axis up front.
+            snapped: list[tuple[int, int]] = [
+                _snap_endpoint(p, n) for p, n in zip(anchors, names)
+            ]
+            snap_first = snapped[0]
+            snap_last = snapped[-1]
+
+            # Compute (T1, T2, apex, center, radius) per interior joint.
+            min_deg = math.radians(1.0)
+            max_deg = math.radians(89.0)
+            joint_arcs: list[dict | None] = []
+            for j in range(1, len(anchors) - 1):
+                o = anchors[j]
+                s_joint = snapped[j]
+                s_prev = snapped[j - 1]
+                s_next = snapped[j + 1]
+                v1 = (s_joint[0] - s_prev[0], s_joint[1] - s_prev[1])
+                v2 = (s_joint[0] - s_next[0], s_joint[1] - s_next[1])
+                L1 = math.hypot(*v1); L2 = math.hypot(*v2)
+                if L1 < 1e-9 or L2 < 1e-9:
+                    joint_arcs.append(None)
+                    continue
+                u1_cap = (v1[0] / L1, v1[1] / L1)
+                u2_cap = (v2[0] / L2, v2[1] / L2)
+                vo = (float(o[0] - s_joint[0]), float(o[1] - s_joint[1]))
+                dist_jo = math.hypot(*vo)
+                if dist_jo < 1e-6:
+                    joint_arcs.append(None)
+                    continue
+                bisector_to_cap = (vo[0] / dist_jo, vo[1] / dist_jo)
+                apex_target = dist_jo - FIXED_APEX_DIST
+                if apex_target <= 0.0:
+                    joint_arcs.append(None)
+                    continue
+                cos_full = max(-1.0, min(1.0,
+                                          u1_cap[0] * u2_cap[0]
+                                          + u1_cap[1] * u2_cap[1]))
+                full_angle = math.acos(cos_full)
+                half_angle = full_angle / 2.0
+                if half_angle < min_deg or half_angle > max_deg:
+                    joint_arcs.append(None)
+                    continue
+                sin_half = math.sin(half_angle)
+                if sin_half < 1e-6 or (1.0 - sin_half) < 1e-6:
+                    joint_arcs.append(None)
+                    continue
+                r = apex_target * sin_half / (1.0 - sin_half)
+                tan_dist = r / math.tan(half_angle)
+                T1 = (s_joint[0] + u1_cap[0] * tan_dist,
+                      s_joint[1] + u1_cap[1] * tan_dist)
+                T2 = (s_joint[0] + u2_cap[0] * tan_dist,
+                      s_joint[1] + u2_cap[1] * tan_dist)
+                apex = (s_joint[0] + bisector_to_cap[0] * apex_target,
+                        s_joint[1] + bisector_to_cap[1] * apex_target)
+                # Mask containment check on T1, T2
+                t1r = int(round(T1[1])); t1c = int(round(T1[0]))
+                t2r = int(round(T2[1])); t2c = int(round(T2[0]))
+                if not (0 <= t1r < mh and 0 <= t1c < mw
+                        and 0 <= t2r < mh and 0 <= t2c < mw
+                        and mask[t1r, t1c] and mask[t2r, t2c]):
+                    joint_arcs.append(None)
+                    continue
+                # Unique circle through (T1, apex, T2); arc sampled along
+                # this circle is geometrically smooth through all three.
+                circle = circle_through_three(T1, apex, T2)
+                if circle is None:
+                    joint_arcs.append(None)
+                    continue
+                cx, cy, rr = circle
+                if not (math.isfinite(cx) and math.isfinite(cy)
+                        and math.isfinite(rr)):
+                    joint_arcs.append(None)
+                    continue
+                joint_arcs.append({
+                    "T1": T1, "T2": T2, "apex": apex,
+                    "center": (cx, cy), "radius": rr,
+                })
+
+            # Walk segments + arcs to produce a single dense pixel chain.
+            chain: list[tuple[int, int]] = []
+
+            def _emit_line(p_start, p_end):
+                a = (int(round(p_start[0])), int(round(p_start[1])))
+                b = (int(round(p_end[0])), int(round(p_end[1])))
+                if a == b:
+                    if not chain:
+                        chain.append(a)
+                    return
+                seg = line_sampler([a, b])
+                start = 1 if chain and chain[-1] == seg[0] else 0
+                chain.extend(seg[start:])
+
+            def _emit_arc(arc):
+                pts = [(int(round(p[0])), int(round(p[1]))) for p in arc]
+                start = 1 if chain and chain[-1] == pts[0] else 0
+                chain.extend(pts[start:])
+
+            cursor: tuple[int, int] | tuple[float, float] = snap_first
+            for jrel, arc_data in enumerate(joint_arcs):
+                j = jrel + 1
+                if arc_data is None:
+                    fb = _fallback_joint(j)
+                    _emit_line(cursor, fb)
+                    cursor = fb
                 else:
-                    snapped.append(_snap_endpoint(p, n))
-            if len(snapped) >= 3:
-                # Cap the arc *apex offset* from the joint, not the
-                # radius itself. The apex of an inscribed fillet sits at
-                # distance r·(1−sin α)/sin α from the joint along the
-                # inward bisector — for sharp corners (small α) this
-                # blows up even when r is small, keeping the polyline
-                # far from the snapped vertex. Inverting: pick r so the
-                # apex offset ≤ MAX_APEX_OFFSET px, then clamp by the
-                # local stroke half-width.
-                h_, w_ = mask.shape
-                radii: list[float] = []
-                for j in range(1, len(snapped) - 1):
-                    sc, sr = snapped[j]
-                    r0 = max(0, sr - 15); r1 = min(h_, sr + 16)
-                    c0 = max(0, sc - 15); c1 = min(w_, sc + 16)
-                    dt_max = (float(dt[r0:r1, c0:c1].max())
-                              if (r1 > r0 and c1 > c0) else 0.0)
-                    p_prev = snapped[j - 1]; p_joint = snapped[j]
-                    p_next = snapped[j + 1]
-                    v1 = (p_prev[0] - p_joint[0], p_prev[1] - p_joint[1])
-                    v2 = (p_next[0] - p_joint[0], p_next[1] - p_joint[1])
-                    L1 = math.hypot(*v1); L2 = math.hypot(*v2)
-                    if L1 < 1e-9 or L2 < 1e-9:
-                        radii.append(0.0)
-                        continue
-                    cos_full = max(-1.0, min(1.0,
-                                              (v1[0]*v2[0] + v1[1]*v2[1])
-                                              / (L1 * L2)))
-                    full_angle = math.acos(cos_full)
-                    half_angle = full_angle / 2.0
-                    sin_half = max(1e-6, math.sin(half_angle))
-                    denom = max(1e-6, 1.0 - sin_half)
-                    r_from_apex = MAX_APEX_OFFSET * sin_half / denom
-                    radii.append(min(r_from_apex, dt_max))
-                chain = polyline_with_filleted_joints(
-                    [(float(p[0]), float(p[1])) for p in snapped], radii)
-            else:
-                chain = line_sampler(snapped)
+                    _emit_line(cursor, arc_data["T1"])
+                    arc_pts = sample_arc_p1_p3_p2(
+                        arc_data["T1"], arc_data["apex"], arc_data["T2"],
+                        arc_data["center"], arc_data["radius"])
+                    _emit_arc(arc_pts)
+                    cursor = arc_data["T2"]
+            _emit_line(cursor, snap_last)
         else:
             chain = []
             for si in range(len(anchors) - 1):
