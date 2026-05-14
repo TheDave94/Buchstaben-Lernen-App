@@ -69,6 +69,16 @@ PALETTE = [(229, 62, 62), (62, 180, 90), (62, 140, 229),
 # below this threshold by design and are excluded via skip_indices.
 REVERSAL_COSINE_CUTOFF = -0.1
 
+# Supersampling factor for panel rendering. The glyph mask (binary)
+# and the polylines drawn on top look pixelated at 1:1 — staircased
+# mask edges, blocky PIL line rasterisation. Rendering everything at
+# SUPERSAMPLE × the final panel size and downsampling with Lanczos
+# produces antialiased edges (the kernel footprint crosses the
+# staircase boundaries during downsample, producing soft gradients).
+# 4× is the sweet spot — 2× still shows staircases, 8× is wasted
+# (Lanczos saturates around 4×).
+SUPERSAMPLE = 4
+
 
 def signed_dist(mask: np.ndarray, x: float, y: float, max_s: int = 200) -> float:
     """Signed distance from (x,y) to the mask boundary. + inside, - outside."""
@@ -161,30 +171,47 @@ def render_panel(dbg: dict, label: str, lines: list[str], pad_top: int = 200) ->
     c1 = min(W, cs.max() + 20)
     sub = mask[r0:r1, c0:c1]
     sH, sW = sub.shape
-    img = Image.new("RGB", (max(sW, 500), sH + pad_top), (250, 250, 250))
-    px = img.load()
-    for r in range(sH):
-        for c in range(sW):
-            if sub[r, c]:
-                px[c, r + pad_top] = (45, 55, 72)
+    final_w = max(sW, 500)
+    final_h = sH + pad_top
+    # Internal supersampled canvas — Lanczos downsample at the end
+    # blends staircased mask edges + line aliasing into soft gradients.
+    S = SUPERSAMPLE
+    img = Image.new("RGB", (final_w * S, final_h * S), (250, 250, 250))
+    # Render the glyph mask as a SUPERSAMPLE-zoomed binary at native
+    # ink resolution: each True pixel becomes a SxS block. Done in
+    # numpy then pasted (faster than per-pixel PIL writes).
+    glyph_arr = np.zeros((sH * S, sW * S, 3), dtype=np.uint8)
+    glyph_arr[:] = (250, 250, 250)
+    ink = np.repeat(np.repeat(sub, S, axis=0), S, axis=1)
+    glyph_arr[ink] = (45, 55, 72)
+    glyph_img = Image.fromarray(glyph_arr, mode="RGB")
+    img.paste(glyph_img, (0, pad_top * S))
     draw = ImageDraw.Draw(img)
     for ki, ch in enumerate(chains):
         color = PALETTE[ki % len(PALETTE)]
-        pts = [(c - c0, r - r0 + pad_top) for c, r in ch]
+        pts = [((c - c0) * S, (r - r0 + pad_top) * S) for c, r in ch]
         if len(pts) >= 2:
-            draw.line(pts, fill=color, width=3)
+            draw.line(pts, fill=color, width=3 * S)
+        # Single-point strokes (dots) render as filled disks.
+        if len(pts) == 1:
+            x, y = pts[0]
+            r_disk = 4 * S
+            draw.ellipse((x - r_disk, y - r_disk, x + r_disk, y + r_disk),
+                          fill=color, outline=(0, 0, 0), width=S)
     try:
         font_b = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14 * S)
         font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10 * S)
     except OSError:
         font_b = ImageFont.load_default()
         font = font_b
-    draw.text((6, 4), label, fill="black", font=font_b)
+    draw.text((6 * S, 4 * S), label, fill="black", font=font_b)
     for i, ln in enumerate(lines):
-        draw.text((6, 22 + i * 12), ln, fill="#333", font=font)
-    return img
+        draw.text((6 * S, (22 + i * 12) * S), ln, fill="#333", font=font)
+    # Downsample to final panel size with Lanczos — this is where
+    # the anti-aliasing happens.
+    return img.resize((final_w, final_h), Image.LANCZOS)
 
 
 def diagnose(letter: str, variant_name: str, spec: list) -> tuple[dict, list[str]]:
@@ -214,6 +241,29 @@ def diagnose(letter: str, variant_name: str, spec: list) -> tuple[dict, list[str
                 f"apex_sd={m['apex_sd']:.1f}"
             )
     return dbg, lines
+
+
+def diagnose_raw(letter: str, polyline_pixels: list[list[float]],
+                  extra_lines: list[str] | None = None,
+                  ) -> tuple[dict, list[str]]:
+    """Render-only variant: rasterise the letter glyph from the bundled
+    font, skip the bake entirely, treat `polyline_pixels` as the stroke
+    chain. Used when a variant's polyline is computed outside the
+    LETTERS-spec path (e.g. when prototyping a new primitive before it
+    lands in the registry, or comparing hand-constructed alternatives).
+    `polyline_pixels` is a list of [x, y] in pixel coords on the
+    bundled-font raster."""
+    g_local = importlib.import_module("generate_strokes_auto")
+    importlib.reload(g_local)
+    mask = g_local.rasterize(letter, g_local.DEFAULT_FONT)
+    from scipy.ndimage import distance_transform_edt
+    dt = distance_transform_edt(mask)
+    chain = [(int(round(p[0])), int(round(p[1]))) for p in polyline_pixels]
+    ov, rv, g3 = gates(chain, mask, set())
+    lines = [f"gates ov={ov} rv={rv} maxturn={g3:.0f}° (raw)"]
+    if extra_lines:
+        lines.extend(extra_lines)
+    return ({"mask": mask, "stroke_pixel_chains": [chain], "dt": dt}, lines)
 
 
 def compose_grid(panels: list[list[Image.Image]], pad: int = 12) -> Image.Image:
@@ -263,11 +313,34 @@ def main() -> int:
         row: list[Image.Image] = []
         for v in variants:
             name = v.get("name", "?")
-            spec = v["specs"].get(letter)
+            label = f"{letter} — {name}"
+            # A variant carries EITHER "specs" (full LETTERS spec dict
+            # consumed via bake_letter) OR "raw_polylines" (pre-computed
+            # pixel-coord chains rendered directly on the glyph raster,
+            # bypassing the bake — used when prototyping curve
+            # constructions before a primitive lands in the registry).
+            if "raw_polylines" in v:
+                polys = v["raw_polylines"].get(letter)
+                if polys is None:
+                    row.append(Image.new("RGB", (300, 200), "#eed"))
+                    continue
+                print(f"  rendering {label!r} (raw)")
+                # First polyline drives the gate diagnostics; extras
+                # render in subsequent palette colours (matches how
+                # multi-stroke bakes look).
+                extra = v.get("notes", {}).get(letter, [])
+                dbg, lines = diagnose_raw(letter, polys[0], extra_lines=extra)
+                # Pile additional polylines onto the same chain list so
+                # render_panel draws them in palette order.
+                for p in polys[1:]:
+                    dbg["stroke_pixel_chains"].append(
+                        [(int(round(pt[0])), int(round(pt[1]))) for pt in p])
+                row.append(render_panel(dbg, label, lines))
+                continue
+            spec = (v.get("specs") or {}).get(letter)
             if spec is None:
                 row.append(Image.new("RGB", (300, 200), "#eed"))
                 continue
-            label = f"{letter} — {name}"
             print(f"  baking {label!r}")
             dbg, lines = diagnose(letter, name, spec)
             row.append(render_panel(dbg, label, lines))
