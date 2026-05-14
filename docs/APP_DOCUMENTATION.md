@@ -94,7 +94,6 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | File | Lines | Role |
 |------|------:|------|
 | `Colors.swift` | 138 | `Color` extension where every named token resolves through the host app's Asset Catalog (`Primae/Primae/Assets.xcassets/Colors/<name>.colorset/`). Each colorset has explicit light + dark variants, so iOS / SwiftUI flip per trait collection without invoking any Swift closure. Replaces an earlier `UIColor(dynamicProvider:)` design that crashed under Swift 6 strict concurrency on the SwiftUI AsyncRenderer thread (see `docs/LESSONS.md`). Re-run `scripts/gen_colorsets.py` to regenerate the colorsets after a design-system update. |
-| `Spacing.swift` | 29 | `Spacing.sp1..sp9` mirroring `--sp-*` (4–96 pt). |
 | `Radii.swift` | 24 | `Radii.sm..xxl` + `pill` mirroring `--r-*`. |
 | `Fonts.swift` | 132 | `Font.display(_:weight:) / .body(_:weight:) / .cursive(_:)` helpers + `FontSize.xs..glyph` (13–220 pt). PostScript-name resolver picks the bundled Primae / PrimaeText face for a given SwiftUI weight. |
 | `FontRegistration.swift` | 116 | `PrimaeFonts.registerAll()` — registers every bundled OTF/TTF with CoreText at app launch via `CTFontManagerRegisterFontsForURLs`. The load-bearing path because the fonts ship in `Bundle.module`, not the main bundle (where `INFOPLIST_KEY_UIAppFonts` would search). |
@@ -108,7 +107,7 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 #### `Core/` (data + algorithms; no SwiftUI)
 | File | Lines | Role |
 |------|------:|------|
-| `Models.swift` | 69 | `LetterAsset`, `LetterStrokes`, `StrokeDefinition`, `Checkpoint`, `TracingPoint`. |
+| `Models.swift` | 65 | `LetterAsset`, `LetterStrokes`, `StrokeDefinition`, `Checkpoint`. |
 | `AppWorld.swift` | 49 | Three-world enum (`schule`, `werkstatt`, `fortschritte`). |
 | `LearningPhase.swift` | 81 | Four-phase enum: `observe`, `direct`, `guided`, `freeWrite`. German display names. |
 | `LearningPhaseController.swift` | 175 | Pure-value-type FSM. Star thresholds per phase; ThesisCondition-aware `activePhases`. |
@@ -132,7 +131,6 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | `OnboardingCoordinator.swift` | 220 | 7-step state machine. U4 adds an `OnboardingVariant` enum (`.full` 7-step, `.short` 3-step) so the cohort can A/B compare onboarding length. The variant the child actually completed is locked into `OnboardingState.variantUsedRaw` on first complete (re-runs don't overwrite) so post-hoc analysis can correlate engagement metrics with the original variant. |
 | `LetterScheduler.swift` | 152 | Spaced-repetition prioritiser. Ebbinghaus-style decay. |
 | `RetrievalScheduler.swift` | 75 | P1 — every-Nth-letter cadence for retrieval-practice prompts (Roediger & Karpicke 2006). Persisted counter survives relaunch; minimum-prior-completions guard skips testing on never-seen letters. Drives `RetrievalPromptView` via `OverlayQueueManager.retrievalPrompt`. |
-| `SchemaMigrator.swift` | 65 | D2 — step-walking framework for forward-incompatible store-schema migrations. Today's stores are all at v1 and the framework is dormant; the load path can register `[Int: (Data) -> Data]` migrations when v2+ ships. |
 | `LetterStars.swift` | small | phaseScores → 0…4 star count. |
 | `LetterRecognizer.swift` | 380 | `CoreMLLetterRecognizer` + `StubLetterRecognizer`. nonisolated, runs on `Task.detached`. D3 added a closure-injected classifier seam and the `LetterClassification` framework-agnostic intermediate type so tests can swap a deterministic stub without bundling a `.mlpackage`. |
 | `ConfidenceCalibrator.swift` | 119 | Confusable-pair penalty + history boost shim. |

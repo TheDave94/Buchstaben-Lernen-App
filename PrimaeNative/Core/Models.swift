@@ -97,8 +97,3 @@ struct Checkpoint: Codable, Equatable {
     let x: CGFloat
     let y: CGFloat
 }
-
-struct TracingPoint: Equatable {
-    let location: CGPoint
-    let time: CFTimeInterval
-}
