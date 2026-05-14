@@ -53,6 +53,39 @@ python3 scripts/render_overlay.py
 Output: `tmp_overlays/<letter>.png` + `tmp_overlays/sheet_part*.png`
 (not tracked — `tmp_overlays/` is gitignored).
 
+### `render_sweep_grid.py`
+Visual-sweep-workflow renderer. Bakes N variant `LETTERS`-specs across
+one or more letters and composes a contact-sheet PNG (rows = letters,
+cols = variants) with per-panel overlay showing gate counts
+(overshoot / reversal / max-turn) + per-joint metrics (V_sd, P_end dt,
+apex_sd). The variant file is a JSON document declaring `letters` +
+`variants` — see the module docstring for the exact shape.
+
+```bash
+python3 scripts/render_sweep_grid.py path/to/variants.json \
+    --out /tmp/sweep_grid.png
+```
+
+Use it whenever a geometric tunable has multiple plausible values
+(`docs/APP_DOCUMENTATION.md` §13.7).
+
+### `verify_bake.sh`
+Codifies the two release-blocking properties of the bake pipeline
+(`docs/APP_DOCUMENTATION.md` §13.6):
+
+1. **Determinism** — 3 successive bakes produce byte-identical output.
+2. **Byte-identity** — a fresh bake matches HEAD's checked-in
+   `strokes.json` for every letter the `LETTERS` dict covers
+   (the b firewall is a special case).
+
+```bash
+./scripts/verify_bake.sh            # all 18 letters in LETTERS dict
+./scripts/verify_bake.sh M N V W b  # subset
+```
+
+Exits non-zero on drift. Cheap enough (~12 s for the full set) to
+run before any commit that touches `generate_strokes_auto.py`.
+
 ### `generate_letter_audio.py`
 ElevenLabs voice generator for letter phonemes, example words, and
 tracing words across multiple voices. Used to build the audio inventory
@@ -167,6 +200,10 @@ git commit --no-verify
 2. `python3 scripts/generate_letter_audio.py --letter X` — auditions
    all bundled voices for the phoneme. Pick one, copy its files into
    `PrimaeNative/Resources/Letters/X/`.
-3. Open the calibration overlay in DEBUG mode on-device to refine the
-   checkpoint positions interactively (the calibrator persists per-
-   letter overrides into Application Support).
+3. `./scripts/verify_bake.sh` — confirms 3-trial determinism + that no
+   already-shipped letter's `strokes.json` regressed (the b firewall).
+4. The DEBUG-only `StrokeCalibrationOverlay` is for on-device
+   inspection only — it persists tweaked checkpoints to Application
+   Support so you can see them inside that session, but there is no
+   round-trip back to the source `LETTERS` dict. Calibration findings
+   must be hand-translated into a `LETTERS` spec edit + re-bake.

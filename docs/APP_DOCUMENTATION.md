@@ -2000,14 +2000,28 @@ the apex. Without skip-indices, gates 1 + 2 would flag every sharp
 meeting as a reversal artefact.
 
 The bake is **deterministic**: byte-identical output across repeated
-runs is a release-blocking property. A 3-trial byte-identical hash
-check is the standard verification before any commit that touches the
-script.
+runs is a release-blocking property. There's also a `b` **firewall** —
+at commit `a803d9d` `b`'s `strokes.json` was hand-validated as
+correct. Every subsequent script change is required to produce
+byte-identical `b_l/strokes.json`. Any diff to `b` flags a regression
+in shared code before it lands.
 
-There's also a `b` **firewall** — at commit `a803d9d` `b`'s
-`strokes.json` was hand-validated as correct. Every subsequent script
-change is required to produce byte-identical `b/strokes.json`. Any
-diff to `b` flags a regression in shared code before it lands.
+Both properties are codified in `scripts/verify_bake.sh` — it bakes
+the LETTERS dict three times into a tmp dir, asserts byte-identity
+across the three bakes, and diffs against HEAD's checked-in
+`strokes.json` for every letter the dict covers. Exits non-zero on
+drift. Run it before any commit that touches `generate_strokes_auto.py`.
+
+### 13.6.1 Font-hash drift check
+
+`generate_strokes_auto.py` writes `_meta.json` alongside the per-letter
+`strokes.json` files, recording the SHA-256 of `Primae-Regular.otf`
+used at bake time. On launch, `LetterRepository.verifyBakeMetadataOnce`
+reads that hash, computes the SHA-256 of the bundled font, and emits
+an OSLog warning if they diverge — that's the signature of a font
+update without a re-bake, which would silently render strokes against
+the wrong glyph. Never fatal; the app keeps running on the cached
+polylines.
 
 ### 13.7 Visual sweep workflow
 
@@ -2019,15 +2033,15 @@ construction**. The full workflow is captured in `CLAUDE.md` under
 
 1. Identify candidates (typically 4–6, including current `main` as
    baseline).
-2. Implement each, bake the target letters.
-3. Apply numeric gates as a filter; gate-failing candidates get a
-   labelled `SKIPPED` cell in the grid.
-4. Render PNGs of passing candidates at iPad-equivalent style (dark
-   ink ~#2D3748, red polyline ~#E53E3E).
-5. Build a contact-sheet grid (rows = letters, columns = candidates)
-   at `/tmp/sweep/grid.png`.
-6. Present to the author. Wait for selection.
-7. Set chosen value, bake, commit, push as a **single** commit.
+2. Author each variant as a `LETTERS[letter]` spec dict.
+3. Drop the variants into a JSON document (`letters` + `variants` keys —
+   see the `scripts/render_sweep_grid.py` module docstring for shape).
+4. Run `python3 scripts/render_sweep_grid.py variants.json` — it bakes
+   each variant, runs the numeric gates, and composes a contact-sheet
+   PNG (rows = letters, cols = variants) with per-panel gate counts +
+   per-joint metrics (V_sd, P_end dt, apex_sd).
+5. Present the grid to the author. Wait for selection.
+6. Set chosen value, bake, commit, push as a **single** commit.
 
 Numeric gates filter; visual judgment decides. This is what shipped
 the `v` / `w` `joint_fillet_at_intersection` trim_back values
@@ -2046,11 +2060,12 @@ Operationally, adding or revising a letter is:
 3. **Verify gates pass** in stdout; if not, debug via
    `scripts/skeleton_audit.py X` (per-letter skeleton diagnostics).
 4. **Render a sweep grid** comparing the new letter against any
-   plausible alternatives (`/tmp/sweep/grid.png`).
+   plausible alternatives — `python3 scripts/render_sweep_grid.py
+   variants.json`.
 5. **Visual review** — eyeball the grid; pick the best column.
-6. **Bake the chosen variant for all affected letters**, verify
-   byte-identity for unchanged letters, verify the `b` firewall, run
-   the 3-trial determinism check.
+6. **Bake the chosen variant for all affected letters**, then run
+   `./scripts/verify_bake.sh` to confirm determinism + byte-identity
+   for unchanged letters (the b firewall is checked here too).
 7. **Single commit** capturing the spec change + regenerated
    `strokes.json` files + a commit message describing the construction
    choice (and what was ruled out and why).

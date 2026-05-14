@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import OSLog
 
 private let repoLogger = Logger(
@@ -124,6 +125,7 @@ final class LetterRepository {
 
     /// Typed-error variant for callers that want to surface failures.
     func loadWithErrors() -> Result<[LetterAsset], LetterRepositoryError> {
+        Self.verifyBakeMetadataOnce(resources: resources)
         let stroked = loadBundledStrokeLettersWithValidation()
         if !stroked.letters.isEmpty {
             logValidationIssues(stroked.letters, issues: stroked.issues)
@@ -404,6 +406,53 @@ private extension LetterRepository {
         repoLogger.info("Asset validation: \(letters.count) letters loaded, \(missingAudio)/\(letters.count) without audio recordings, \(otherCount) other issue(s). Per-letter details at debug level.")
         for issue in issues {
             repoLogger.debug("Asset validation [\(issue.letter)]: \(issue.message)")
+        }
+    }
+}
+
+// MARK: - Bake metadata verification
+
+extension LetterRepository {
+    private struct BakeMeta: Codable {
+        let fontPath: String
+        let fontSha256: String
+    }
+
+    nonisolated(unsafe) private static var didVerifyBakeMetadata = false
+
+    /// Verifies that the bundled Primae font matches the SHA-256
+    /// recorded in `Letters/_meta.json` at bake time. A mismatch means
+    /// the font was updated without re-running `generate_strokes_auto.py`,
+    /// so the strokes.json polylines no longer match the rendered glyph.
+    /// Logs once per process; never fatal.
+    static func verifyBakeMetadataOnce(resources: LetterResourceProviding) {
+        guard !didVerifyBakeMetadata else { return }
+        didVerifyBakeMetadata = true
+
+        guard let metaURL = resources.resourceURL(for: "Letters/_meta.json"),
+              let metaData = try? Data(contentsOf: metaURL),
+              let meta = try? JSONDecoder().decode(BakeMeta.self, from: metaData)
+        else {
+            repoLogger.debug("Bake metadata absent — skipping font-hash check.")
+            return
+        }
+        let fontFile = (meta.fontPath as NSString).lastPathComponent
+        guard let fontURL = resources.resourceURL(for: "Fonts/\(fontFile)"),
+              let fontData = try? Data(contentsOf: fontURL)
+        else {
+            repoLogger.debug("Bundled font \(fontFile, privacy: .public) not found — skipping hash check.")
+            return
+        }
+        let digest = SHA256.hash(data: fontData)
+            .map { String(format: "%02x", $0) }.joined()
+        if digest != meta.fontSha256 {
+            repoLogger.warning(
+                "Bundled font \(fontFile, privacy: .public) SHA-256 \(digest, privacy: .public) "
+                + "does not match _meta.json (\(meta.fontSha256, privacy: .public)). "
+                + "Re-run scripts/generate_strokes_auto.py — the baked polylines "
+                + "no longer match the rendered glyph.")
+        } else {
+            repoLogger.debug("Bake font hash verified.")
         }
     }
 }
