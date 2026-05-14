@@ -1,5 +1,27 @@
 """Anchor-spec stroke generator for Primae.
 
+Architecture (four stages, applied to closed-bowl walker letters):
+  1. Walker primitive (walk/continuous/loop) produces a candidate
+     polyline by BFS-walking the letter's skimage skeleton between
+     cardinal anchors. Extracted from commit 77f1c220.
+  2. Per-stroke mask isolation builds a boolean mask containing only
+     that stroke's ink (thick-line band for STRAIGHT walks; full-mask-
+     minus-straight-masks with shared-anchor row-split for CURVED).
+  3. Medial-axis snap pulls every polyline checkpoint to the local
+     distance-transform maximum of its stroke's isolated mask.
+  4. Static-artifact escape hatch for letters where stages 1-3 don't
+     produce a clean polyline. The iPad debug calibrator
+     (PrimaeNative/Features/Tracing/StrokeCalibrationOverlay.swift)
+     lets a human drag-edit checkpoint positions on the rendered
+     glyph and export the result as JSON. The exported strokes.json
+     is committed verbatim; the letter is added to
+     SHIPPED_AS_STATIC_ARTIFACT and the bake pipeline skips it.
+
+Non-walker letters (M, V, W, A, etc.) use the existing line-kind
+primitive architecture (straight_line + fillets/sharp joints). They
+shipped clean from an earlier pipeline and are byte-identical
+across pipeline changes.
+
 See `docs/INVARIANTS.md` for the permanent centerline rules — every
 bake must satisfy centerline location, centerline shape, stroke type
 purity, and junction continuity. Apply to every letter, every weight.
@@ -78,6 +100,7 @@ import hashlib
 import heapq
 import json
 import math
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -86,20 +109,6 @@ from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
 from scipy.ndimage import distance_transform_edt
 import skimage.morphology as morph
-
-# Stem-meeting anchors: their literal resolved pixel is forced as the
-# polyline first/last point so connecting strokes (stem + bowl, bowl +
-# leg) share their endpoint exactly. The skeleton walk snaps to the
-# nearest skeleton pixel for BFS purposes, but the polyline endpoint
-# is the anchor verbatim.
-STEM_MEETING_ANCHORS = frozenset({
-    "STEM_CENTER_T", "STEM_CENTER_B",
-    "STEM_BOWL_TOP", "STEM_BOWL_BOT",
-    "STEM_BOWL_TOP_UPPER", "STEM_BOWL_BOT_LOWER",
-    "WAIST",
-    "BRANCH_T_ON_STEM", "BRANCH_B_ON_STEM",
-})
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FONTS = {
@@ -527,111 +536,70 @@ LETTERS: dict[str, list[StrokeSpec]] = {
     # plus right-side double-bowl that doesn't decompose cleanly into
     # the current line/curve primitives. Reopen with a dedicated
     # curve-kind authoring once Prima reference is consulted.
-    "b": [
-        # 1 straight stem + 1 curved bowl. Stem uses STEM_CENTER_T /
-        # STEM_CENTER_B (max-span column's top + bottom rows, spans
-        # the full visible glyph height from cap apex to foot
-        # bottom). Bowl uses BOWL_TOP_TOUCH / BOWL_BOT_TOUCH (first
-        # and last row with ≥2 ink runs — where the bowl first /
-        # last separates from the stem) so the polyline lands at
-        # the visible stem-bowl outline junction, not deep inside
-        # the stem ink. Old hand-tuned b at a803d9d is replaced.
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
-         "arms": ["analytical_line_stem"]},
-        {"kind": "line",
-         "anchors": ["BOWL_TOP_TOUCH", "RIGHT_MID", "BOWL_BOT_TOUCH"],
-         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
-    ],
-    "p": [
-        # 1 straight stem + 1 curved bowl. STEM_CENTER from x-height
-        # top through descender to descender bottom. Bowl endpoints
-        # land ON the stem polyline at the bowl-stem junction rows
-        # (skeleton branches at rows 548 / 677), via BRANCH_*_ON_STEM
-        # which pairs the branch row with the stem-center column.
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
-         "arms": ["analytical_line_stem"]},
-        {"kind": "line",
-         "anchors": ["BRANCH_T_ON_STEM", "RIGHT_MID", "BRANCH_B_ON_STEM"],
-         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
-    ],
+    # b ships as a STATIC ARTIFACT (restored from commit a803d9d
+    # hand-tuned firewall). Not produced by this pipeline — the
+    # bake_letter call for "b" is intentionally absent from LETTERS
+    # so attempting to re-bake raises a clear error. See
+    # SHIPPED_AS_STATIC_ARTIFACT below for the documented list.
+    # p ships as a STATIC ARTIFACT (restored from commit 77f1c220).
+    # Lowercase bowl-stem junction at the inner edge resists every
+    # algorithmic bake we tried (walker only, walker + mask, walker +
+    # mask + snap + smooth). See SHIPPED_AS_STATIC_ARTIFACT.
     "q": [
-        # Mirror of p: stem on RIGHT, bowl on LEFT. STEM_CENTER auto-
-        # picks the right-side stem column (q's max-span). Bowl
-        # anchors via BRANCH_*_ON_STEM since band detection on q has
-        # a 1-row gap from the cap-arc that splits the band wrongly;
-        # skeleton branches at rows 471 / 556 give clean bowl-top
-        # and bowl-bot on the stem polyline.
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
-         "arms": ["analytical_line_stem"]},
-        {"kind": "line",
-         "anchors": ["BRANCH_T_ON_STEM", "LEFT_MID", "BRANCH_B_ON_STEM"],
-         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+        # Walker spec (mirror of d-style): bowl as closed-loop CCW +
+        # straight descender walk.
+        {"kind": "walker", "primitive": "loop",
+         "start": "T", "direction": "ccw"},
+        {"kind": "walker", "primitive": "walk",
+         "from": "TR", "to": "BR"},
     ],
     "P": [
-        # 1 straight stem + 1 curved bowl. Bowl top starts at the
-        # cap apex (STEM_CENTER_T), arcs through RIGHT_MID, closes
-        # at the skeleton-branch row on the stem (BRANCH_B_ON_STEM).
-        # Both bowl endpoints land ON the stem polyline.
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
-         "arms": ["analytical_line_stem"]},
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "RIGHT_MID", "BRANCH_B_ON_STEM"],
-         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+        # Walker spec (77f1c220 architecture).
+        {"kind": "walker", "primitive": "walk",
+         "from": "TL", "to": "BL"},
+        {"kind": "walker", "primitive": "continuous",
+         "anchors": ["TL", "TR", "MR", "ML"]},
     ],
     "R": [
-        # P + a diagonal leg. Bowl bot endpoint at BRANCH_B_ON_STEM
-        # (skeleton-branch row at stem-center col), same point as
-        # the leg's start so the leg polyline begins exactly where
-        # the bowl polyline ends — both ON the stem polyline.
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
-         "arms": ["analytical_line_stem"]},
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "RIGHT_MID", "BRANCH_B_ON_STEM"],
-         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
-        {"kind": "line",
-         "anchors": ["BRANCH_B_ON_STEM", "BR"],
-         "arms": ["analytical_line_stem"]},
+        # Walker spec: stem + bowl + diagonal leg.
+        {"kind": "walker", "primitive": "walk",
+         "from": "TL", "to": "BL"},
+        {"kind": "walker", "primitive": "continuous",
+         "anchors": ["TL", "TR", "MR", "ML"]},
+        {"kind": "walker", "primitive": "walk",
+         "from": "ML", "to": "BR"},
     ],
     "D": [
-        # D's skeleton has no branches (bowl meets stem at TL / BL
-        # corners forming one continuous closed loop). Stem on the
-        # left via STEM_CENTER. Bowl uses TL / BL as intermediate
-        # waypoints between the stem endpoints — BFS dog-legs from
-        # stem-center col straight to RIGHT_MID otherwise; routing
-        # through the TL / BL cap-arc corners gives a smooth arc.
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
-         "arms": ["analytical_line_stem"]},
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "TL", "RIGHT_MID", "BL", "STEM_CENTER_B"],
-         "arms": ["smoothed_medial_axis"] * 4},
+        # Walker spec: stem + continuous bowl arc through 3 anchors.
+        {"kind": "walker", "primitive": "walk",
+         "from": "TL", "to": "BL"},
+        {"kind": "walker", "primitive": "continuous",
+         "anchors": ["TL", "MR", "BL"]},
     ],
     "B": [
-        # 3-stroke: stem + upper bowl + lower bowl. Per David's
-        # drawing: upper bowl's first anchor IS the stem's first
-        # (STEM_CENTER_T) so the polylines share that pixel; lower
-        # bowl's last anchor IS the stem's last (STEM_CENTER_B);
-        # both bowls meet at WAIST on the stem. TOP_BOWL_PEAK_UPPER
-        # forces BFS through the cap-apex route to avoid the
-        # figure-8 shortcut that previously produced a 177° U-turn.
-        # RIGHT_MID_LOWER is the lower bowl's row-bounded right
-        # extent.
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
-         "arms": ["analytical_line_stem"]},
-        {"kind": "line",
-         "anchors": ["STEM_CENTER_T", "TOP_BOWL_PEAK_UPPER", "WAIST"],
-         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
-        {"kind": "line",
-         "anchors": ["WAIST", "RIGHT_MID_LOWER", "STEM_CENTER_B"],
-         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+        # Walker spec: stem + upper bowl + lower bowl.
+        {"kind": "walker", "primitive": "walk",
+         "from": "TL", "to": "BL"},
+        {"kind": "walker", "primitive": "continuous",
+         "anchors": ["TL", "TR", "MR", "ML"]},
+        {"kind": "walker", "primitive": "continuous",
+         "anchors": ["ML", "MR", "BR", "BL"]},
     ],
 }
+
+
+# Letters that ship as static, hand-tuned artifacts. The bake pipeline
+# does not produce them; their strokes.json files are committed
+# verbatim and never re-generated. Listed here for documentation only.
+SHIPPED_AS_STATIC_ARTIFACT: frozenset[str] = frozenset({
+    "b",  # restored from a803d9d firewall after walker proved unable
+          # to traverse b's skeleton topology cleanly
+    "p",  # restored from 77f1c220 walker bake; lowercase bowl-stem
+          # inner-edge junction resisted every algorithmic refinement
+          # we tried (walker only, walker+mask, walker+mask+snap+smooth)
+    "C", "O", "S", "G", "Q",  # original spline-calibrator bakes;
+                                # byte-identical since May 10–11 2026
+})
 
 ALL_LETTERS = tuple(LETTERS.keys())
 
@@ -2850,10 +2818,6 @@ def arm_analytical_line_stem(rough_a: tuple[int, int],
                               mask: np.ndarray, dt: np.ndarray,
                               skeleton: np.ndarray,
                               trim_pct: float = DEFAULT_ARM_TRIM_PCT,
-                              start_pixel: tuple[float, float] | None = None,
-                              end_pixel: tuple[float, float] | None = None,
-                              inset_start: bool = True,
-                              inset_end: bool = True,
                               ) -> list[tuple[float, float]] | None:
     """Least-squares line through per-row stem-run midpoints.
 
@@ -2974,32 +2938,15 @@ def arm_analytical_line_stem(rough_a: tuple[int, int],
     if L < 1e-6:
         return None
     ux, uy = seg_dx / L, seg_dy / L
-    # Cap-rounding inset: pull each end stem_radius along the fitted
-    # line so the polyline lands at the cap-arc tangent point, not at
-    # the literal ink boundary. Matches the shipped 33-letter
-    # convention measured at dist_to_edge ≈ stem_radius. Applied per
-    # endpoint — shared anchors (Y-junctions with other strokes) keep
-    # the literal pixel so connecting strokes meet there.
-    inset = stem_width_est / 2.0
-    if inset_start:
-        a_proj = (a_proj[0] + ux * inset, a_proj[1] + uy * inset)
-    if inset_end:
-        b_proj = (b_proj[0] - ux * inset, b_proj[1] - uy * inset)
-    seg_dx = b_proj[0] - a_proj[0]
-    seg_dy = b_proj[1] - a_proj[1]
-    L = math.hypot(seg_dx, seg_dy)
-    if L < 1e-6:
-        return None
+    # No endpoint policy — endpoints are the LSQ-projected literal
+    # anchor positions. Only joint-adjacent trim_pct applies for
+    # multi-arm strokes.
     left_pct = 0.0 if k == 0 else trim_pct
     right_pct = 0.0 if k == n_arms - 1 else trim_pct
     a_trim = (a_proj[0] + ux * L * left_pct,
               a_proj[1] + uy * L * left_pct)
     b_trim = (b_proj[0] - ux * L * right_pct,
               b_proj[1] - uy * L * right_pct)
-    if start_pixel is not None:
-        a_trim = (float(start_pixel[0]), float(start_pixel[1]))
-    if end_pixel is not None:
-        b_trim = (float(end_pixel[0]), float(end_pixel[1]))
     ia = (int(round(a_trim[0])), int(round(a_trim[1])))
     ib = (int(round(b_trim[0])), int(round(b_trim[1])))
     if ia == ib:
@@ -3493,6 +3440,213 @@ def joint_fillet_at_intersection(
             "samples": samples, "skip_indices": skip_indices}
 
 
+# --- Walker primitives (extracted from 77f1c220) ---------------------------
+# Three walker primitives that traverse the letter's skeleton between
+# bbox-relative cardinal anchors: walk (start→end), continuous (multi-
+# anchor chain), loop (closed-loop CCW/CW). Used by closed-bowl letters
+# B/D/P/R/p/q via the "walker" kind. Produces clean medial-axis
+# centerlines because skimage.skeletonize gives a single-pixel ridge
+# through the band center.
+
+WALKER_ANCHOR_POSITIONS: dict[str, tuple[float, float]] = {
+    "TL": (0.0, 0.0), "TR": (1.0, 0.0),
+    "BL": (0.0, 1.0), "BR": (1.0, 1.0),
+    "T":  (0.5, 0.0), "TC": (0.5, 0.0),
+    "B":  (0.5, 1.0), "BC": (0.5, 1.0),
+    "L":  (0.0, 0.5), "ML": (0.0, 0.5),
+    "R":  (1.0, 0.5), "MR": (1.0, 0.5),
+    "C":  (0.5, 0.5),
+}
+
+_NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
+                  (0, -1),           (0, 1),
+                  (1, -1),  (1, 0),  (1, 1))
+
+
+def _build_skel_adjacency(skel_pixels: set[tuple[int, int]]
+                            ) -> dict[tuple[int, int],
+                                       list[tuple[int, int]]]:
+    """Map each (col, row) skeleton pixel to its 8-connected neighbours
+    that are also on the skeleton."""
+    adj: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for (c, r) in skel_pixels:
+        nbrs = []
+        for dr, dc in _NEIGHBOURS_8:
+            n = (c + dc, r + dr)
+            if n in skel_pixels:
+                nbrs.append(n)
+        adj[(c, r)] = nbrs
+    return adj
+
+
+def _walker_resolve_anchor(anchor,
+                             skel: np.ndarray,
+                             bbox: tuple[int, int, int, int]
+                             ) -> tuple[int, int] | None:
+    """Map a cardinal anchor name (TL/TR/.../C) or (x, y) tuple in
+    [0, 1] to the nearest skeleton pixel."""
+    x_min, y_min, x_max, y_max = bbox
+    w = max(1, x_max - x_min)
+    h = max(1, y_max - y_min)
+    if isinstance(anchor, str):
+        if anchor not in WALKER_ANCHOR_POSITIONS:
+            raise ValueError(
+                f"unknown walker anchor name: {anchor!r}")
+        ax, ay = WALKER_ANCHOR_POSITIONS[anchor]
+    else:
+        ax, ay = anchor
+    target_x = x_min + ax * w
+    target_y = y_min + ay * h
+    rows, cols = np.where(skel)
+    if rows.size == 0:
+        return None
+    dx = cols.astype(np.float64) - target_x
+    dy = rows.astype(np.float64) - target_y
+    i = int(np.argmin(dx * dx + dy * dy))
+    return (int(cols[i]), int(rows[i]))
+
+
+def _walker_bfs_path(start: tuple[int, int],
+                       end: tuple[int, int],
+                       adj: dict[tuple[int, int],
+                                   list[tuple[int, int]]]
+                       ) -> list[tuple[int, int]] | None:
+    """Shortest path along the skeleton graph."""
+    if start == end:
+        return [start]
+    if start not in adj or end not in adj:
+        return None
+    parent: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
+    q: deque[tuple[int, int]] = deque([start])
+    while q:
+        cur = q.popleft()
+        if cur == end:
+            break
+        for n in adj.get(cur, []):
+            if n not in parent:
+                parent[n] = cur
+                q.append(n)
+    if end not in parent:
+        return None
+    path: list[tuple[int, int]] = []
+    cur: tuple[int, int] | None = end
+    while cur is not None:
+        path.append(cur)
+        cur = parent[cur]
+    path.reverse()
+    return path
+
+
+def _walker_walk(from_anchor, to_anchor, *,
+                   skel: np.ndarray,
+                   adj: dict, bbox: tuple[int, int, int, int]
+                   ) -> list[tuple[int, int]] | None:
+    start = _walker_resolve_anchor(from_anchor, skel, bbox)
+    end = _walker_resolve_anchor(to_anchor, skel, bbox)
+    if start is None or end is None:
+        return None
+    return _walker_bfs_path(start, end, adj)
+
+
+def _walker_continuous(anchors: list, *,
+                         skel: np.ndarray,
+                         adj: dict, bbox: tuple[int, int, int, int]
+                         ) -> list[tuple[int, int]] | None:
+    if not anchors:
+        return None
+    pixels = [_walker_resolve_anchor(a, skel, bbox) for a in anchors]
+    if any(p is None for p in pixels):
+        return None
+    full: list[tuple[int, int]] = [pixels[0]]
+    for i in range(len(pixels) - 1):
+        seg = _walker_bfs_path(pixels[i], pixels[i + 1], adj)
+        if seg is None or len(seg) < 2:
+            return None
+        full.extend(seg[1:])
+    return full
+
+
+def _walker_cycle_ccw(seed: tuple[int, int],
+                        adj: dict[tuple[int, int],
+                                    list[tuple[int, int]]]
+                        ) -> list[tuple[int, int]]:
+    """Walk a closed skeleton cycle starting at `seed`; force visual
+    CCW orientation (Austrian handwriting convention for O/o)."""
+    if len(adj[seed]) < 2:
+        return [seed]
+    candidate_paths: list[list[tuple[int, int]]] = []
+    for start in adj[seed][:2]:
+        visited = {seed, start}
+        path = [seed, start]
+        cur = start
+        while True:
+            options = [n for n in adj[cur] if n not in visited]
+            if not options:
+                if seed in adj[cur] and cur != seed:
+                    path.append(seed)
+                break
+            cur = options[0]
+            path.append(cur)
+            visited.add(cur)
+        candidate_paths.append(path)
+    path = max(candidate_paths, key=len)
+    # Image-coord shoelace: positive = clockwise visually.
+    s = 0.0
+    for i in range(len(path) - 1):
+        x1, y1 = path[i]
+        x2, y2 = path[i + 1]
+        s += (x2 - x1) * (y2 + y1)
+    if s > 0:
+        path = list(reversed(path))
+    return path
+
+
+def _walker_loop(start_anchor, direction: str, *,
+                   skel: np.ndarray,
+                   adj: dict, bbox: tuple[int, int, int, int]
+                   ) -> list[tuple[int, int]] | None:
+    seed = _walker_resolve_anchor(start_anchor, skel, bbox)
+    if seed is None or seed not in adj:
+        return None
+    if len(adj[seed]) >= 2:
+        path = _walker_cycle_ccw(seed, adj)
+        if direction == "cw":
+            path = list(reversed(path))
+        return path
+    # Degenerate (degree-1): walk endpoint to endpoint of the component.
+    component: set[tuple[int, int]] = {seed}
+    stack = [seed]
+    while stack:
+        cur = stack.pop()
+        for n in adj[cur]:
+            if n not in component:
+                component.add(n)
+                stack.append(n)
+    endpoints = [p for p in component if len(adj[p]) == 1]
+    if len(endpoints) < 2:
+        return [seed]
+    return _walker_bfs_path(endpoints[0], endpoints[1], adj) or [seed]
+
+
+def _walker_dispatch(stroke_spec: dict, *,
+                       skel: np.ndarray,
+                       adj: dict, bbox: tuple[int, int, int, int]
+                       ) -> list[tuple[int, int]] | None:
+    """Dispatch a walker stroke spec to walk / continuous / loop."""
+    prim = stroke_spec.get("primitive")
+    if prim == "walk":
+        return _walker_walk(stroke_spec["from"], stroke_spec["to"],
+                              skel=skel, adj=adj, bbox=bbox)
+    if prim == "continuous":
+        return _walker_continuous(stroke_spec["anchors"],
+                                    skel=skel, adj=adj, bbox=bbox)
+    if prim == "loop":
+        return _walker_loop(stroke_spec["start"],
+                              stroke_spec.get("direction", "ccw"),
+                              skel=skel, adj=adj, bbox=bbox)
+    raise ValueError(f"unknown walker primitive {prim!r}")
+
+
 # --- Registries -------------------------------------------------------------
 
 ARM_STRATEGIES = {
@@ -3576,6 +3730,11 @@ def bake_letter(letter: str, font_path: Path
     anchors, synthesises centerlines, asserts every centerline stays in
     ink, samples to `CHECKPOINT_COUNT`, and packages into the
     strokes.json shape."""
+    if letter in SHIPPED_AS_STATIC_ARTIFACT:
+        raise KeyError(
+            f"{letter!r} ships as a static artifact; bake is "
+            f"intentionally not authored. See SHIPPED_AS_STATIC_ARTIFACT "
+            f"+ iPad calibrator workflow (StrokeCalibrationOverlay.swift).")
     specs = LETTERS.get(letter)
     if not specs:
         raise KeyError(f"No spec authored for {letter!r}")
@@ -3833,6 +3992,40 @@ def bake_letter(letter: str, font_path: Path
                 "comment": "dot",
             })
             continue
+        if spec.get("kind") == "walker":
+            # Walker stroke: BFS-walk the letter's skimage skeleton
+            # between cardinal anchors. Produces a medial-axis
+            # centerline directly — no further processing needed for
+            # the closed-bowl letters that ship via walkers.
+            if "_walker_adj" not in locals():
+                _rows, _cols = np.where(skeleton)
+                _walker_skel_pixels = set(zip(_cols.tolist(),
+                                                _rows.tolist()))
+                _walker_adj = _build_skel_adjacency(_walker_skel_pixels)
+            try:
+                chain_w = _walker_dispatch(spec, skel=skeleton,
+                                             adj=_walker_adj, bbox=bbox)
+            except Exception as e:
+                raise ValueError(
+                    f"{letter} stroke {i}: walker failed — {e}") from e
+            if chain_w is None or len(chain_w) < 2:
+                raise ValueError(
+                    f"{letter} stroke {i}: walker returned no path")
+            stroke_pixel_chains.append(chain_w)
+            resolved_anchors.append([])
+            joint_arcs_per_stroke.append([])
+            smoothed_paths_per_stroke.append([])
+            sharp_skip_indices_per_stroke.append(set())
+            resampled = resample_uniform(chain_w, CHECKPOINT_COUNT)
+            json_strokes.append({
+                "id": i,
+                "checkpoints": [
+                    {"x": round(pixel_to_rel(p, bbox)[0], 4),
+                     "y": round(pixel_to_rel(p, bbox)[1], 4)}
+                    for p in resampled
+                ],
+            })
+            continue
         if "kind" in spec:
             kind = spec["kind"]
             names = spec.get("anchors") or []
@@ -3892,9 +4085,10 @@ def bake_letter(letter: str, font_path: Path
                 call_params.pop("t_junction_start", None)
                 call_params.pop("t_junction_end", None)
                 # Inject shared-apex / T-junction overrides only for
-                # arm_straight_line. Shared-apex takes priority when
-                # both apply to the same endpoint.
-                if name in ("straight_line", "analytical_line_stem"):
+                # arm_straight_line. analytical_line_stem and
+                # smoothed_medial_axis have no endpoint policy — the
+                # primitives' outputs ship as-is.
+                if name == "straight_line":
                     left_name = names[k]
                     right_name = names[k + 1]
                     sp_left = shared_apex_cache.get(left_name)
@@ -3903,58 +4097,19 @@ def bake_letter(letter: str, font_path: Path
                         (i - 1, k, "start"))
                     tj_right = t_junction_cache.get(
                         (i - 1, k, "end"))
-                    # Stem-meeting anchors → literal pixel as endpoint
-                    # (analytical arm_straight_line samples between
-                    # literal anchors, polyline is pure straight). Falls
-                    # back to shared-apex / T-junction overrides if those
-                    # apply. For analytical_line_stem we skip the
-                    # literal forcing so the primitive's LSQ projection
-                    # establishes the slanted endpoint; downstream
-                    # strokes pick that up via shared_apex_cache.
-                    is_slanted = (name == "analytical_line_stem")
-                    if left_name in STEM_MEETING_ANCHORS and not is_slanted:
-                        target = (shared_apex_cache.get(left_name)
-                                   or (float(anchors[k][0]),
-                                       float(anchors[k][1])))
-                        call_params["start_pixel"] = (
-                            float(target[0]), float(target[1]))
-                    elif sp_left is not None:
+                    if sp_left is not None:
                         call_params["start_pixel"] = sp_left
                     elif tj_left is not None:
                         call_params["start_pixel"] = tj_left
-                    if right_name in STEM_MEETING_ANCHORS and not is_slanted:
-                        target = (shared_apex_cache.get(right_name)
-                                   or (float(anchors[k + 1][0]),
-                                       float(anchors[k + 1][1])))
-                        call_params["end_pixel"] = (
-                            float(target[0]), float(target[1]))
-                    elif sp_right is not None:
+                    if sp_right is not None:
                         call_params["end_pixel"] = sp_right
                     elif tj_right is not None:
                         call_params["end_pixel"] = tj_right
-                    # Cap-inset is applied per endpoint only when the
-                    # anchor name isn't shared with another stroke of
-                    # this letter. Shared anchors are Y-junction
-                    # meeting points and must stay at the literal
-                    # anchor pixel so the connecting stroke meets
-                    # there.
-                    if is_slanted:
-                        current_stroke_idx = i - 1
-
-                        def _is_shared(anchor_name: str) -> bool:
-                            for j_other, spec_other in enumerate(specs):
-                                if j_other == current_stroke_idx:
-                                    continue
-                                if anchor_name in spec_other.get("anchors", []):
-                                    return True
-                            return False
-                        call_params["inset_start"] = not _is_shared(left_name)
-                        call_params["inset_end"] = not _is_shared(right_name)
                 # analytical_line_stem fits a line through per-row stem
-                # midpoints, so it needs the literal cap/foot anchor
-                # rows — not the medial-axis-snapped positions, which
-                # can land deep inside a bowl-merge row range with too
-                # few pure rows for a fit.
+                # midpoints — it needs the LITERAL cap/foot anchor rows
+                # (not medial-axis-snapped) to span the full glyph
+                # height. smoothed_medial_axis BFS-walks the skeleton
+                # and needs SNAPPED anchors to start/end on it.
                 if name == "analytical_line_stem":
                     arm_a = anchors[k]
                     arm_b = anchors[k + 1]
@@ -3965,36 +4120,6 @@ def bake_letter(letter: str, font_path: Path
                                k, n_arms,
                                mask=mask, dt=dt, skeleton=skeleton,
                                **call_params))
-                # Force-literal endpoints: for stem-meeting anchors,
-                # replace the primitive's first/last point with the
-                # resolved anchor pixel so connecting strokes share
-                # their endpoint exactly. For analytical_line_stem the
-                # primitive's LSQ-projected endpoint IS the new anchor
-                # — keep it and seed shared_apex_cache so downstream
-                # strokes pick up the slanted-stem position. For other
-                # primitives prefer shared_apex_cache (which carries
-                # the slanted-stem projection) over the literal anchor.
-                is_slanted = (name == "analytical_line_stem")
-                if arms[-1] is not None:
-                    p = arms[-1]
-                    if names[k] in STEM_MEETING_ANCHORS and not is_slanted:
-                        target = (shared_apex_cache.get(names[k])
-                                   or anchors[k])
-                        p = [(float(target[0]), float(target[1]))] + list(p[1:])
-                    if (names[k + 1] in STEM_MEETING_ANCHORS
-                            and not is_slanted):
-                        target = (shared_apex_cache.get(names[k + 1])
-                                   or anchors[k + 1])
-                        p = list(p[:-1]) + [(float(target[0]),
-                                              float(target[1]))]
-                    arms[-1] = p
-                # The slanted stem keeps its own LSQ-projected endpoints
-                # but does NOT propagate them to STEM_MEETING_ANCHORS.
-                # Y-junctions (bowl-stem, leg-stem) are spatially
-                # adjacent through the ink, not coincident pixels —
-                # Rule 5 permits ≤2 px gap. Downstream bowl/leg strokes
-                # snap to their own bowl-only-mask medial axis from the
-                # literal anchor positions, identical to v3 behaviour.
 
             joints: list[dict | None] = []
             for j in range(n_arms - 1):
@@ -4088,178 +4213,6 @@ def bake_letter(letter: str, font_path: Path
                 for p in resampled
             ],
         })
-
-    # ---- Y-junction intersection post-processing -----------------------
-    # For every STEM_MEETING_ANCHOR shared between 2+ strokes, find the
-    # geometric intersection of the strokes' local tangent lines at the
-    # shared end and re-trim both chains so they meet at that pixel.
-    # This is Rule 5: Y-junction continuity at the centerline
-    # intersection, not at the inner stem edge.
-    y_junction_records: list[dict] = []
-    by_anchor: dict[str, list[int]] = {}
-    for s_idx, sp in enumerate(specs or []):
-        for an in sp.get("anchors", []):
-            if an in STEM_MEETING_ANCHORS:
-                by_anchor.setdefault(an, []).append(s_idx)
-    shared = {a: ix for a, ix in by_anchor.items() if len(ix) >= 2}
-
-    def _line_intersect(p1, d1, p2, d2):
-        det = d1[0] * (-d2[1]) - d1[1] * (-d2[0])
-        if abs(det) < 1e-6:
-            return None
-        ddx = p2[0] - p1[0]; ddy = p2[1] - p1[1]
-        t1 = (ddx * (-d2[1]) - ddy * (-d2[0])) / det
-        return (p1[0] + t1 * d1[0], p1[1] + t1 * d1[1])
-
-    def _tangent(chain: list[tuple[int, int]], at_end: bool,
-                  n: int = 5) -> tuple[tuple[float, float],
-                                          tuple[float, float]] | None:
-        """LSQ-fit a short line through the last/first n chain pixels.
-        Returns (centroid, unit-direction) pointing AWAY from the end
-        (i.e. toward the body of the stroke)."""
-        if len(chain) < n:
-            return None
-        pts = chain[-n:] if at_end else chain[:n]
-        arr = np.array(pts, dtype=float)
-        centroid = arr.mean(axis=0)
-        if (arr - centroid).any():
-            _, _, vt = np.linalg.svd(arr - centroid, full_matrices=False)
-            direction = vt[0]
-        else:
-            return None
-        d = (float(direction[0]), float(direction[1]))
-        return ((float(centroid[0]), float(centroid[1])), d)
-
-    # Need a stem_width_est for the "far from anchor" sanity check.
-    # Use the same dt-along-stem estimate the primitive uses — the
-    # single-run-width approach fails for B/D/R where the stem column
-    # is rarely isolated from the bowl ink.
-    try:
-        _sct = _stem_center_t(mask)
-        _scb = _stem_center_b(mask)
-        _samples_dt: list[float] = []
-        for _tt in (0.15, 0.35, 0.5, 0.65, 0.85):
-            _cy = int(round(_sct[1] + (_scb[1] - _sct[1]) * _tt))
-            _cx = int(round(_sct[0] + (_scb[0] - _sct[0]) * _tt))
-            if 0 <= _cy < mask.shape[0] and 0 <= _cx < mask.shape[1]:
-                _samples_dt.append(float(dt[_cy, _cx]))
-        _half_w = max(_samples_dt) if _samples_dt else 0.0
-        stem_w_est = max(int(round(_half_w * 2.0)), 15)
-    except (ValueError, KeyError):
-        stem_w_est = 43
-    H_glyph, W_glyph = mask.shape
-
-    for anchor_name, stroke_idxs in shared.items():
-        try:
-            anchor_pos = _cached_resolve(anchor_name, "line", None)
-        except (KeyError, ValueError):
-            continue
-        ends: list[tuple[int, bool]] = []  # (stroke_idx, at_end)
-        for s_idx in stroke_idxs:
-            if s_idx >= len(stroke_pixel_chains):
-                continue
-            poly = stroke_pixel_chains[s_idx]
-            if len(poly) < 6:
-                continue
-            d0 = math.hypot(poly[0][0] - anchor_pos[0],
-                              poly[0][1] - anchor_pos[1])
-            dL = math.hypot(poly[-1][0] - anchor_pos[0],
-                              poly[-1][1] - anchor_pos[1])
-            ends.append((s_idx, d0 > dL))
-        if len(ends) < 2:
-            continue
-        # Compute tangent of each end
-        tangents = []
-        for s_idx, at_end in ends:
-            t = _tangent(stroke_pixel_chains[s_idx], at_end, n=5)
-            if t is None:
-                tangents = []
-                break
-            tangents.append((s_idx, at_end, t))
-        if len(tangents) < 2:
-            continue
-        # 2-line intersection (pairwise — current spec has at most
-        # 2 strokes sharing any one anchor).
-        (_, _, (p1, d1)) = tangents[0]
-        (_, _, (p2, d2)) = tangents[1]
-        # Angle between tangents (deg)
-        cos_a = max(-1.0, min(1.0,
-                              d1[0] * d2[0] + d1[1] * d2[1]))
-        angle_deg = math.degrees(math.acos(abs(cos_a)))
-        ipt = _line_intersect(p1, d1, p2, d2)
-        fallback_reason = None
-        if ipt is None or angle_deg < 10.0:
-            fallback_reason = "near-parallel tangents"
-            intersection = (int(round(anchor_pos[0])),
-                              int(round(anchor_pos[1])))
-        else:
-            ix_i = int(round(ipt[0])); iy_i = int(round(ipt[1]))
-            dist_to_nominal = math.hypot(ipt[0] - anchor_pos[0],
-                                          ipt[1] - anchor_pos[1])
-            inside_ink = (0 <= iy_i < H_glyph and 0 <= ix_i < W_glyph
-                           and mask[iy_i, ix_i])
-            if not inside_ink:
-                fallback_reason = (
-                    f"intersection ({ix_i}, {iy_i}) outside ink")
-                intersection = (int(round(anchor_pos[0])),
-                                  int(round(anchor_pos[1])))
-            elif dist_to_nominal > stem_w_est:
-                fallback_reason = (
-                    f"intersection {dist_to_nominal:.1f}px from anchor "
-                    f"(> stem_width {stem_w_est})")
-                intersection = (int(round(anchor_pos[0])),
-                                  int(round(anchor_pos[1])))
-            else:
-                intersection = (ix_i, iy_i)
-        # Trim/extend each stroke's chain so its shared end IS the
-        # intersection pixel. Strategy: replace the end pixel with
-        # the intersection; if the gap to the previous chain pixel
-        # is large, sample additional pixels in between.
-        for s_idx, at_end, _t in tangents:
-            chain = stroke_pixel_chains[s_idx]
-            if at_end:
-                # If intersection is "beyond" current end along
-                # tangent: extend with line_sampler.
-                prev = chain[-1]
-                seg = line_sampler([prev, intersection])
-                # Drop the duplicate prev pixel at seg[0]; append rest
-                if len(seg) > 1:
-                    chain[-1:] = [tuple(int(c) for c in pt) for pt in seg]
-                else:
-                    chain[-1] = intersection
-            else:
-                nxt = chain[0]
-                seg = line_sampler([intersection, nxt])
-                if len(seg) > 1:
-                    chain[:1] = [tuple(int(c) for c in pt) for pt in seg]
-                else:
-                    chain[0] = intersection
-        y_junction_records.append({
-            "anchor": anchor_name,
-            "intersection": intersection,
-            "angle_deg": angle_deg,
-            "fallback": fallback_reason,
-            "strokes": [s_idx for s_idx, _, _ in tangents],
-        })
-
-    # Re-emit json_strokes for line-kind strokes (resample from mutated
-    # chains). Dots are left untouched.
-    if y_junction_records:
-        for i, sp in enumerate(specs):
-            if sp.get("kind") == "dot":
-                continue
-            chain = stroke_pixel_chains[i]
-            if len(chain) < 2:
-                continue
-            resampled = resample_uniform(chain, CHECKPOINT_COUNT)
-            json_strokes[i] = {
-                "id": i + 1,
-                "checkpoints": [
-                    {"x": round(pixel_to_rel(p, bbox)[0], 4),
-                     "y": round(pixel_to_rel(p, bbox)[1], 4)}
-                    for p in resampled
-                ],
-            }
 
     skeleton_pts, skeleton_adj = build_skeleton_and_adj(
         stroke_pixel_chains, bbox)
@@ -4402,6 +4355,10 @@ def main() -> int:
             out_file = out_dir / "strokes.json"
             if args.no_overwrite and out_file.exists():
                 print(f"  {letter}: skipped (exists)")
+                continue
+            if letter in SHIPPED_AS_STATIC_ARTIFACT:
+                print(f"  {letter}: skipped (static artifact — "
+                      f"hand-tuned via iPad calibrator)")
                 continue
             try:
                 data, _ = bake_letter(letter, font_path)
