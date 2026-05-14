@@ -2299,6 +2299,152 @@ def arm_straight_line(rough_a: tuple[int, int],
     return [(float(c), float(r)) for c, r in seg]
 
 
+def arm_analytical_line_stem(rough_a: tuple[int, int],
+                              rough_b: tuple[int, int],
+                              k: int, n_arms: int, *,
+                              mask: np.ndarray, dt: np.ndarray,
+                              skeleton: np.ndarray,
+                              trim_pct: float = DEFAULT_ARM_TRIM_PCT,
+                              start_pixel: tuple[float, float] | None = None,
+                              end_pixel: tuple[float, float] | None = None,
+                              ) -> list[tuple[float, float]] | None:
+    """Least-squares line through per-row stem-run midpoints.
+
+    For each row between rough_a and rough_b: interpolate the
+    analytical column at that row, find the ink run that contains
+    (or is closest to) that column, take its midpoint as a sample.
+    Rows where the run is wider than stem_width × 1.1 are skipped —
+    those are bowl/leg-fused rows where the stem ink merges with a
+    crossing stroke. LSQ-fit a line through the surviving (row,
+    midpoint) pairs and sample between the projected anchors.
+
+    For perfectly upright stems this returns the analytical-vertical
+    result. For slanted stems it tracks the actual stem midline.
+    No tube construction, no medial_axis call, no bowl-subtract."""
+    a0 = (float(rough_a[0]), float(rough_a[1]))
+    b0 = (float(rough_b[0]), float(rough_b[1]))
+    seg_dx0 = b0[0] - a0[0]
+    seg_dy0 = b0[1] - a0[1]
+    L0 = math.hypot(seg_dx0, seg_dy0)
+    if L0 < 5.0:
+        return None
+    H_, W_ = mask.shape
+
+    # Stem half-width estimate via dt along the analytical line.
+    samples_dt: list[float] = []
+    for tt in (0.15, 0.35, 0.5, 0.65, 0.85):
+        cx_ = int(round(a0[0] + seg_dx0 * tt))
+        cy_ = int(round(a0[1] + seg_dy0 * tt))
+        if 0 <= cy_ < H_ and 0 <= cx_ < W_:
+            samples_dt.append(float(dt[cy_, cx_]))
+    half_w = max(samples_dt) if samples_dt else 0.0
+    stem_width_est = max(int(round(half_w * 2.0)), 15)
+    fused_thresh = stem_width_est * 1.1
+
+    row_major = abs(seg_dy0) >= abs(seg_dx0)
+    pure_x: list[float] = []
+    pure_y: list[float] = []
+
+    def _run_containing(coords: np.ndarray, target: float) -> (
+            tuple[int, int] | None):
+        """Find the contiguous run of `coords` (sorted ink columns or
+        rows) containing `target`. If no run contains it, return the
+        run closest to it. Returns (start, end) inclusive."""
+        if coords.size == 0:
+            return None
+        target_i = int(round(target))
+        # Find the index of the closest coord; expand outward to find
+        # the contiguous run boundaries.
+        idx = int(np.searchsorted(coords, target_i))
+        if idx >= coords.size:
+            idx = coords.size - 1
+        if idx > 0 and abs(int(coords[idx - 1]) - target_i) < abs(int(coords[idx]) - target_i):
+            idx -= 1
+        # Walk left and right while consecutive.
+        lo = idx
+        while lo > 0 and int(coords[lo]) - int(coords[lo - 1]) == 1:
+            lo -= 1
+        hi = idx
+        while hi < coords.size - 1 and int(coords[hi + 1]) - int(coords[hi]) == 1:
+            hi += 1
+        return (int(coords[lo]), int(coords[hi]))
+
+    if row_major:
+        r_lo = int(min(a0[1], b0[1]))
+        r_hi = int(max(a0[1], b0[1]))
+        slope_along = seg_dx0 / seg_dy0 if abs(seg_dy0) > 1e-6 else 0.0
+        for rr in range(max(0, r_lo), min(H_, r_hi + 1)):
+            cols_in_row = np.where(mask[rr])[0]
+            if cols_in_row.size == 0:
+                continue
+            analytical_x = a0[0] + slope_along * (rr - a0[1])
+            run = _run_containing(cols_in_row, analytical_x)
+            if run is None:
+                continue
+            run_w = run[1] - run[0] + 1
+            if run_w > fused_thresh:
+                continue
+            pure_y.append(float(rr))
+            pure_x.append((run[0] + run[1]) / 2.0)
+    else:
+        c_lo = int(min(a0[0], b0[0]))
+        c_hi = int(max(a0[0], b0[0]))
+        slope_along = seg_dy0 / seg_dx0 if abs(seg_dx0) > 1e-6 else 0.0
+        for cc in range(max(0, c_lo), min(W_, c_hi + 1)):
+            rows_in_col = np.where(mask[:, cc])[0]
+            if rows_in_col.size == 0:
+                continue
+            analytical_y = a0[1] + slope_along * (cc - a0[0])
+            run = _run_containing(rows_in_col, analytical_y)
+            if run is None:
+                continue
+            run_w = run[1] - run[0] + 1
+            if run_w > fused_thresh:
+                continue
+            pure_x.append(float(cc))
+            pure_y.append((run[0] + run[1]) / 2.0)
+
+    if len(pure_x) < 5:
+        return None
+
+    # LSQ fit. For row-major, fit col = m*row + c (col as a function of
+    # row). For col-major, fit row = m*col + c.
+    if row_major:
+        m_, b_ = np.polyfit(np.array(pure_y), np.array(pure_x), 1)
+
+        def _proj(p: tuple[float, float]) -> tuple[float, float]:
+            return (m_ * p[1] + b_, p[1])
+    else:
+        m_, b_ = np.polyfit(np.array(pure_x), np.array(pure_y), 1)
+
+        def _proj(p: tuple[float, float]) -> tuple[float, float]:
+            return (p[0], m_ * p[0] + b_)
+    a_proj = _proj(a0)
+    b_proj = _proj(b0)
+    seg_dx = b_proj[0] - a_proj[0]
+    seg_dy = b_proj[1] - a_proj[1]
+    L = math.hypot(seg_dx, seg_dy)
+    if L < 1e-6:
+        return None
+    ux, uy = seg_dx / L, seg_dy / L
+    left_pct = 0.0 if k == 0 else trim_pct
+    right_pct = 0.0 if k == n_arms - 1 else trim_pct
+    a_trim = (a_proj[0] + ux * L * left_pct,
+              a_proj[1] + uy * L * left_pct)
+    b_trim = (b_proj[0] - ux * L * right_pct,
+              b_proj[1] - uy * L * right_pct)
+    if start_pixel is not None:
+        a_trim = (float(start_pixel[0]), float(start_pixel[1]))
+    if end_pixel is not None:
+        b_trim = (float(end_pixel[0]), float(end_pixel[1]))
+    ia = (int(round(a_trim[0])), int(round(a_trim[1])))
+    ib = (int(round(b_trim[0])), int(round(b_trim[1])))
+    if ia == ib:
+        return [(float(ia[0]), float(ia[1]))]
+    seg = line_sampler([ia, ib])
+    return [(float(c), float(r)) for c, r in seg]
+
+
 # --- Joint primitives -------------------------------------------------------
 
 def joint_sharp(arm_prev: list[tuple[float, float]],
@@ -2792,6 +2938,7 @@ ARM_STRATEGIES = {
     "lsq_line": arm_lsq_line,
     "smoothed_medial_axis": arm_smoothed_medial_axis,
     "straight_line": arm_straight_line,
+    "analytical_line_stem": arm_analytical_line_stem,
 }
 
 JOINT_STRATEGIES = {
