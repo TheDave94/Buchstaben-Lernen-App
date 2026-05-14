@@ -324,6 +324,22 @@ LETTERS: dict[str, list[StrokeSpec]] = {
         {"kind": "line", "anchors": ["STEM_T", "CURL_TIP_R"],
          "arms": ["smoothed_medial_axis"]},
     ],
+    "t": [
+        # Stem-then-curl as one continuous smoothed-medial-axis stroke
+        # (same pattern as l), plus a separate straight crossbar. The
+        # stem+curl BFS walk from STEM_T to CURL_TIP_R passes through
+        # the stem-crossbar T-junction and continues to the curl —
+        # BFS picks the shortest path, no crossbar detour. The
+        # crossbar uses arm_straight_line so the LSQ fit produces a
+        # truly horizontal segment; the BFS path between XBAR_L and
+        # XBAR_R has a small junction-detour kink (72° max-turn when
+        # walked raw via smoothed_medial_axis) which LSQ-fitting
+        # naturally absorbs.
+        {"kind": "line", "anchors": ["STEM_T", "CURL_TIP_R"],
+         "arms": ["smoothed_medial_axis"]},
+        {"kind": "line", "anchors": ["XBAR_L", "XBAR_R"],
+         "arms": ["straight_line"]},
+    ],
     "v": [
         # Plain straight_line arms — LSQ fit through the natural medial
         # axis gives the diagonal direction without LSQ-trim tilt; the
@@ -874,21 +890,41 @@ def _desc_hook_l(mask: np.ndarray) -> tuple[int, int]:
     return min(bottom, key=lambda p: (-p[1], p[0]))
 
 
-def _arm_tip_r(mask: np.ndarray) -> tuple[int, int]:
-    """ARM_TIP_R — skeleton endpoint with maximum col among "middle-row"
-    endpoints (excluding the lowest-row and highest-row endpoints).
-    Used for r — the arm at the shoulder. Requires ≥ 3 endpoints
-    on the main skeleton."""
+def _mid_row_endpoints(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Helper: skeleton endpoints excluding the lowest-row and
+    highest-row entries. Shared by ARM_TIP_R, XBAR_L, XBAR_R — all
+    three pick a "mid-row" endpoint by some column criterion."""
     eps = _main_skeleton_endpoints(mask)
     if len(eps) < 3:
-        raise ValueError("ARM_TIP_R needs ≥ 3 skeleton endpoints, "
+        raise ValueError("Mid-row endpoints need ≥ 3 skeleton endpoints, "
                           f"main component has {len(eps)}")
     top_ep = min(eps, key=lambda p: (p[1], p[0]))
     bot_ep = max(eps, key=lambda p: (p[1], -p[0]))
-    mid_eps = [p for p in eps if p != top_ep and p != bot_ep]
-    if not mid_eps:
+    mid = [p for p in eps if p != top_ep and p != bot_ep]
+    if not mid:
         raise ValueError("No mid-row skeleton endpoint")
-    return max(mid_eps, key=lambda p: (p[0], -p[1]))
+    return mid
+
+
+def _arm_tip_r(mask: np.ndarray) -> tuple[int, int]:
+    """ARM_TIP_R — skeleton endpoint with maximum col among "middle-row"
+    endpoints (excluding the lowest-row and highest-row endpoints).
+    Used for r — the arm at the shoulder."""
+    return max(_mid_row_endpoints(mask), key=lambda p: (p[0], -p[1]))
+
+
+def _xbar_l(mask: np.ndarray) -> tuple[int, int]:
+    """XBAR_L — minimum-col mid-row endpoint. Used for t's crossbar
+    left tip. Same "mid-row" set as ARM_TIP_R, mirror column criterion."""
+    return min(_mid_row_endpoints(mask), key=lambda p: (p[0], -p[1]))
+
+
+def _xbar_r(mask: np.ndarray) -> tuple[int, int]:
+    """XBAR_R — maximum-col mid-row endpoint. Used for t's crossbar
+    right tip. Functionally identical to ARM_TIP_R but named for
+    crossbar semantics; the author picks whichever name reads better
+    at the letter spec site."""
+    return max(_mid_row_endpoints(mask), key=lambda p: (p[0], -p[1]))
 
 
 def _asc_top(mask: np.ndarray) -> tuple[int, int]:
@@ -946,6 +982,10 @@ def resolve_anchor(name: str, mask: np.ndarray,
         pos = _desc_hook_l(mask)
     elif name == "ARM_TIP_R":
         pos = _arm_tip_r(mask)
+    elif name == "XBAR_L":
+        pos = _xbar_l(mask)
+    elif name == "XBAR_R":
+        pos = _xbar_r(mask)
     elif name == "ASC_TOP":
         pos = _asc_top(mask)
     else:
