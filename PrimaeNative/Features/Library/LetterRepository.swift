@@ -446,11 +446,7 @@ extension LetterRepository {
         let digest = SHA256.hash(data: fontData)
             .map { String(format: "%02x", $0) }.joined()
         if digest != meta.fontSha256 {
-            repoLogger.warning(
-                "Bundled font \(fontFile, privacy: .public) SHA-256 \(digest, privacy: .public) "
-                + "does not match _meta.json (\(meta.fontSha256, privacy: .public)). "
-                + "Re-run scripts/generate_strokes_auto.py — the baked polylines "
-                + "no longer match the rendered glyph.")
+            repoLogger.warning("Bundled font \(fontFile, privacy: .public) SHA-256 mismatch: bundle=\(digest, privacy: .public) meta=\(meta.fontSha256, privacy: .public). Re-run scripts/generate_strokes_auto.py — baked polylines no longer match the rendered glyph.")
         } else {
             repoLogger.debug("Bake font hash verified.")
         }
