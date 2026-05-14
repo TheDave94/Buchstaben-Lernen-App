@@ -62,6 +62,13 @@ import generate_strokes_auto as g  # noqa: E402
 PALETTE = [(229, 62, 62), (62, 180, 90), (62, 140, 229),
            (236, 158, 56), (155, 89, 182)]
 
+# Gate-2 reversal cutoff. `cos < this` between consecutive tangent
+# vectors counts as a reversal — corresponds to a ~96° turn. Tighter
+# (closer to 0) flags more turns as reversals; looser (more negative)
+# tolerates sharper kinks. The b-bowl, M peaks, V/W valleys all sit
+# below this threshold by design and are excluded via skip_indices.
+REVERSAL_COSINE_CUTOFF = -0.1
+
 
 def signed_dist(mask: np.ndarray, x: float, y: float, max_s: int = 200) -> float:
     """Signed distance from (x,y) to the mask boundary. + inside, - outside."""
@@ -101,7 +108,7 @@ def gates(chain: list, mask: np.ndarray, skip: set) -> tuple[int, int, float]:
         if L1 < 1e-6 or L2 < 1e-6:
             continue
         d = (v1[0] * v2[0] + v1[1] * v2[1]) / (L1 * L2)
-        if d < -0.1:
+        if d < REVERSAL_COSINE_CUTOFF:
             rv += 1
         d = max(-1.0, min(1.0, d))
         g3 = max(g3, math.degrees(math.acos(d)))

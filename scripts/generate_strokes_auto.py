@@ -98,6 +98,50 @@ NEIGHBOURS_8 = ((-1, -1), (-1, 0), (-1, 1),
 
 LOWERCASE_SUFFIX = "_l"
 
+# -----------------------------------------------------------------------------
+# Tuning constants
+# -----------------------------------------------------------------------------
+#
+# These were inlined literals scattered through the arm + joint primitive
+# implementations. Pulled to a single block so a sweep over any of them has
+# one place to change. Any change here is gated by `scripts/verify_bake.sh`
+# (byte-identity vs HEAD); only sweep + commit if every shipped letter
+# survives or every regenerated letter has been visually reviewed.
+
+# Arm primitives — `arm_lsq_line`, `arm_smoothed_medial_axis`,
+# `arm_straight_line` trim this fraction of the segment from the
+# joint-adjacent end(s) before sampling. Endpoint-adjacent sides
+# (arm 0's start, last arm's end) are NOT trimmed.
+DEFAULT_ARM_TRIM_PCT = 0.20
+
+# `arm_smoothed_medial_axis` moving-average window over the BFS path.
+DEFAULT_SMOOTHING_WINDOW = 5
+
+# `joint_cubic_bezier_clamped` — handle length is `min(s_v, MAX_HANDLE)`
+# per side, where s_v is the natural tangent-intersection distance.
+# Caps the arc depth so neighbouring joints don't pull arms past each
+# other on narrow geometry.
+DEFAULT_CBEZ_MAX_HANDLE = 70.0
+
+# `joint_family_a_fillet` — tangent-intersection distance is clamped to
+# this fraction of the shorter adjacent arm before the fillet radius is
+# recomputed. Prevents the fillet from eating more than half of either
+# arm.
+FAMILY_A_FILLET_MAX_TAN_FRACTION = 0.45
+
+# `walk_arm_to_plateau` declares "arrived at the cap interior" when the
+# 5-step moving-average slope of dt-along-the-chord drops below this
+# (px of dt per px of chord). Lower = walks deeper into the cap before
+# stopping.
+WALK_PLATEAU_SLOPE_THRESHOLD = 0.20
+
+# `joint_fillet_at_intersection` — bridge from natural arm endpoint to
+# trim point must point in the same direction as the arm tangent
+# (signed projection ≥ this). Negative (-0.5 px) tolerates rounding
+# wobble at the natural arm endpoint without rejecting the joint as a
+# reversal. More negative = more permissive.
+FILLET_BRIDGE_REVERSAL_TOLERANCE = -0.5
+
 
 # -----------------------------------------------------------------------------
 # Hand-authored stroke decompositions
@@ -886,7 +930,7 @@ def polyline_with_filleted_joints(
             continue
         half_angle = full_angle / 2.0
         tan_dist = r / math.tan(half_angle)
-        max_tan_dist = 0.45 * min(L1, L2)
+        max_tan_dist = FAMILY_A_FILLET_MAX_TAN_FRACTION * min(L1, L2)
         if tan_dist > max_tan_dist:
             new_r = max_tan_dist * math.tan(half_angle)
             print(f"  info: joint {i} radius capped {r:.1f}→{new_r:.1f}")
@@ -1154,8 +1198,8 @@ def walk_arm_to_plateau(outer: tuple[int, int],
     # max plateau detection misses this because dt keeps drifting up
     # along the arm when the chord direction isn't exactly along the
     # arm's medial axis.
-    SLOPE_THRESHOLD = 0.20  # px of dt per px of chord
-    WINDOW = 5
+    SLOPE_THRESHOLD = WALK_PLATEAU_SLOPE_THRESHOLD
+    WINDOW = DEFAULT_SMOOTHING_WINDOW
     if len(dt_values) <= WINDOW + 2:
         return None
     smoothed_slope: list[float] = []
@@ -1397,7 +1441,7 @@ def _bfs_skeleton_path(a: tuple[int, int], b: tuple[int, int],
 
 def _smooth_path(pts: list[tuple[int, int]],
                  left_trim_pct: float, right_trim_pct: float,
-                 window: int = 5
+                 window: int = DEFAULT_SMOOTHING_WINDOW
                  ) -> list[tuple[float, float]] | None:
     """Trim `left_trim_pct` from the front and `right_trim_pct` from the
     back, then moving-average smooth with the given odd window. Returns
@@ -1473,7 +1517,7 @@ def arm_bfs_raw(rough_a: tuple[int, int], rough_b: tuple[int, int],
 def arm_lsq_line(rough_a: tuple[int, int], rough_b: tuple[int, int],
                  k: int, n_arms: int, *,
                  mask: np.ndarray, dt: np.ndarray, skeleton: np.ndarray,
-                 trim_pct: float = 0.20,
+                 trim_pct: float = DEFAULT_ARM_TRIM_PCT,
                  ) -> list[tuple[float, float]] | None:
     """Total-least-squares (SVD) line through BFS skeleton pixels between
     rough_a and rough_b, with `trim_pct` trimmed from each end before
@@ -1505,8 +1549,8 @@ def arm_smoothed_medial_axis(rough_a: tuple[int, int],
                              k: int, n_arms: int, *,
                              mask: np.ndarray, dt: np.ndarray,
                              skeleton: np.ndarray,
-                             trim_pct: float = 0.20,
-                             window: int = 5,
+                             trim_pct: float = DEFAULT_ARM_TRIM_PCT,
+                             window: int = DEFAULT_SMOOTHING_WINDOW,
                              ) -> list[tuple[float, float]] | None:
     """BFS skeleton path, trimmed `trim_pct` on the joint-adjacent side(s)
     only (no trim on endpoint-adjacent sides for arm 0 / last arm), then
@@ -1525,7 +1569,7 @@ def arm_straight_line(rough_a: tuple[int, int],
                       k: int, n_arms: int, *,
                       mask: np.ndarray, dt: np.ndarray,
                       skeleton: np.ndarray,
-                      trim_pct: float = 0.20,
+                      trim_pct: float = DEFAULT_ARM_TRIM_PCT,
                       fit_trim_start_pct: float = 0.0,
                       fit_trim_end_pct: float = 0.0,
                       start_pixel: tuple[float, float] | None = None,
@@ -1820,7 +1864,7 @@ def joint_cubic_bezier_clamped(arm_prev: list[tuple[float, float]],
                                arm_next: list[tuple[float, float]], *,
                                mask: np.ndarray, dt: np.ndarray,
                                anchor: tuple[int, int],
-                               max_handle: float = 70.0,
+                               max_handle: float = DEFAULT_CBEZ_MAX_HANDLE,
                                ) -> dict | None:
     """Cubic Bézier with two independent control points along the arm
     tangent lines, each handle clamped to `max_handle`. Tangent
@@ -2078,7 +2122,8 @@ def joint_fillet_at_intersection(
         (p2a[0] - P_start_trim[0]) * d2x
         + (p2a[1] - P_start_trim[1]) * d2y
     )
-    if bridge_prev_signed < -0.5 or bridge_next_signed < -0.5:
+    if (bridge_prev_signed < FILLET_BRIDGE_REVERSAL_TOLERANCE
+            or bridge_next_signed < FILLET_BRIDGE_REVERSAL_TOLERANCE):
         return None
     # Sample the bridges + Bézier into one continuous polyline.
     samples: list[tuple[float, float]] = []
@@ -2145,7 +2190,7 @@ JOINT_STRATEGIES = {
 # 6cf5740 — change the defaults only with a sweep + visual review.
 DEFAULT_ARM_STRATEGY: tuple[str, dict] = ("smoothed_medial_axis", {})
 DEFAULT_JOINT_STRATEGY: tuple[str, dict] = ("cubic_bezier_clamped",
-                                            {"max_handle": 70.0})
+                                            {"max_handle": DEFAULT_CBEZ_MAX_HANDLE})
 
 
 def _resolve_strategy(entry, default: tuple[str, dict],

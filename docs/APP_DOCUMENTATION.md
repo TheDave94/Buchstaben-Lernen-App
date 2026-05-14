@@ -1986,10 +1986,18 @@ The bake runs three numeric gates per stroke as a regression filter:
 1. **Gate 1 — overshoot.** Count of polyline samples falling outside
    the ink mask. Skip-indexed samples are excluded.
 2. **Gate 2 — reversal.** Count of consecutive-tangent pairs whose
-   cosine is below −0.1 (i.e. ~> 96° turn — direction flip). Skip-
-   indexed samples are excluded.
+   cosine is below `REVERSAL_COSINE_CUTOFF` (default −0.1, ≈ > 96°
+   turn — direction flip). Skip-indexed samples are excluded.
 3. **Gate 3 — max-turn.** Worst angular turn between any two
    consecutive tangents, in degrees.
+
+All tuning constants (gate cutoff, arm trim percent, smoothing window,
+cubic-Bézier max-handle, family-A fillet cap fraction, walk-plateau
+slope threshold, fillet bridge reversal tolerance) are named at the
+top of `scripts/generate_strokes_auto.py` so any sweep over them edits
+one place. `scripts/render_sweep_grid.py` carries the same
+`REVERSAL_COSINE_CUTOFF` named constant so the gate definition
+matches across the bake script and the sweep tooling.
 
 `sharp_meeting`, `sharp_meeting_at_intersection`, and
 `fillet_at_intersection` joints mark their apex window in
