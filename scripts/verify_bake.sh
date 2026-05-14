@@ -88,18 +88,5 @@ if ! diff -q <(echo "$HEAD_HASHES") <(echo "$H1") >/dev/null; then
 fi
 echo "PASS — byte-identity: bake matches HEAD for every letter"
 
-# Lowercase-b firewall: explicitly assert b_l/strokes.json is unchanged.
-# Redundant with byte-identity above, but called out separately so a
-# failure log names the firewall directly.
-B_HEAD_PATH="PrimaeNative/Resources/Letters/Regular/b_l/strokes.json"
-B_BAKE_PATH="$TMP/bake1/Regular/b_l/strokes.json"
-B_HEAD=$(sha256sum "$B_HEAD_PATH" | awk '{print $1}')
-B_BAKE=$(sha256sum "$B_BAKE_PATH" 2>/dev/null | awk '{print $1}' || echo "(no b in bake)")
-if [[ "$B_HEAD" != "$B_BAKE" ]] && [[ "$B_BAKE" != "(no b in bake)" ]]; then
-    echo "FAIL — b firewall: b_l/strokes.json diverged from commit a803d9d" >&2
-    exit 1
-fi
-echo "PASS — b firewall: b_l/strokes.json is unchanged"
-
 echo ""
 echo "All checks passed."
