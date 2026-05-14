@@ -42,7 +42,7 @@ public enum SchriftArt: String, Codable, CaseIterable {
 
     /// The variantID `LetterRepository.loadVariantStrokes` uses to
     /// locate this script's stroke JSON (e.g. "schulschrift" →
-    /// `Letters/<letter>/strokes_schulschrift.json`). nil for
+    /// `Letters/Regular/<letter>/strokes_schulschrift.json`). nil for
     /// `.druckschrift` since it uses the primary `strokes.json`.
     /// To add a new script: add an enum case, return its variantID
     /// here, ship `strokes_<id>.json` alongside the font.

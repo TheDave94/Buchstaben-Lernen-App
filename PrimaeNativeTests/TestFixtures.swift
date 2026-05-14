@@ -33,7 +33,7 @@ final class StubResourceProvider: LetterResourceProviding {
     private static let testLetterDir: URL = {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("StubLetterResources", isDirectory: true)
-        let letterDir = dir.appendingPathComponent("Letters/A", isDirectory: true)
+        let letterDir = dir.appendingPathComponent("Letters/Regular/A", isDirectory: true)
         try? FileManager.default.createDirectory(at: letterDir, withIntermediateDirectories: true)
 
         // Single horizontal stroke matching the test drag path

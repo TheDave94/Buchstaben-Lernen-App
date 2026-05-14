@@ -221,7 +221,15 @@ private extension LetterRepository {
     typealias ValidationResult = (letters: [LetterAsset], issues: [ValidationIssue])
 
     func loadBundledStrokeLettersWithValidation() -> ValidationResult {
-        let urls    = resources.allResourceURLs().filter { $0.pathExtension.lowercased() == "json" }
+        // Scope to the current weight's subtree so future Light bakes
+        // don't double-load every letter as both weights. Hard-coded
+        // to "Regular" until the per-user weight preference lands.
+        let weightFolder = "Regular"
+        let urls    = resources.allResourceURLs().filter {
+            $0.pathExtension.lowercased() == "json"
+            && $0.deletingLastPathComponent().deletingLastPathComponent()
+                .lastPathComponent == weightFolder
+        }
         let decoder = JSONDecoder()
         var issues: [ValidationIssue] = []
 
@@ -276,7 +284,7 @@ private extension LetterRepository {
             // script (e.g. F's two horizontal-bar sequences). Scripts
             // themselves flow through `SchriftArt.bundleVariantID`.
             var variantIDs: [String] = []
-            if bundleHasResource(at: "Letters/\(imageBase)/strokes_variant.json") { variantIDs.append("variant") }
+            if bundleHasResource(at: "Letters/Regular/\(imageBase)/strokes_variant.json") { variantIDs.append("variant") }
             let variants: [String]? = variantIDs.isEmpty ? nil : variantIDs
             return LetterAsset(id: imageBase, name: displayName,
                                baseLetter: baseLetter, letterCase: letterCase,
@@ -421,15 +429,17 @@ extension LetterRepository {
     nonisolated(unsafe) private static var didVerifyBakeMetadata = false
 
     /// Verifies that the bundled Primae font matches the SHA-256
-    /// recorded in `Letters/_meta.json` at bake time. A mismatch means
-    /// the font was updated without re-running `generate_strokes_auto.py`,
-    /// so the strokes.json polylines no longer match the rendered glyph.
-    /// Logs once per process; never fatal.
+    /// recorded in `Letters/Regular/_meta.json` at bake time. A mismatch
+    /// means the font was updated without re-running
+    /// `generate_strokes_auto.py`, so the strokes.json polylines no
+    /// longer match the rendered glyph. Logs once per process; never
+    /// fatal. Hard-coded to Regular until the per-user weight preference
+    /// lands and this can pick the right _meta.json.
     static func verifyBakeMetadataOnce(resources: LetterResourceProviding) {
         guard !didVerifyBakeMetadata else { return }
         didVerifyBakeMetadata = true
 
-        guard let metaURL = resources.resourceURL(for: "Letters/_meta.json"),
+        guard let metaURL = resources.resourceURL(for: "Letters/Regular/_meta.json"),
               let metaData = try? Data(contentsOf: metaURL),
               let meta = try? JSONDecoder().decode(BakeMeta.self, from: metaData)
         else {
@@ -457,8 +467,8 @@ extension LetterRepository {
 
 extension LetterRepository {
     /// Load alternate stroke data from
-    /// `Letters/{letter}/strokes_{variantID}.json`. Probes both the
-    /// suffixed (`_l`) and bare folder names for lowercase letters.
+    /// `Letters/Regular/{letter}/strokes_{variantID}.json`. Probes both
+    /// the suffixed (`_l`) and bare folder names for lowercase letters.
     func loadVariantStrokes(for letter: String, variantID: String) -> LetterStrokes? {
         let folderCandidates: [String]
         if letter == letter.uppercased() && letter != letter.lowercased() {
@@ -470,7 +480,7 @@ extension LetterRepository {
         }
         let paths = folderCandidates.flatMap { folder in
             [
-                "Letters/\(folder)/strokes_\(variantID).json",
+                "Letters/Regular/\(folder)/strokes_\(variantID).json",
                 "\(folder)/strokes_\(variantID).json"
             ]
         }

@@ -84,7 +84,11 @@ from scipy.ndimage import distance_transform_edt
 import skimage.morphology as morph
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_FONT = REPO_ROOT / "design-system/fonts/Primae-Regular.otf"
+FONTS = {
+    "regular": REPO_ROOT / "design-system/fonts/Primae-Regular.otf",
+    "light":   REPO_ROOT / "design-system/fonts/Primae-Light.otf",
+}
+DEFAULT_FONT = FONTS["regular"]
 OUTPUT_BASE = REPO_ROOT / "PrimaeNative/Resources/Letters"
 
 SIZE = 1024
@@ -3184,8 +3188,13 @@ def main() -> int:
         description="Bake anchor-spec strokes.json files.")
     parser.add_argument("letters", nargs="*",
                         help="Letters to bake. Default: every entry in LETTERS.")
-    parser.add_argument("--font", default=str(DEFAULT_FONT),
-                        help="OTF / TTF font path.")
+    parser.add_argument("--weight", choices=["regular", "light", "both"],
+                        default="regular",
+                        help="Font weight to bake. Each weight writes to "
+                             "<out>/<Weight>/<letter>/strokes.json. Default: regular.")
+    parser.add_argument("--font", default=None,
+                        help="Override font path. Implies a single bake "
+                             "into <out>/Regular/ unless --weight=light.")
     parser.add_argument("--out", default=None,
                         help="Output base dir. Default: PrimaeNative/Resources/Letters.")
     parser.add_argument("--no-overwrite", action="store_true",
@@ -3194,47 +3203,61 @@ def main() -> int:
                         help="Save /tmp/centerline_<L>.png overlays.")
     args = parser.parse_args()
 
-    font_path = Path(args.font)
-    if not font_path.exists():
-        print(f"Font not found: {font_path}")
-        return 1
+    if args.weight == "both":
+        weights = ["regular", "light"]
+    else:
+        weights = [args.weight]
+
     out_base = Path(args.out) if args.out else OUTPUT_BASE
     letters = args.letters or list(LETTERS.keys())
 
-    ok = 0
-    fail = 0
-    for letter in letters:
-        out_dir = (out_base / letter
-                   if letter.isupper() or not letter.isalpha()
-                   else out_base / f"{letter}{LOWERCASE_SUFFIX}")
-        out_file = out_dir / "strokes.json"
-        if args.no_overwrite and out_file.exists():
-            print(f"  {letter}: skipped (exists)")
+    overall_fail = 0
+    for weight in weights:
+        if args.font and weight == args.weight:
+            font_path = Path(args.font)
+        else:
+            font_path = FONTS[weight]
+        if not font_path.exists():
+            print(f"Font not found: {font_path}")
+            overall_fail += 1
             continue
-        try:
-            data, _ = bake_letter(letter, font_path)
-        except Exception as e:
-            print(f"  {letter}: FAIL — {e}")
-            fail += 1
-            continue
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_file.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-        n_pts = sum(len(s["checkpoints"]) for s in data["strokes"])
-        print(f"  {letter}: ✓ {len(data['strokes'])} strokes, {n_pts} checkpoints")
-        if args.debug:
+        weight_base = out_base / weight.capitalize()
+        print(f"=== Baking weight={weight} font={font_path.name} → {weight_base} ===")
+        ok = 0
+        fail = 0
+        for letter in letters:
+            out_dir = (weight_base / letter
+                       if letter.isupper() or not letter.isalpha()
+                       else weight_base / f"{letter}{LOWERCASE_SUFFIX}")
+            out_file = out_dir / "strokes.json"
+            if args.no_overwrite and out_file.exists():
+                print(f"  {letter}: skipped (exists)")
+                continue
             try:
-                save_overlay(letter, font_path,
-                             Path(f"/tmp/centerline_{letter}.png"))
+                data, _ = bake_letter(letter, font_path)
             except Exception as e:
-                print(f"  {letter}: overlay FAIL — {e}")
-        ok += 1
-    if ok > 0:
-        try:
-            write_meta(out_base, font_path)
-        except Exception as e:
-            print(f"  _meta.json: FAIL — {e}")
-    print(f"\nDone — {ok} ok, {fail} failed.")
-    return 0 if fail == 0 else 1
+                print(f"  {letter}: FAIL — {e}")
+                fail += 1
+                continue
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+            n_pts = sum(len(s["checkpoints"]) for s in data["strokes"])
+            print(f"  {letter}: ✓ {len(data['strokes'])} strokes, {n_pts} checkpoints")
+            if args.debug:
+                try:
+                    save_overlay(letter, font_path,
+                                 Path(f"/tmp/centerline_{weight}_{letter}.png"))
+                except Exception as e:
+                    print(f"  {letter}: overlay FAIL — {e}")
+            ok += 1
+        if ok > 0:
+            try:
+                write_meta(weight_base, font_path)
+            except Exception as e:
+                print(f"  _meta.json: FAIL — {e}")
+        print(f"  Done {weight} — {ok} ok, {fail} failed.")
+        overall_fail += fail
+    return 0 if overall_fail == 0 else 1
 
 
 if __name__ == "__main__":

@@ -1100,7 +1100,7 @@ private struct ExportSheet: View {
                 Text("JSON in diese Datei kopieren:")
                     .font(.subheadline)
                     .foregroundStyle(Color.inkSoft)
-                Text("Letters/\(letterName)/strokes.json")
+                Text("Letters/Regular/\(letterName)/strokes.json")
                     .font(.system(.body, design: .monospaced))
                     .bold()
 
