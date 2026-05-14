@@ -7,6 +7,41 @@ private let repoLogger = Logger(
     category: "LetterRepository"
 )
 
+/// Active font weight for stroke loading. Picks the subtree under
+/// `Letters/<weight>/` to read polylines from. Letters whose Light
+/// strokes.json is missing fall back to Regular at load time so a
+/// partial Light bundle is shippable.
+public enum FontWeight: String, CaseIterable {
+    case regular
+    case light
+
+    /// On-disk subfolder name (`Letters/Regular/...`, `Letters/Light/...`).
+    var folder: String {
+        switch self {
+        case .regular: return "Regular"
+        case .light:   return "Light"
+        }
+    }
+
+    /// Bundled font file inside `Resources/Fonts/`.
+    var fontFile: String {
+        switch self {
+        case .regular: return "Primae-Regular.otf"
+        case .light:   return "Primae-Light.otf"
+        }
+    }
+}
+
+private let fontWeightPreferenceKey = "de.flamingistan.primae.fontWeight"
+
+/// Current user-preferred weight. Defaults to `.regular` (the
+/// production-ready bake). `.light` is partial — letters whose Light
+/// strokes.json is missing fall back at load time.
+func currentFontWeight() -> FontWeight {
+    let raw = UserDefaults.standard.string(forKey: fontWeightPreferenceKey) ?? "regular"
+    return FontWeight(rawValue: raw) ?? .regular
+}
+
 protocol LetterResourceProviding {
     var bundle: Bundle { get }
     var searchBundles: [Bundle] { get }
@@ -221,14 +256,43 @@ private extension LetterRepository {
     typealias ValidationResult = (letters: [LetterAsset], issues: [ValidationIssue])
 
     func loadBundledStrokeLettersWithValidation() -> ValidationResult {
-        // Scope to the current weight's subtree so future Light bakes
-        // don't double-load every letter as both weights. Hard-coded
-        // to "Regular" until the per-user weight preference lands.
-        let weightFolder = "Regular"
-        let urls    = resources.allResourceURLs().filter {
+        let activeWeight = currentFontWeight()
+        let fallbackWeight: FontWeight = .regular
+        let otherWeightFolders = Set(FontWeight.allCases
+            .filter { $0 != activeWeight }
+            .map { $0.folder })
+        let allJSONURLs = resources.allResourceURLs().filter {
             $0.pathExtension.lowercased() == "json"
-            && $0.deletingLastPathComponent().deletingLastPathComponent()
-                .lastPathComponent == weightFolder
+        }
+        // Accept URLs that are either under the active weight's subtree
+        // OR have no weight subtree at all (test fixtures, legacy
+        // layouts). Reject URLs in any other weight's subtree.
+        func isInOtherWeight(_ url: URL) -> Bool {
+            url.pathComponents.contains(where: otherWeightFolders.contains)
+        }
+        var urls = allJSONURLs.filter { !isInOtherWeight($0) }
+
+        // Fallback: for any letter folder under the FALLBACK subtree
+        // (Regular) that isn't yet covered by the active weight's
+        // subtree, splice in the Regular URL. Lets a partial Light
+        // bundle ship — letters whose Light spec isn't tuned fall back
+        // silently to the Regular polyline.
+        if activeWeight != fallbackWeight {
+            let coveredFolderNames = Set(urls.map {
+                $0.deletingLastPathComponent().lastPathComponent
+            })
+            let fallbackURLs = allJSONURLs.filter { url in
+                url.pathComponents.contains(fallbackWeight.folder)
+                && !coveredFolderNames.contains(
+                    url.deletingLastPathComponent().lastPathComponent)
+            }
+            let fallbackLetters = fallbackURLs.map {
+                $0.deletingLastPathComponent().lastPathComponent
+            }
+            urls.append(contentsOf: fallbackURLs)
+            if !fallbackLetters.isEmpty {
+                repoLogger.info("FontWeight=\(activeWeight.rawValue, privacy: .public) bundle is partial; \(fallbackLetters.count, privacy: .public) letters fell back to \(fallbackWeight.rawValue, privacy: .public): \(fallbackLetters.joined(separator: ","), privacy: .public)")
+            }
         }
         let decoder = JSONDecoder()
         var issues: [ValidationIssue] = []
@@ -284,7 +348,10 @@ private extension LetterRepository {
             // script (e.g. F's two horizontal-bar sequences). Scripts
             // themselves flow through `SchriftArt.bundleVariantID`.
             var variantIDs: [String] = []
-            if bundleHasResource(at: "Letters/Regular/\(imageBase)/strokes_variant.json") { variantIDs.append("variant") }
+            if bundleHasResource(at: "Letters/\(activeWeight.folder)/\(imageBase)/strokes_variant.json")
+               || bundleHasResource(at: "Letters/\(fallbackWeight.folder)/\(imageBase)/strokes_variant.json") {
+                variantIDs.append("variant")
+            }
             let variants: [String]? = variantIDs.isEmpty ? nil : variantIDs
             return LetterAsset(id: imageBase, name: displayName,
                                baseLetter: baseLetter, letterCase: letterCase,
@@ -428,37 +495,44 @@ extension LetterRepository {
 
     nonisolated(unsafe) private static var didVerifyBakeMetadata = false
 
-    /// Verifies that the bundled Primae font matches the SHA-256
-    /// recorded in `Letters/Regular/_meta.json` at bake time. A mismatch
-    /// means the font was updated without re-running
-    /// `generate_strokes_auto.py`, so the strokes.json polylines no
-    /// longer match the rendered glyph. Logs once per process; never
-    /// fatal. Hard-coded to Regular until the per-user weight preference
-    /// lands and this can pick the right _meta.json.
+    /// Verifies that each bundled Primae font matches the SHA-256
+    /// recorded in `Letters/<Weight>/_meta.json` at bake time. A
+    /// mismatch means the font was updated without re-running
+    /// `generate_strokes_auto.py`, so that weight's strokes.json
+    /// polylines no longer match the rendered glyph. Runs once per
+    /// process; never fatal — logs each weight's status independently.
     static func verifyBakeMetadataOnce(resources: LetterResourceProviding) {
         guard !didVerifyBakeMetadata else { return }
         didVerifyBakeMetadata = true
 
-        guard let metaURL = resources.resourceURL(for: "Letters/Regular/_meta.json"),
+        for weight in [FontWeight.regular, .light] {
+            verifyWeight(weight, resources: resources)
+        }
+    }
+
+    private static func verifyWeight(_ weight: FontWeight,
+                                     resources: LetterResourceProviding) {
+        guard let metaURL = resources.resourceURL(
+                for: "Letters/\(weight.folder)/_meta.json"),
               let metaData = try? Data(contentsOf: metaURL),
               let meta = try? JSONDecoder().decode(BakeMeta.self, from: metaData)
         else {
-            repoLogger.debug("Bake metadata absent — skipping font-hash check.")
+            repoLogger.debug("\(weight.rawValue, privacy: .public) bake metadata absent — skipping font-hash check.")
             return
         }
         let fontFile = (meta.fontPath as NSString).lastPathComponent
         guard let fontURL = resources.resourceURL(for: "Fonts/\(fontFile)"),
               let fontData = try? Data(contentsOf: fontURL)
         else {
-            repoLogger.debug("Bundled font \(fontFile, privacy: .public) not found — skipping hash check.")
+            repoLogger.debug("Bundled font \(fontFile, privacy: .public) not found — skipping hash check for \(weight.rawValue, privacy: .public).")
             return
         }
         let digest = SHA256.hash(data: fontData)
             .map { String(format: "%02x", $0) }.joined()
         if digest != meta.fontSha256 {
-            repoLogger.warning("Bundled font \(fontFile, privacy: .public) SHA-256 mismatch: bundle=\(digest, privacy: .public) meta=\(meta.fontSha256, privacy: .public). Re-run scripts/generate_strokes_auto.py — baked polylines no longer match the rendered glyph.")
+            repoLogger.warning("Bundled font \(fontFile, privacy: .public) SHA-256 mismatch: bundle=\(digest, privacy: .public) meta=\(meta.fontSha256, privacy: .public). Re-run scripts/generate_strokes_auto.py --weight \(weight.rawValue, privacy: .public).")
         } else {
-            repoLogger.debug("Bake font hash verified.")
+            repoLogger.debug("\(weight.rawValue, privacy: .public) bake font hash verified.")
         }
     }
 }
@@ -467,8 +541,9 @@ extension LetterRepository {
 
 extension LetterRepository {
     /// Load alternate stroke data from
-    /// `Letters/Regular/{letter}/strokes_{variantID}.json`. Probes both
-    /// the suffixed (`_l`) and bare folder names for lowercase letters.
+    /// `Letters/<Weight>/{letter}/strokes_{variantID}.json`. Probes the
+    /// active weight first, then Regular as fallback. Probes both the
+    /// suffixed (`_l`) and bare folder names for lowercase letters.
     func loadVariantStrokes(for letter: String, variantID: String) -> LetterStrokes? {
         let folderCandidates: [String]
         if letter == letter.uppercased() && letter != letter.lowercased() {
@@ -478,11 +553,16 @@ extension LetterRepository {
         } else {
             folderCandidates = [letter]                    // ß / specials
         }
-        let paths = folderCandidates.flatMap { folder in
-            [
-                "Letters/Regular/\(folder)/strokes_\(variantID).json",
-                "\(folder)/strokes_\(variantID).json"
-            ]
+        let active = currentFontWeight()
+        let weightCandidates: [FontWeight] = active == .regular
+            ? [.regular] : [active, .regular]
+        let paths = weightCandidates.flatMap { w in
+            folderCandidates.flatMap { folder in
+                [
+                    "Letters/\(w.folder)/\(folder)/strokes_\(variantID).json",
+                    "\(folder)/strokes_\(variantID).json"
+                ]
+            }
         }
         let decoder = JSONDecoder()
         for path in paths {
