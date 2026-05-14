@@ -137,12 +137,20 @@
 </div>
 <h1>Primae — Manual Test Checklist</h1>
 
-<p>A tickable end-to-end checklist for verifying the iPad app works as</p>
-<p>expected after a fresh build. Open this file on</p>
-<p><a href="https://github.com/TheDave94/Primae/blob/main/docs/TESTING_CHECKLIST.md">github.com/TheDave94/Primae</a></p>
-<p>or in any Markdown previewer (VS Code, Bear, Obsidian) that renders</p>
-<p>GitHub-flavoured checkboxes — every <code>- [ ]</code> becomes a clickable box</p>
-<p>you can tick as you confirm a behaviour.</p>
+<p>A manual end-to-end checklist for verifying the iPad app works as</p>
+<p>expected after a fresh build.</p>
+
+<blockquote>
+<p>**For the interactive (clickable + auto-saving) version, open</p>
+<p><a href="testing_checklist.html"><code>testing_checklist.html</code></a>** directly from</p>
+<p>Finder. GitHub-Markdown checkboxes are only clickable inside</p>
+<p>Issues / PRs / Discussions, NOT inside repo <code>.md</code> files — the</p>
+<p>HTML page has real <code>&lt;input type="checkbox"&gt;</code>es backed by</p>
+<p><code>localStorage</code>, a sticky progress counter, and a "Copy unchecked"</p>
+<p>button that drops the unticked items onto your clipboard ready to</p>
+<p>paste back. Regenerate it after editing this file with</p>
+<p><code>python3 scripts/render_checklist.py</code>.</p>
+</blockquote>
 
 <p>If a box doesn't tick (i.e. a behaviour is broken), copy the</p>
 <p><strong>failure pointer</strong> under that item back to me and I'll cut the</p>
@@ -169,7 +177,7 @@
 <li class="sub"><code>gh run list --repo TheDave94/Primae --limit 3</code> should show <code>success</code> for the SHA.</li>
 <li class="check"><input class="cb" type="checkbox" id="cb-3"><label for="cb-3"><strong>App builds</strong> to the iPad-A16 simulator with <code>xcodebuild build -project Primae/Primae.xcodeproj -scheme Primae -destination "platform=iOS Simulator,name=iPad (A16)" -configuration Debug CODE_SIGNING_ALLOWED=NO</code>.</label></li>
 <li class="check"><input class="cb" type="checkbox" id="cb-4"><label for="cb-4"><strong>App launches</strong> — a paper-cream screen appears with the world rail on the left.</label></li>
-<li class="sub">If broken: check <code>BuchstabenAppApp.swift:MainEntryPoint</code> (the @main entry).</li>
+<li class="sub">If broken: check <code>Primae/Primae/PrimaeApp.swift:MainEntryPoint</code> (the @main entry).</li>
 </ul>
 
 <hr>
@@ -178,7 +186,7 @@
 
 <ul>
 <li class="check"><input class="cb" type="checkbox" id="cb-5"><label for="cb-5"><strong>Home-screen icon</strong> shows the Primae glyph (rounded blue square, white "Aa" wordmark, amber dot top-right).</label></li>
-<li class="sub">If broken: <code>Primae/Primae/Assets.xcassets/AppIcon.appiconset/</code> — re-run <code>python3 scripts/render_icons.py</code> (note: actually <code>gen_appicon.py</code> — see scripts/README).</li>
+<li class="sub">If broken: <code>Primae/Primae/Assets.xcassets/AppIcon.appiconset/</code> — re-run <code>python3 scripts/gen_appicon.py</code>.</li>
 <li class="check"><input class="cb" type="checkbox" id="cb-6"><label for="cb-6"><strong>App display name</strong> under the icon reads <strong>"Primae"</strong> (not "BuchstabenApp" or any prior brand).</label></li>
 <li class="sub">If broken: <code>INFOPLIST_KEY_CFBundleDisplayName</code> build setting in <code>Primae/Primae.xcodeproj/project.pbxproj</code>.</li>
 </ul>
@@ -457,7 +465,7 @@
 <h2>12 · Edge cases</h2>
 
 <ul>
-<li class="check"><input class="cb" type="checkbox" id="cb-106"><label for="cb-106"><strong>Picking a letter without strokes data</strong> (placeholder lowercase like <code>q</code>) auto-skips observe / direct / guided and lands at freeWrite directly. The voiceover still speaks the freeWrite prompt.</label></li>
+<li class="check"><input class="cb" type="checkbox" id="cb-106"><label for="cb-106"><strong>Picking a letter without audio</strong> (any letter outside the demo set <code>A F I K L M O</code>) still runs all four phases, but prompts that would normally play a recording fall back to TTS. (All 59 letters now ship real baked <code>strokes.json</code> — the empty-strokes auto-skip branch is no longer reachable in normal use; if you do encounter it, that's a regression.)</label></li>
 <li class="check"><input class="cb" type="checkbox" id="cb-107"><label for="cb-107"><strong>No internet connection</strong> — every screen still works; no spinners stuck. (The CoreML recognizer is on-device.)</label></li>
 <li class="check"><input class="cb" type="checkbox" id="cb-108"><label for="cb-108"><strong>VoiceOver accessibility</strong> (Settings → Accessibility → VoiceOver) reads the world rail buttons + every Settings toggle correctly. Letter glyphs read as "Aktueller Buchstabe A".</label></li>
 <li class="check"><input class="cb" type="checkbox" id="cb-109"><label for="cb-109"><strong>Dynamic Type</strong> (Settings → Accessibility → Larger Text) — Settings + dashboards scale up; canvas chrome stays at fixed sizes (intentional — the canvas is laid out on a fixed grid).</label></li>

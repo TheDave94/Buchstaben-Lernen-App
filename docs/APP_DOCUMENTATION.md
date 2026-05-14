@@ -81,11 +81,13 @@ casual user is never silently dropped into a degraded condition.
 
 ### 2.1 File tree
 
-#### `App/`
-| File | Lines | Role |
-|------|------:|------|
-| `PrimaeNativeApp.swift` | 24 | Library-side App stub used when the package is run standalone (Previews, swift-test). The shipping iPad host is `Primae/Primae/PrimaeApp.swift` in the Xcode wrapper, which adds the Primae font registration + appearance override on top of this stub. |
-| `ContentView.swift` | 382 | Pre-redesign root, marked `@available(*, deprecated)`. Retained for chrome reference; not instantiated. |
+#### App entry point
+
+The shipping `@main` is `Primae/Primae/PrimaeApp.swift` (in the Xcode
+wrapper), which delegates to either `PrimaeApp.main()` for the
+production app or an empty `TestApp.main()` when running under XCTest.
+The library target has no `App` struct of its own — Previews and
+`swift run` invocations are not currently relied on.
 
 #### `Theme/`
 SwiftUI port of the Primae design tokens (see [`design-system/`](../design-system/) at the repo root for the source-of-truth CSS).
@@ -156,8 +158,8 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | `RecognitionFeedbackView.swift` | 140 | German verbal-only badge for freeWrite recognition. |
 | `CompletionCelebrationOverlay.swift` | small | Stars + "Weiter" button. |
 | `PaperTransferView.swift` | 95 | 3 s reference → 10 s write-on-paper → 3-emoji self-assessment. Speaks each prompt. |
-| `PhaseDotIndicator.swift` / `PhaseIndicatorView.swift` | small | Phase progress visuals. |
-| `LetterPickerBar.swift` / `LetterWheelPicker.swift` / `SequencePickerBar.swift` | small | Letter / word selection chrome. |
+| `PhaseDotIndicator.swift` | small | Phase progress visuals. |
+| `LetterPickerBar.swift` / `LetterWheelPicker.swift` | small | Letter / word selection chrome. |
 | `DebugAudioPanel.swift` | small | DEBUG-only audio tuning sliders. |
 | `StrokeCalibrationOverlay.swift` | 521 | DEBUG calibration UI with per-script persistence. |
 | `PlaybackController.swift` / `AnimationGuideController.swift` / `TransientMessagePresenter.swift` | small | Per-VM controllers built via factories. |
@@ -223,7 +225,6 @@ Notable: `WritingAssessmentTests`, `LetterSchedulerTests`,
 #### `.github/workflows/`
 * `ios-build.yml` — main GitHub Actions runner, macos-26 / Xcode 26.4. Runs `xcodebuild test` on iPad simulator.
 * `ipad-device-test.yml` — self-hosted MacBook physical-device test job.
-* `legacy-build.yml` — historical build job retained for reference.
 
 ### 2.2 Dependency graph
 

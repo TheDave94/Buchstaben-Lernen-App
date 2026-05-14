@@ -32,11 +32,6 @@
 			path = Primae;
 			sourceTree = "<group>";
 		};
-		DBDE50052F6333E40052F95D /* Letters */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Letters;
-			sourceTree = "<group>";
-		};
 		FC232BB4343BDEA478F5E6E5 /* ../PrimaeNativeTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ../PrimaeNativeTests;
@@ -75,7 +70,6 @@
 		DBDE4FA12F632FC30052F95D = {
 			isa = PBXGroup;
 			children = (
-				DBDE50052F6333E40052F95D /* Letters */,
 				DBDE4FAC2F632FC30052F95D /* Primae */,
 				DBDE4FAB2F632FC30052F95D /* Products */,
 				DB8613CE2F6CC57600D508C8 /* Recovered References */,
@@ -108,7 +102,6 @@
 			);
 			fileSystemSynchronizedGroups = (
 				DBDE4FAC2F632FC30052F95D /* Primae */,
-				DBDE50052F6333E40052F95D /* Letters */,
 			);
 			name = Primae;
 			packageProductDependencies = (

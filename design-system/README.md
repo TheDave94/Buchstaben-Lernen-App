@@ -24,8 +24,6 @@ technical spec (no screenshots, no Figma, no live build):
   architecture, pedagogy, copy strings, and canvas semantics).
 - **Repo README** — `https://github.com/TheDave94/Primae`. Useful for
   the demo letter set (A F I K L M O) and the velocity‑driven audio idea.
-- A copy of the doc's most useful extracts is preserved in
-  `_research_notes.md` for offline reference.
 
 Specific colour hexes, spacing scales, surface tints, type ramps, and
 component layouts are **derived choices** rooted in the documented
@@ -38,7 +36,6 @@ by the doc, the choice is annotated inline in `colors_and_type.css`.
 | File / folder | What's in it |
 |---|---|
 | `README.md` | This file — content & visual fundamentals, iconography, manifest |
-| `_research_notes.md` | Distilled facts pulled from the spec doc |
 | `colors_and_type.css` | All design tokens (CSS vars) + semantic type classes |
 | `fonts/` | Webfonts (Playwrite AT bundled; Primae substituted with Nunito — see Caveats) |
 | `assets/` | Logos, world icons, illustrations, app glyph |
