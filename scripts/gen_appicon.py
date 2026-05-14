@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate Buchstaben-Lernen-App icons from the onboarding trace-demo design.
+Generate Primae app icons from the onboarding trace-demo design.
 
 The icon shows the three blue strokes that trace out an "A" — exactly the
 visual a child sees in step 2 of onboarding, just without the ghost glyph
@@ -14,9 +14,11 @@ Produces three 1024x1024 PNGs:
 """
 from PIL import Image, ImageDraw
 import os
+from pathlib import Path
 
 SIZE = 1024
-OUT_DIR = "/opt/repos/Buchstaben-Lernen-App/BuchstabenApp/BuchstabenApp/Assets.xcassets/AppIcon.appiconset"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+OUT_DIR = str(REPO_ROOT / "Primae/Primae/Assets.xcassets/AppIcon.appiconset")
 
 # Onboarding stroke geometry (normalized 0-1) ported verbatim from
 # OnboardingView.swift's AnimatedStrokePath.

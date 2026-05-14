@@ -22,7 +22,7 @@
 >   the v/w fillet apex revisions (HEAD = `joint_fillet_at_intersection`,
 >   v trim_back=24, w trim_back=40).
 >
-> Still open / referenced from `ROADMAP.md`:
+> Still open / referenced from `docs/ROADMAP.md`:
 >
 > - Q-class topology (bowl-with-attached-tail letters: Q, a_l, ä_l, g_l,
 >   q_l, ü_l). Loop-walker `stop_at` extension is the recommended approach

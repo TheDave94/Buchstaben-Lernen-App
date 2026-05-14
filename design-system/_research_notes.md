@@ -1,6 +1,6 @@
-# Research Notes — Buchstaben-Lernen-App
+# Research Notes — Primae
 
-Source: https://github.com/TheDave94/Buchstaben-Lernen-App/blob/main/docs/APP_DOCUMENTATION.md
+Source: https://github.com/TheDave94/Primae/blob/main/docs/APP_DOCUMENTATION.md
 
 ## Product summary
 - iPadOS app for German-speaking 5–6 year-old Austrian Volksschule first-graders to learn handwriting

@@ -40,13 +40,18 @@ python3 scripts/skeleton_audit.py
 python3 scripts/skeleton_audit.py --letters K k --verbose
 ```
 
-### `calibration_to_override.py`
-Suggest a `LETTERS` patch from a hand-calibrated `strokes.json` so
-future regenerations produce the same shape.
+### `render_overlay.py`
+Render a contact-sheet PNG of every letter — glyph in light gray
+overlaid with the bundled `strokes.json` polylines (one colour per
+stroke, start = green dot, end = red dot, stroke index labels).
+Use it to eyeball misalignments after a bake.
 
 ```bash
-python3 scripts/calibration_to_override.py i
+python3 scripts/render_overlay.py
 ```
+
+Output: `tmp_overlays/<letter>.png` + `tmp_overlays/sheet_part*.png`
+(not tracked — `tmp_overlays/` is gitignored).
 
 ### `generate_letter_audio.py`
 ElevenLabs voice generator for letter phonemes, example words, and
@@ -67,6 +72,22 @@ git — pick the favourite voice's files and copy them into
 
 > Phonemes, not letter names. `M` is recorded as "mmmh", not "Em" — the
 > Anlauttabelle approach used in Austrian Volksschule 1. Klasse.
+
+### `generate_prompts.py`
+ElevenLabs generator for the 13 static prompt MP3s the child hears
+during normal practice (phase entries, praise tiers, paper-transfer
+cues, retrieval question). Runs across the same 10 voices as
+`generate_letter_audio.py` so a voice can be picked alongside the
+letter audio. The shipped MP3s live at
+`PrimaeNative/Resources/Prompts/<key>.mp3`; filenames match
+`PromptPlayer.PromptKey.rawValue`. Until generated, `PromptPlayer`
+falls back to `AVSpeechSynthesizer`.
+
+```bash
+export ELEVENLABS_API_KEY=...
+python3 scripts/generate_prompts.py                              # full inventory
+python3 scripts/generate_prompts.py --prompt phase_freewrite     # audition one
+```
 
 ### `gen_colorsets.py`
 Regenerate the design-token Asset Catalog colorsets from a hex table
@@ -99,6 +120,19 @@ python3 scripts/gen_appicon.py
 
 Output: `Primae/Primae/Assets.xcassets/AppIcon.appiconset/`
 (`AppIcon.png`, `AppIcon-dark.png`, `AppIcon-tinted.png`).
+
+### `render_checklist.py`
+Regenerate `docs/testing_checklist.html` from the canonical
+Markdown source `docs/TESTING_CHECKLIST.md`. The HTML page carries
+real `<input type="checkbox">`es backed by `localStorage`, a sticky
+progress counter, and a "Copy unchecked" button. Run after editing
+the Markdown source.
+
+```bash
+python3 scripts/render_checklist.py
+```
+
+Output: `docs/testing_checklist.html`.
 
 ## Git hooks
 

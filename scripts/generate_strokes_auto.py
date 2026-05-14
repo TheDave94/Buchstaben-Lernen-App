@@ -2688,10 +2688,16 @@ def save_overlay(letter: str, font_path: Path, out_path: Path) -> None:
 
 def write_meta(out_base: Path, font_path: Path) -> None:
     """Write `_meta.json` so consumers can detect a font swap and
-    trigger a re-bake."""
+    trigger a re-bake. `fontPath` is stored repo-relative so the file
+    is byte-identical across developer machines; falls back to the
+    absolute path if the font lives outside the repo."""
     font_hash = hashlib.sha256(font_path.read_bytes()).hexdigest()
+    try:
+        font_path_str = str(font_path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        font_path_str = str(font_path)
     (out_base / "_meta.json").write_text(json.dumps({
-        "fontPath": str(font_path),
+        "fontPath": font_path_str,
         "fontSha256": font_hash,
         "generator": "generate_strokes_auto.py",
     }, indent=2))

@@ -19,13 +19,11 @@ icon; children can never reach those screens by accident.
 This design system was reverse‑engineered from a single comprehensive
 technical spec (no screenshots, no Figma, no live build):
 
-- **Spec doc** — `https://github.com/TheDave94/Buchstaben-Lernen-App/blob/main/docs/APP_DOCUMENTATION.md`
-  (1714 lines, master's‑thesis technical foundation; the source of truth
-  for architecture, pedagogy, copy strings, and canvas semantics).
-- **Repo README** — `https://github.com/TheDave94/Buchstaben-Lernen-App` —
-  describes an *older* C/C++ SDL3 prototype called "Timestretch" that
-  predates the SwiftUI rewrite the spec doc documents. Useful for the
-  letter set (A F I K L M O) and the velocity‑driven audio idea.
+- **Spec doc** — `https://github.com/TheDave94/Primae/blob/main/docs/APP_DOCUMENTATION.md`
+  (master's‑thesis technical foundation; the source of truth for
+  architecture, pedagogy, copy strings, and canvas semantics).
+- **Repo README** — `https://github.com/TheDave94/Primae`. Useful for
+  the demo letter set (A F I K L M O) and the velocity‑driven audio idea.
 - A copy of the doc's most useful extracts is preserved in
   `_research_notes.md` for offline reference.
 

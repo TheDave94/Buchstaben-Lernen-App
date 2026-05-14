@@ -1894,7 +1894,7 @@ Two stroke kinds coexist:
   would cut whitespace; tip anchors get DT-gradient extension before
   routing (`extend_tip_inward`). The current curve-kind set is just
   `b`; the workstream for `l, t, f, j, r, i` is open and tracked in
-  `ROADMAP.md`.
+  `docs/ROADMAP.md`.
 
 `line` strokes accept optional parallel arrays `"arms"` (length
 `n_anchors - 1`) and `"joints"` (length `n_anchors - 2`). Each entry
@@ -2125,7 +2125,7 @@ in §13. Coverage by primitive class:
   Z + l, v, w, x, z, plus the original primitive-test seeds M N V W b.
 * **BFS-walks-skeleton fallback** (the historical path): everything else,
   including curve-heavy letters and Q-class bowl-with-tail topology
-  pending the workstream noted in `ROADMAP.md` and `STROKE_AUDIT.md`.
+  pending the workstream noted in `docs/ROADMAP.md` and `docs/STROKE_AUDIT.md`.
 
 **Audio:** 7 letters ship recordings (A F I K L M O). The other 52
 folders contain `strokes.json` but no MP3s — phase scaffolding still
@@ -2321,4 +2321,4 @@ Status values: ⏳ pending · 🟡 partial (1–2 voices) · ✅ complete (3 voi
 
 ---
 
-_End of document. Last updated 2026-05-14 against `main` (commit `6eb144d`) after the line-kind stroke workstream — §13 added covering the bake pipeline, ARM_STRATEGIES + JOINT_STRATEGIES registries, multi-stroke machinery, gates / skip-indices, and the visual sweep workflow. Outstanding work lives in `/ROADMAP.md`. The historical four-agent audit that motivated this work lives in `docs/STROKE_AUDIT.md`. Code-level invariants (read before touching fragile code) live separately in `docs/LESSONS.md` — that file is a contributor guardrail, not reference documentation, and is intentionally kept out-of-band so a maintainer reads it in full instead of skimming an appendix._
+_End of document. Last updated 2026-05-14 against `main` (commit `e76d8a5`) after the line-kind stroke workstream — §13 added covering the bake pipeline, ARM_STRATEGIES + JOINT_STRATEGIES registries, multi-stroke machinery, gates / skip-indices, and the visual sweep workflow. Outstanding work lives in `docs/ROADMAP.md`. The historical four-agent audit that motivated this work lives in `docs/STROKE_AUDIT.md`. Code-level invariants (read before touching fragile code) live separately in `docs/LESSONS.md` — that file is a contributor guardrail, not reference documentation, and is intentionally kept out-of-band so a maintainer reads it in full instead of skimming an appendix._

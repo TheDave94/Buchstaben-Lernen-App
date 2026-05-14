@@ -18,7 +18,8 @@ Light + dark hexes come from `design-system/colors_and_type.css`
 import json
 from pathlib import Path
 
-BASE = Path("/opt/repos/Buchstaben-Lernen-App/Primae/Primae/Assets.xcassets/Colors")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+BASE = REPO_ROOT / "Primae/Primae/Assets.xcassets/Colors"
 BASE.mkdir(parents=True, exist_ok=True)
 
 # (name, light_hex, dark_hex, alpha)

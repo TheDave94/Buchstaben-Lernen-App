@@ -34,7 +34,7 @@ For the full developer-grade reference + thesis foundation see
 architecture quick reference, research export schema, and phoneme
 audio guide as Appendices A/B/C).
 Outstanding work, deferred items, and post-thesis ideas live in
-`/ROADMAP.md`.
+`docs/ROADMAP.md`.
 Read `docs/LESSONS.md` before touching `AudioEngine.swift`,
 `StrokeTracker.swift`, or the `load(letter:)` path.
 
