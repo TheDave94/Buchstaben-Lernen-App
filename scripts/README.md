@@ -9,9 +9,19 @@ the bottom.
 
 ### `generate_strokes_auto.py`
 Generate `strokes.json` for every letter from the Primae font's
-rendered glyph centerlines. Walks `LETTER_OVERRIDES` anchors via
-BFS over the skeleton, then runs retrace / spike / lead-in pruning
-to clean BFS artifacts. Coordinates are bbox-relative 0–1.
+rendered glyph centerlines. Reads per-letter specs from the `LETTERS`
+dict at the top of the script — each entry composes one **arm
+primitive** per arm (`chord` / `bfs_raw` / `lsq_line` /
+`smoothed_medial_axis` / `straight_line`) with one **joint primitive**
+per interior corner (`sharp` / `family_a_fillet` / `quadratic_bezier_at_V`
+/ `cubic_bezier_clamped` / `sharp_meeting` /
+`sharp_meeting_at_intersection` / `fillet_at_intersection`). The
+default pair (`smoothed_medial_axis` + `cubic_bezier_clamped`)
+matches the byte-identical line-kind output shipping at `6cf5740` —
+override per-arm or per-joint via the spec's `"arms"` / `"joints"`
+keys. The full pipeline + primitive catalogue + visual-sweep workflow
+is documented in `docs/APP_DOCUMENTATION.md` §13. Coordinates are
+bbox-relative 0–1.
 
 ```bash
 python3 scripts/generate_strokes_auto.py            # all 59 letters
@@ -23,7 +33,7 @@ Output: `PrimaeNative/Resources/Letters/<X>/strokes.json`.
 ### `skeleton_audit.py`
 Per-letter and global diagnostics on the rendered skeletons —
 disconnected components, spurs, named-anchor drift. Surfaces
-letters whose `LETTER_OVERRIDES` anchors won't resolve cleanly.
+letters whose `LETTERS` anchors won't resolve cleanly.
 
 ```bash
 python3 scripts/skeleton_audit.py
@@ -31,8 +41,8 @@ python3 scripts/skeleton_audit.py --letters K k --verbose
 ```
 
 ### `calibration_to_override.py`
-Suggest a `LETTER_OVERRIDES` patch from a hand-calibrated
-`strokes.json` so future regenerations produce the same shape.
+Suggest a `LETTERS` patch from a hand-calibrated `strokes.json` so
+future regenerations produce the same shape.
 
 ```bash
 python3 scripts/calibration_to_override.py i
@@ -112,10 +122,14 @@ git commit --no-verify
 
 ## Adding a new letter
 
-1. Add a `LETTER_OVERRIDES` entry in `generate_strokes_auto.py`,
-   then run it for the new letter:
+1. Add a `LETTERS[letter]` entry in `generate_strokes_auto.py`
+   (start by copying the closest already-shipped letter's spec; see
+   `docs/APP_DOCUMENTATION.md` §13.2 for the spec shape and §13.8 for
+   the full authoring loop), then run it for the new letter:
    `python3 scripts/generate_strokes_auto.py X`. Review the output
-   against the Volksschule-1.-Klasse Druckschrift worksheet.
+   against the Volksschule-1.-Klasse Druckschrift worksheet, and use
+   the visual sweep workflow (`docs/APP_DOCUMENTATION.md` §13.7) for
+   any geometric tunable that has multiple plausible values.
 2. `python3 scripts/generate_letter_audio.py --letter X` — auditions
    all bundled voices for the phoneme. Pick one, copy its files into
    `PrimaeNative/Resources/Letters/X/`.

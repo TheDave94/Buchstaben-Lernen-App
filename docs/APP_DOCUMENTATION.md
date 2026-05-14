@@ -203,7 +203,7 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | `SettingsView.swift` | 111 | Schriftart / ordering / freeform / paper-transfer / Anzeige (Geisterbuchstabe) / study-enrolment / restart-onboarding. |
 
 #### `Resources/`
-* `Letters/<X>/strokes.json` — 26 uppercase + 26 lowercase + Ä Ö Ü ß. Demo set (A F I K L M O) plus full alphabet placeholders for completion.
+* `Letters/<X>/strokes.json` — 26 uppercase + 26 lowercase + Ä Ö Ü ß = 59 letter folders. Every letter has a real baked `strokes.json` produced by `scripts/generate_strokes_auto.py` (see §13). Audio is still demo-scoped (see below).
 * `Letters/<X>/strokes_variant.json` — alternate stroke order (uppercase F, H, lowercase r).
 * `Letters/<X>/strokes_schulschrift.json` — Schreibschrift script strokes for the demo letters.
 * `Letters/<X>/<X><n>.mp3` — recorded letter-name + phoneme audio variants.
@@ -1737,9 +1737,13 @@ Round-4 added contract tests for the recent fixes:
   Grundschrift, Vereinfachte Ausgangsschrift, and Schulausgangsschrift
   are scaffolded for future work but won't render without a font drop.
 * "Full alphabet coverage" — 26 uppercase + 26 lowercase + Ä Ö Ü ß
-  have stroke folders, but only 7 letters (A F I K L M O) ship full
-  audio + calibrated checkpoints. The other letters render as glyphs
-  but the empty-strokes path skips observe and direct.
+  all have a real baked `strokes.json` (the bake pipeline in §13 has
+  shipped line-kind geometry for E F H I L T X Z + l v w x z plus
+  multi-stroke A, with M N V W b as the original primitive-test seeds;
+  remaining letters use the BFS-derived fallback path). **Audio**
+  ships for 7 letters only (A F I K L M O); the other 52 letters
+  render fine but fall back to TTS for any prompt that would normally
+  use a recording.
 
 ---
 
@@ -1821,6 +1825,243 @@ Souberman, Eds.). Harvard University Press.
 
 ---
 
+## 13. Stroke generation pipeline
+
+The `strokes.json` files the app loads from `Resources/Letters/<X>/`
+are baked offline by `scripts/generate_strokes_auto.py` from the
+**rendered glyph** of `Primae-Regular.otf` (or another bundled font
+for variant scripts). The pipeline is what every shipped letter goes
+through. This section documents the architecture as of `main`; the
+historical four-agent audit that motivated the current arm/joint
+primitive split lives in `docs/STROKE_AUDIT.md`.
+
+### 13.1 Pipeline at a glance
+
+For each letter `X`:
+
+1. **Rasterise.** `rasterize(letter, font_path)` draws the glyph at
+   `RASTER_SIZE` (1024×1024) and returns a binary mask of the ink.
+2. **Distance transform.** `scipy.ndimage.distance_transform_edt`
+   produces a per-pixel `dt` (distance to nearest non-ink pixel) used
+   for medial-axis snapping, end-distance-from-outline targeting, and
+   gate analyses.
+3. **Skeletonise.** `skimage.morphology.skeletonize` produces a
+   deterministic 1-pixel-wide centerline. The Swift loader prefers
+   this baked skeleton over any runtime-derived version (commit
+   `77f1c22`); the bake-only path means the Swift side never re-derives
+   the centerline at app launch.
+4. **Author spec.** `LETTERS[letter]` (in `generate_strokes_auto.py`)
+   declares each stroke as either `{"kind": "line", "anchors": [...]}`
+   (chord-based composition through arm/joint primitives) or
+   `{"path": [...]}` (Dijkstra-on-DT centerline routing through the
+   ink — used for curved strokes like `b`'s bowl).
+5. **Resolve anchors.** Each named anchor (`TL`, `BC`, `MR`, `T`,
+   `UPPER_TOUCH`, etc.) resolves to a pixel via `resolve_anchor`. Names
+   are font-independent — adding a new font requires zero per-letter
+   tweaking. The bake aborts loudly if any anchor fails to resolve.
+6. **Synthesise centerline.** For `line` strokes, run the arm and joint
+   primitives (§13.3, §13.4) to produce a continuous polyline through
+   the resolved anchors. For `path` strokes, route Dijkstra-on-DT
+   between consecutive anchors.
+7. **Resample.** `resample_uniform` resamples each stroke's polyline
+   to a fixed checkpoint count.
+8. **Gates.** Three numeric gates filter regressions: overshoot
+   (samples leaving the mask), reversal (cosine-flip between adjacent
+   tangents), and max-turn. Skip-index sets bypass gates at known
+   discontinuities (apex windows for sharp/fillet joints — see §13.6).
+9. **Write JSON.** Per-letter `strokes.json` lands in
+   `PrimaeNative/Resources/Letters/<X>/`. The Swift loader reads it
+   directly; nothing is re-derived at runtime.
+
+### 13.2 Stroke spec architecture (`LETTERS` dict)
+
+The `LETTERS` dict at the top of `generate_strokes_auto.py` is the
+**authoritative spec table**. It replaces the old `LETTER_OVERRIDES`
+name from the May audit — the dict now carries full per-stroke
+construction specs, not just override coordinates. Each entry is a
+list of `StrokeSpec` dicts in the order the child traces them.
+
+Two stroke kinds coexist:
+
+* **`{"kind": "line", "anchors": [a0, a1, …, an]}`** — chord-based
+  composition. The polyline visits each anchor in order; for each
+  consecutive pair `(a_k, a_k+1)` an **arm primitive** (§13.3)
+  synthesises an arm polyline, and for each interior anchor `a_k`
+  (`0 < k < n`) a **joint primitive** (§13.4) decides how the two
+  adjacent arms meet.
+* **`{"path": [a0, a1, …, an]}`** — Dijkstra-on-distance-transform
+  centerline routing. Used for curved strokes where straight chords
+  would cut whitespace; tip anchors get DT-gradient extension before
+  routing (`extend_tip_inward`). The current curve-kind set is just
+  `b`; the workstream for `l, t, f, j, r, i` is open and tracked in
+  `ROADMAP.md`.
+
+`line` strokes accept optional parallel arrays `"arms"` (length
+`n_anchors - 1`) and `"joints"` (length `n_anchors - 2`). Each entry
+is either:
+
+* `None` — use the default strategy (`smoothed_medial_axis` arm /
+  `cubic_bezier_clamped` joint with `max_handle=70`).
+* `"strategy_name"` — named strategy with default parameters.
+* `{"strategy": "name", **params}` — named strategy with per-slot
+  parameter overrides.
+
+The default pair is what M / N / V / W (initial primitive-test seeds)
+ship; the line-kind workstream's subsequent letters override per-slot.
+
+### 13.3 Arm primitives (`ARM_STRATEGIES`)
+
+Five strategies are registered. Each takes the rough anchor pixels at
+both ends, the arm index `k`, and the total `n_arms`, plus the mask /
+dt / skeleton fields. Each returns a list of `(x, y)` polyline points.
+
+| Strategy | What it does | When to use |
+|---|---|---|
+| `chord` | Straight chord between the two rough anchors. 2-point polyline. | Tracer-test placeholder; not used by any shipped letter. |
+| `bfs_raw` | BFS skeleton path, no smoothing. | Tracer-test placeholder. |
+| `lsq_line` | Total-least-squares (SVD) line through trimmed BFS pixels; projects both endpoints onto the fit. | Replaced by `straight_line`; retained for byte-identity reference. |
+| `smoothed_medial_axis` | BFS path with joint-adjacent trimming + moving-average smoothing. **Default.** | What M / N / V / W shipped at commit `6cf5740`; default for any letter that doesn't override. |
+| `straight_line` | LSQ fit through skeleton pixels, project both endpoints, trim joint-adjacent ends, rasterise. | The line-kind workstream's primary arm. Supports asymmetric LSQ trimming (`fit_trim_start_pct` / `fit_trim_end_pct`), end-point overrides (`start_pixel` / `end_pixel` — used by shared-apex and T-junction pre-passes), and `end_distance_from_outline` (walk the fitted line until the dt target is hit — used for E / F / L bar equidistance). |
+
+The `straight_line` arm's `end_distance_from_outline` option is what
+makes E / F / L's three (or two) horizontal bars terminate at the same
+distance from the right outline, despite the LSQ projection of TR / MR
+/ BR each landing on a slightly different x. Without it, the bars
+would visibly stagger.
+
+### 13.4 Joint primitives (`JOINT_STRATEGIES`)
+
+Seven strategies are registered. Each takes the two arms' polylines,
+plus the mask / dt / anchor fields, and returns a joint dict carrying
+the sampled polyline segments plus metadata (V, P_end, P_start,
+trim_back, skip_indices, …) or `None` if the joint can't be
+constructed (parallel arms, reversal, etc.).
+
+| Strategy | What it does | When to use |
+|---|---|---|
+| `sharp` | Hard angular meeting at the natural arm endpoint, no smoothing. | Tracer-test placeholder. |
+| `family_a_fillet` | Inscribed band-side fillet at the medial-axis joint, angle-adaptive apex offset. | Pre-line-kind construction (commit `4d6c286`); retained for byte-identity reference. |
+| `quadratic_bezier_at_V` | Quadratic Bézier with control point at the math intersection V of the two fitted lines, exact C1 tangent continuity. | Pre-line-kind construction (commit `5592b63`); reference. |
+| `cubic_bezier_clamped` | Cubic Bézier with both control points clamped at most `max_handle=70` toward V. | **Default joint.** What M / N / V / W ship. |
+| `sharp_meeting` | True angular meeting at V (the math intersection of the two arm-line extrapolations), with skip-index marking around the apex sample. | Convex peaks where the V sits inside the cap rounding; used by line-kind M / N / V / W / Z. |
+| `sharp_meeting_at_intersection` | As above, plus the bridge segments from each arm's natural endpoint to V are explicitly sampled. The contiguous out-of-mask window at the apex is recorded in `skip_indices`. | Default for line-kind multi-corner letters (M N V W Z). |
+| `fillet_at_intersection` | Cubic Bézier arc between two trim points offset `trim_back` pixels back from V along each arm's tangent. Both Bézier control points sit at V, so the arc interpolates with tangent continuity at the seams and the midpoint sits 3/4 of the way from the chord-midpoint to V. Bridges from each natural arm endpoint to the trim point keep the chain continuous. | Apex placement for lowercase `v` (trim_back=24) and `w` (trim_back=40 uniform across all three joints). The `trim_back` parameter is what controls how far the rounded apex sits above the cap rounding — verified visually via the sweep workflow (§13.7). |
+
+### 13.5 Multi-stroke letter machinery
+
+Several letter-level pre-passes run before per-stroke construction so
+that strokes sharing anchors meet exactly:
+
+* **Per-letter anchor cache** (commit `f18cae5`). Same anchor name
+  referenced across multiple strokes resolves once, snaps once, and is
+  reused. Required for any multi-stroke letter where two strokes meet
+  at a named anchor.
+* **Letter-level line-fit pre-pass.** Each `straight_line` arm's LSQ
+  fit (BFS path → SVD → centroid + direction) is computed once and
+  cached by `(stroke_idx, arm_idx)`. Downstream shared-apex and
+  T-junction pre-computes consume this cache.
+* **Shared-apex pre-compute** (commit `e9cd0f3`). When the same anchor
+  name terminates two `straight_line` arms across different strokes
+  (e.g. `A`'s shared `T` apex on both BL→T and BR→T diagonals), the
+  pre-compute intersects the two fitted arm lines and injects the
+  intersection point as `start_pixel` / `end_pixel` into each arm via
+  `arm_straight_line`'s override hook. Both strokes terminate on the
+  exact same pixel.
+* **T-junction pre-compute** (commit `e9cd0f3`). When a crossbar's
+  endpoint lands on another stroke's centerline (`A`'s ML/MR meeting
+  the diagonals; `E`/`F`/`H`/`L`/`T`'s horizontal arms meeting the
+  vertical stem), the pre-compute finds the perpendicular foot of the
+  crossbar endpoint on the host stroke's centerline and injects it as
+  the arm's start/end pixel. Specified per-arm with
+  `"t_junction_start": <host_stroke_idx>` / `"t_junction_end": …`.
+
+These three pre-passes are what made the line-kind bulk commit
+(`bd4e2d5`) possible: E / F / H / I / L / T / X / Z + l / v / w / x / z
+restructured to multi-stroke specs with T-junctioned crossbars while
+keeping M / N / V / W / b byte-identical.
+
+### 13.6 Gates, skip-indices, determinism
+
+The bake runs three numeric gates per stroke as a regression filter:
+
+1. **Gate 1 — overshoot.** Count of polyline samples falling outside
+   the ink mask. Skip-indexed samples are excluded.
+2. **Gate 2 — reversal.** Count of consecutive-tangent pairs whose
+   cosine is below −0.1 (i.e. ~> 96° turn — direction flip). Skip-
+   indexed samples are excluded.
+3. **Gate 3 — max-turn.** Worst angular turn between any two
+   consecutive tangents, in degrees.
+
+`sharp_meeting`, `sharp_meeting_at_intersection`, and
+`fillet_at_intersection` joints mark their apex window in
+`skip_indices`. For concave valleys (W's BL / BR, V's BC) the window
+collapses to just the apex sample; for convex peaks where V sits
+inside the cap rounding, it's a contiguous out-of-mask window around
+the apex. Without skip-indices, gates 1 + 2 would flag every sharp
+meeting as a reversal artefact.
+
+The bake is **deterministic**: byte-identical output across repeated
+runs is a release-blocking property. A 3-trial byte-identical hash
+check is the standard verification before any commit that touches the
+script.
+
+There's also a `b` **firewall** — at commit `a803d9d` `b`'s
+`strokes.json` was hand-validated as correct. Every subsequent script
+change is required to produce byte-identical `b/strokes.json`. Any
+diff to `b` flags a regression in shared code before it lands.
+
+### 13.7 Visual sweep workflow
+
+For any geometric or visual question with finite candidate options or
+a single tunable parameter, the project's authoring rule is
+**render-and-compare BEFORE proposing or committing a specific
+construction**. The full workflow is captured in `CLAUDE.md` under
+"Visual sweep workflow"; the short version:
+
+1. Identify candidates (typically 4–6, including current `main` as
+   baseline).
+2. Implement each, bake the target letters.
+3. Apply numeric gates as a filter; gate-failing candidates get a
+   labelled `SKIPPED` cell in the grid.
+4. Render PNGs of passing candidates at iPad-equivalent style (dark
+   ink ~#2D3748, red polyline ~#E53E3E).
+5. Build a contact-sheet grid (rows = letters, columns = candidates)
+   at `/tmp/sweep/grid.png`.
+6. Present to the author. Wait for selection.
+7. Set chosen value, bake, commit, push as a **single** commit.
+
+Numeric gates filter; visual judgment decides. This is what shipped
+the `v` / `w` `joint_fillet_at_intersection` trim_back values
+(24 / 40 respectively) after the cubic-bezier-clamped sweep produced a
+flat-bottomed U instead of the desired diagonal V.
+
+### 13.8 Authoring a new letter
+
+Operationally, adding or revising a letter is:
+
+1. **Add a `LETTERS[letter]` entry** with anchors and per-stroke
+   `arms` / `joints` overrides. Start from the closest already-shipped
+   letter; copy its spec.
+2. **Run the bake** for just that letter:
+   `python3 scripts/generate_strokes_auto.py X`.
+3. **Verify gates pass** in stdout; if not, debug via
+   `scripts/skeleton_audit.py X` (per-letter skeleton diagnostics).
+4. **Render a sweep grid** comparing the new letter against any
+   plausible alternatives (`/tmp/sweep/grid.png`).
+5. **Visual review** — eyeball the grid; pick the best column.
+6. **Bake the chosen variant for all affected letters**, verify
+   byte-identity for unchanged letters, verify the `b` firewall, run
+   the 3-trial determinism check.
+7. **Single commit** capturing the spec change + regenerated
+   `strokes.json` files + a commit message describing the construction
+   choice (and what was ruled out and why).
+
+The script is at `scripts/generate_strokes_auto.py`. Auxiliary tooling
+(skeleton audit, calibration → override, app-icon, letter-audio) is
+in `scripts/` and documented in `scripts/README.md`.
+
+---
+
 # Appendix A — Architecture Quick Reference
 
 _Compact one-page architecture map. Drilldown lives in §2 above._
@@ -1876,7 +2117,20 @@ Children can't read fluently yet, so every numeric metric the data model capture
 
 ## Letters with full support
 
-A, F, I, K, L, M, O — both `strokes.json` and audio. Lowercase a–z + Ä Ö Ü ß have placeholder folders; they render the glyph but skip phase scaffolding when the stroke array is empty (see ROADMAP.md §T1 for the active-set lowercase plan).
+**Geometry (strokes.json):** all 59 letters (26 upper + 26 lower + Ä Ö Ü ß)
+ship a real baked `strokes.json`, produced by the bake pipeline documented
+in §13. Coverage by primitive class:
+
+* **Line-kind via arm/joint primitives** (§13.3): A, E, F, H, I, L, T, X,
+  Z + l, v, w, x, z, plus the original primitive-test seeds M N V W b.
+* **BFS-walks-skeleton fallback** (the historical path): everything else,
+  including curve-heavy letters and Q-class bowl-with-tail topology
+  pending the workstream noted in `ROADMAP.md` and `STROKE_AUDIT.md`.
+
+**Audio:** 7 letters ship recordings (A F I K L M O). The other 52
+folders contain `strokes.json` but no MP3s — phase scaffolding still
+runs (the empty-strokes-skip branch is no longer triggered), and prompts
+that would normally play a recording fall back to TTS.
 
 ---
 
@@ -2067,4 +2321,4 @@ Status values: ⏳ pending · 🟡 partial (1–2 voices) · ✅ complete (3 voi
 
 ---
 
-_End of document. Last updated 2026-04-29 against `main` after the ROADMAP_V5 implementation pass + tier-1/2 branch merge. Outstanding work lives in `/ROADMAP.md`. Code-level invariants (read before touching fragile code) live separately in `docs/LESSONS.md` — that file is a contributor guardrail, not reference documentation, and is intentionally kept out-of-band so a maintainer reads it in full instead of skimming an appendix._
+_End of document. Last updated 2026-05-14 against `main` (commit `6eb144d`) after the line-kind stroke workstream — §13 added covering the bake pipeline, ARM_STRATEGIES + JOINT_STRATEGIES registries, multi-stroke machinery, gates / skip-indices, and the visual sweep workflow. Outstanding work lives in `/ROADMAP.md`. The historical four-agent audit that motivated this work lives in `docs/STROKE_AUDIT.md`. Code-level invariants (read before touching fragile code) live separately in `docs/LESSONS.md` — that file is a contributor guardrail, not reference documentation, and is intentionally kept out-of-band so a maintainer reads it in full instead of skimming an appendix._

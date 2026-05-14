@@ -1,4 +1,41 @@
 # Stroke Audit — Authoritative Synthesis
+
+> **Status as of 2026-05-14 (post line-kind workstream).** This document is
+> retained as a historical record of the May 2026 four-agent audit that
+> launched the bake-pipeline rewrite. Most of its recommendations have
+> shipped:
+>
+> - **Phase 1 (Critical letters)** — I, Z, U, M, V, B, E, H, i ship-blockers
+>   all fixed; verified in the calibrator and committed to
+>   `LETTER_OVERRIDES`.
+> - **Phase 1.5 (Bake skeletonize)** — `generate_strokes_auto.py` now bakes
+>   `skimage.skeletonize` centerlines into `strokes.json`; the Swift loader
+>   prefers baked over runtime-derived (commits 77f1c22, 956bc5c, ce5f2f1,
+>   034afa0).
+> - **Phase 2 (Code bugs)** — `rawGlyphStrokes` CalibrationStore bypass,
+>   `checkpointRadius` unit conversion, `phonemeAudioFiles` cache loss all
+>   shipped.
+> - **Phase 3 (Line-kind primitives)** — replaced the BFS-walks-skeleton
+>   approach for straight-stroke letters with the arm/joint primitive
+>   architecture documented in `APP_DOCUMENTATION.md` §13. M N V W A b
+>   (initial), then E F H I L T X Z + l v w x z (line-kind bulk), then
+>   the v/w fillet apex revisions (HEAD = `joint_fillet_at_intersection`,
+>   v trim_back=24, w trim_back=40).
+>
+> Still open / referenced from `ROADMAP.md`:
+>
+> - Q-class topology (bowl-with-attached-tail letters: Q, a_l, ä_l, g_l,
+>   q_l, ü_l). Loop-walker `stop_at` extension is the recommended approach
+>   from §Phase 2 work-list item 3 below.
+> - Curve workstream for line-deferred letters (`t f j r i`) and the
+>   resolver work for `Y y ß`.
+>
+> The audit's analysis stays accurate for the as-of-May-2026 state; treat
+> it as background reading for anyone picking up Q-class topology or the
+> curve workstream.
+
+---
+
 *Generated 2026-05-08. Synthesised from four parallel audit agents; all critical claims verified against source files.*
 
 <!--

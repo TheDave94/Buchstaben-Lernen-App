@@ -35,14 +35,14 @@ line numbers — line numbers drift, names don't.
   - `gh run list --repo TheDave94/Primae --limit 3` should show `success` for the SHA.
 - [ ] **App builds** to the iPad-A16 simulator with `xcodebuild build -project Primae/Primae.xcodeproj -scheme Primae -destination "platform=iOS Simulator,name=iPad (A16)" -configuration Debug CODE_SIGNING_ALLOWED=NO`.
 - [ ] **App launches** — a paper-cream screen appears with the world rail on the left.
-  - If broken: check `BuchstabenAppApp.swift:MainEntryPoint` (the @main entry).
+  - If broken: check `Primae/Primae/PrimaeApp.swift:MainEntryPoint` (the @main entry).
 
 ---
 
 ## 1 · App icon & display name
 
 - [ ] **Home-screen icon** shows the Primae glyph (rounded blue square, white "Aa" wordmark, amber dot top-right).
-  - If broken: `Primae/Primae/Assets.xcassets/AppIcon.appiconset/` — re-run `python3 scripts/render_icons.py` (note: actually `gen_appicon.py` — see scripts/README).
+  - If broken: `Primae/Primae/Assets.xcassets/AppIcon.appiconset/` — re-run `python3 scripts/gen_appicon.py`.
 - [ ] **App display name** under the icon reads **"Primae"** (not "BuchstabenApp" or any prior brand).
   - If broken: `INFOPLIST_KEY_CFBundleDisplayName` build setting in `Primae/Primae.xcodeproj/project.pbxproj`.
 
@@ -273,7 +273,7 @@ line numbers — line numbers drift, names don't.
 
 ## 12 · Edge cases
 
-- [ ] **Picking a letter without strokes data** (placeholder lowercase like `q`) auto-skips observe / direct / guided and lands at freeWrite directly. The voiceover still speaks the freeWrite prompt.
+- [ ] **Picking a letter without audio** (any letter outside the demo set `A F I K L M O`) still runs all four phases, but prompts that would normally play a recording fall back to TTS. (All 59 letters now ship real baked `strokes.json` — the empty-strokes auto-skip branch is no longer reachable in normal use; if you do encounter it, that's a regression.)
 - [ ] **No internet connection** — every screen still works; no spinners stuck. (The CoreML recognizer is on-device.)
 - [ ] **VoiceOver accessibility** (Settings → Accessibility → VoiceOver) reads the world rail buttons + every Settings toggle correctly. Letter glyphs read as "Aktueller Buchstabe A".
 - [ ] **Dynamic Type** (Settings → Accessibility → Larger Text) — Settings + dashboards scale up; canvas chrome stays at fixed sizes (intentional — the canvas is laid out on a fixed grid).
