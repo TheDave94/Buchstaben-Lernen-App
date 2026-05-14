@@ -297,10 +297,33 @@ LETTERS: dict[str, list[StrokeSpec]] = {
     # foot at the baseline. Line-kind primitives can only approximate
     # the curl by routing the polyline through a low-dt valley region,
     # which traces visually wrong. l belongs in the curve workstream
-    # alongside t f j r i (all of which share the "mostly straight +
-    # small curve at one end" architecture). Author all five together
-    # when the curve workstream lands. l_l/strokes.json on disk is the
-    # bd4e2d5 version and will be overwritten then.
+    # alongside t f j r (all of which share the "mostly straight +
+    # small curve at one end" architecture). i landed first as the
+    # warmup (no curl, just stem + dot).
+    "i": [
+        # Stem and dot are disconnected ink components — TC/BC would
+        # span the bbox including the dot. STEM_T / STEM_B target the
+        # largest mask component only, so the stem polyline starts at
+        # the actual stem top (just below the dot) and ends at the
+        # baseline. DOT_C is the centroid of the disconnected component
+        # above the main body.
+        {"kind": "line", "anchors": ["STEM_T", "STEM_B"],
+         "arms": ["straight_line"]},
+        {"kind": "dot", "anchor": "DOT_C"},
+    ],
+    "l": [
+        # Stem-then-curl as a single smoothed-medial-axis stroke. The
+        # BFS skeleton walk from STEM_T (ascender top cap apex) to
+        # CURL_TIP_R (skeleton endpoint at the foot curl, bottom-right
+        # of the glyph) traces the natural medial axis through the
+        # bend; arm_smoothed_medial_axis adds moving-average smoothing
+        # over the staircase quantisation. No analytic curve primitive
+        # needed — the medial axis already has the right shape per the
+        # SWEEP 2 visual review (skeleton-smooth was the clear winner
+        # over cubic Bézier and quadratic Bézier variants).
+        {"kind": "line", "anchors": ["STEM_T", "CURL_TIP_R"],
+         "arms": ["smoothed_medial_axis"]},
+    ],
     "v": [
         # Plain straight_line arms — LSQ fit through the natural medial
         # axis gives the diagonal direction without LSQ-trim tilt; the
@@ -748,6 +771,140 @@ def extend_tip_inward(pixel: tuple[int, int], dt: np.ndarray,
     return col, row
 
 
+def _mask_components(mask: np.ndarray) -> list[np.ndarray]:
+    """Return masks of every 4-connected ink component, largest first."""
+    from scipy.ndimage import label
+    labelled, n = label(mask)
+    if n == 0:
+        return []
+    comps = [(labelled == lbl) for lbl in range(1, n + 1)]
+    comps.sort(key=lambda c: int(c.sum()), reverse=True)
+    return comps
+
+
+def _largest_component_bbox(mask: np.ndarray
+                            ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Return (mask of largest connected component, its bbox). Used to
+    exclude disconnected tittles (i / j dot) from anchor resolution."""
+    comps = _mask_components(mask)
+    if not comps:
+        raise ValueError("No ink")
+    main = comps[0]
+    return main, bbox_from_mask(main)
+
+
+def _stem_extremum(mask: np.ndarray, top: bool) -> tuple[int, int]:
+    """STEM_T / STEM_B — like TC / BC but only over the largest connected
+    component (drops disconnected tittles). For i / j the dot is a
+    separate component and must not contribute to the stem top."""
+    main, main_bbox = _largest_component_bbox(mask)
+    return _column_extremum_near_center(main, main_bbox, top=top)
+
+
+def _dot_centroid_above(mask: np.ndarray) -> tuple[int, int]:
+    """DOT_C — centroid of the smaller-than-main disconnected component
+    whose centroid sits above the largest component's centroid.
+    Defined for i and j. Raises ValueError if no qualifying dot found."""
+    comps = _mask_components(mask)
+    if len(comps) < 2:
+        raise ValueError("No disconnected dot component")
+    main = comps[0]
+    mrows, mcols = np.where(main)
+    main_cy = float(mrows.mean())
+    for comp in comps[1:]:
+        rows, cols = np.where(comp)
+        cy = float(rows.mean())
+        cx = float(cols.mean())
+        if cy < main_cy:
+            return int(round(cx)), int(round(cy))
+    raise ValueError("No tittle component above main body")
+
+
+def _main_skeleton_endpoints(mask: np.ndarray
+                              ) -> list[tuple[int, int]]:
+    """Return (col, row) skeleton endpoints (degree ≤ 1 pixels) on the
+    largest connected mask component. Used by curve-letter anchors
+    that target specific medial-axis terminations (curl tips, arm
+    tips, ascender hook). Tittles / disconnected components are
+    excluded — they have their own DOT_C resolver."""
+    main, _ = _largest_component_bbox(mask)
+    skel = morph.skeletonize(main)
+    H, W = skel.shape
+    eps: list[tuple[int, int]] = []
+    for r in range(H):
+        for c in range(W):
+            if not skel[r, c]:
+                continue
+            n = 0
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    rr, cc = r + dr, c + dc
+                    if (0 <= rr < H and 0 <= cc < W
+                            and skel[rr, cc]):
+                        n += 1
+            if n <= 1:
+                eps.append((c, r))
+    if not eps:
+        raise ValueError("Main skeleton has no endpoints")
+    return eps
+
+
+def _curl_tip_r(mask: np.ndarray) -> tuple[int, int]:
+    """CURL_TIP_R — skeleton endpoint maximising row + col (i.e. the
+    most bottom-right termination). Used for l, t — letters whose
+    foot curl ends at the lower-right of the glyph. Tie-break by max
+    col then max row."""
+    eps = _main_skeleton_endpoints(mask)
+    return max(eps, key=lambda p: (p[0] + p[1], p[0], p[1]))
+
+
+def _desc_hook_l(mask: np.ndarray) -> tuple[int, int]:
+    """DESC_HOOK_L — skeleton endpoint in the lower half of the main
+    bbox, picking the maximum row, then the minimum col (i.e. the
+    descender-hook termination going down and left). Used for j."""
+    eps = _main_skeleton_endpoints(mask)
+    _, mbbox = _largest_component_bbox(mask)
+    rmin, rmax = mbbox[1], mbbox[3]
+    mid = (rmin + rmax) / 2
+    bottom = [p for p in eps if p[1] > mid]
+    if not bottom:
+        raise ValueError("No skeleton endpoint in lower half")
+    return min(bottom, key=lambda p: (-p[1], p[0]))
+
+
+def _arm_tip_r(mask: np.ndarray) -> tuple[int, int]:
+    """ARM_TIP_R — skeleton endpoint with maximum col among "middle-row"
+    endpoints (excluding the lowest-row and highest-row endpoints).
+    Used for r — the arm at the shoulder. Requires ≥ 3 endpoints
+    on the main skeleton."""
+    eps = _main_skeleton_endpoints(mask)
+    if len(eps) < 3:
+        raise ValueError("ARM_TIP_R needs ≥ 3 skeleton endpoints, "
+                          f"main component has {len(eps)}")
+    top_ep = min(eps, key=lambda p: (p[1], p[0]))
+    bot_ep = max(eps, key=lambda p: (p[1], -p[0]))
+    mid_eps = [p for p in eps if p != top_ep and p != bot_ep]
+    if not mid_eps:
+        raise ValueError("No mid-row skeleton endpoint")
+    return max(mid_eps, key=lambda p: (p[0], -p[1]))
+
+
+def _asc_top(mask: np.ndarray) -> tuple[int, int]:
+    """ASC_TOP — skeleton endpoint in the upper half of the main bbox,
+    picking the minimum row, then the maximum col (i.e. the
+    ascender-hook termination going up and right). Used for f."""
+    eps = _main_skeleton_endpoints(mask)
+    _, mbbox = _largest_component_bbox(mask)
+    rmin, rmax = mbbox[1], mbbox[3]
+    mid = (rmin + rmax) / 2
+    top = [p for p in eps if p[1] < mid]
+    if not top:
+        raise ValueError("No skeleton endpoint in upper half")
+    return min(top, key=lambda p: (p[1], -p[0]))
+
+
 def resolve_anchor(name: str, mask: np.ndarray,
                    bbox: tuple[int, int, int, int],
                    dt: np.ndarray | None = None) -> tuple[int, int]:
@@ -777,6 +934,20 @@ def resolve_anchor(name: str, mask: np.ndarray,
         pos = _bowl_stem_touch(mask, bbox, upper=True)
     elif name == "LOWER_TOUCH":
         pos = _bowl_stem_touch(mask, bbox, upper=False)
+    elif name == "STEM_T":
+        pos = _stem_extremum(mask, top=True)
+    elif name == "STEM_B":
+        pos = _stem_extremum(mask, top=False)
+    elif name == "DOT_C":
+        pos = _dot_centroid_above(mask)
+    elif name == "CURL_TIP_R":
+        pos = _curl_tip_r(mask)
+    elif name == "DESC_HOOK_L":
+        pos = _desc_hook_l(mask)
+    elif name == "ARM_TIP_R":
+        pos = _arm_tip_r(mask)
+    elif name == "ASC_TOP":
+        pos = _asc_top(mask)
     else:
         raise KeyError(f"Unknown anchor name: {name!r}")
     if dt is not None and name in TIP_ANCHORS:
@@ -2483,6 +2654,28 @@ def bake_letter(letter: str, font_path: Path
                     t_junction_cache[(s_idx, k_, side)] = (ix, iy)
 
     for i, spec in enumerate(specs, start=1):
+        if spec.get("kind") == "dot":
+            # Tittle / period: a single-checkpoint stroke at one anchor.
+            # No arms, no joints, no skeleton walk — the child taps it.
+            anchor_name = spec.get("anchor")
+            if not isinstance(anchor_name, str):
+                raise ValueError(
+                    f"{letter} stroke {i}: 'dot' kind needs 'anchor' key")
+            pos = _cached_resolve(anchor_name, "dot", None)
+            stroke_pixel_chains.append([pos])
+            resolved_anchors.append([(anchor_name, pos)])
+            joint_arcs_per_stroke.append([])
+            smoothed_paths_per_stroke.append([])
+            sharp_skip_indices_per_stroke.append(set())
+            json_strokes.append({
+                "id": i,
+                "checkpoints": [
+                    {"x": round(pixel_to_rel(pos, bbox)[0], 4),
+                     "y": round(pixel_to_rel(pos, bbox)[1], 4)},
+                ],
+                "comment": "dot",
+            })
+            continue
         if "kind" in spec:
             kind = spec["kind"]
             names = spec.get("anchors") or []
