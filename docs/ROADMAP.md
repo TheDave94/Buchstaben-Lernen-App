@@ -122,17 +122,6 @@ If any of those fails on device, the fix is a tweak in `Coordinator.pencilIntera
 
 ---
 
-### D-bake — Stroke bake known issues (deferred)
-
-Quality issues surfaced during the curve workstream that were intentionally deferred for batched rework rather than addressing inline. None of them blocks a letter from shipping; each is a candidate for opportunistic fix when authoring a structurally similar letter.
-
-- ~~**b (Regular + Light)** — bowl construction gives `rv=1 maxturn=135°`. Frozen at firewall commit `a803d9d`.~~ **Resolved** alongside the B / D / P / R / p / q bowl batch — b now bakes deterministically from `LETTERS` via `STEM_CENTER` + `STEM_BOWL_TOP/BOT` anchors + in-arm literal-endpoint substitution; the firewall has been unlocked and the `verify_bake.sh` b-firewall block removed.
-- **r (Regular)** — hook geometry never visually approved with the new `BRANCH_R = lowest-row mid-row branch` criterion (commit `e804430`). Shipped on architectural reasoning, not visual confirmation. Verify visually when authoring U / u (which share Prima's "continuous stem + secondary stroke merging" structural pattern, per the analysis logged in `e804430`).
-- **A F H (Light only)** — `s1 maxturn 45° → 90°` regression vs Regular at the crossbar / junction stroke. No `ov` or extra `rv` — still passable but worth re-tuning. Address in the consolidated Light-tuning session after Regular is structurally complete.
-- **K (Light only)** — `s1 maxturn 45° → 90°` regression of the same flavour as A F H. Same fold-in.
-
----
-
 ## 5. POST-THESIS
 
 These are worthwhile additions once the thesis ships. None of them is a thesis-blocker.
