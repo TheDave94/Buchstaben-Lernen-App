@@ -437,13 +437,69 @@ LETTERS: dict[str, list[StrokeSpec]] = {
         {"kind": "line", "anchors": ["TR", "BL"],
          "arms": ["straight_line"]},
     ],
-    # y deferred — BC resolves to the descender bottom because the
-    # column-extremum resolver finds the lowest pixel in the glyph,
-    # not the x-height baseline. Reopen with either:
-    # (a) a baseline-aware anchor resolver that distinguishes
-    # x-height from descender extent, or
-    # (b) a new anchor (e.g. DESC_BOTTOM) and a curve-kind stroke
-    # for the descender hook.
+    "Y": [
+        # Three straight strokes meeting at a single shared apex — the
+        # diagonals enter the stem at BRANCH_R (lowest-row mid-row
+        # skeleton junction, here the only junction at (491, 488)).
+        # STEM_B reaches the column-extremum bottom of the glyph just
+        # past the skeleton terminus. ARM_TIP_TL / ARM_TIP_TR pick the
+        # upper-half min-col / max-col endpoints; existing ASC_TOP
+        # would pick min-row + max-col which falls on the left tip
+        # for Y (mins on row) and on the right tip for y (mins on
+        # row), so the resolver is inconsistent — the explicit *_TL /
+        # *_TR resolvers are stable across both.
+        {"kind": "line", "anchors": ["ARM_TIP_TL", "BRANCH_R"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["ARM_TIP_TR", "BRANCH_R"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["BRANCH_R", "STEM_B"],
+         "arms": ["straight_line"]},
+    ],
+    "y": [
+        # Same V-arms-meet-stem decomposition as Y, but the stem is a
+        # descender that slants left from the join to DESC_HOOK_L. The
+        # diagonals are straight; the descender follows the medial
+        # axis (slight curve toward the hook bottom). BRANCH_R lands
+        # at the diagonals-descender junction (496, 685) — the
+        # criterion ignores the top-tip cluster artifacts because
+        # they're skeletonization burr near the rounded caps, not
+        # the lowest mid-row branch.
+        {"kind": "line", "anchors": ["ARM_TIP_TL", "BRANCH_R"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["ARM_TIP_TR", "BRANCH_R"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["BRANCH_R", "DESC_HOOK_L"],
+         "arms": ["smoothed_medial_axis"]},
+    ],
+    "K": [
+        # Prima's K is two disjoint components: a vertical stem (left)
+        # and a V-arms shape (right) — they don't touch in the raster.
+        # The arms' skeleton is a single path from upper-right tip
+        # through a left vertex down to lower-right tip; the vertex
+        # is the V-meeting-point at the leftmost-col skeleton pixel
+        # of the right component. Stem via LSTEM_T / LSTEM_B (top /
+        # bottom endpoints of left component's skeleton); arms via
+        # RTIP_T → RVERTEX → RTIP_B as two straight segments.
+        {"kind": "line", "anchors": ["LSTEM_T", "LSTEM_B"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["RTIP_T", "RVERTEX"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["RVERTEX", "RTIP_B"],
+         "arms": ["straight_line"]},
+    ],
+    "k": [
+        # Same disjoint-component structure as K. Stem extends from
+        # ascender top (row 245) down to baseline, V-arms sit at
+        # x-height (rows 418-712) — both as separate components.
+        # Identical decomposition: stem + upper diagonal + lower
+        # diagonal, anchored via LSTEM_* and RTIP_* / RVERTEX.
+        {"kind": "line", "anchors": ["LSTEM_T", "LSTEM_B"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["RTIP_T", "RVERTEX"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["RVERTEX", "RTIP_B"],
+         "arms": ["straight_line"]},
+    ],
     "z": [
         {"kind": "line", "anchors": ["TL", "TR", "BL", "BR"],
          "arms": ["straight_line"] * 3,
@@ -990,6 +1046,140 @@ def _xbar_r(mask: np.ndarray) -> tuple[int, int]:
     return max(_mid_row_endpoints(mask), key=lambda p: (p[0], -p[1]))
 
 
+def _top_tip_l(mask: np.ndarray) -> tuple[int, int]:
+    """ARM_TIP_TL — skeleton endpoint in the upper half of the main
+    bbox with minimum col; tie-break by minimum row. Lands at the
+    top-left arm tip for Y / y (mirror of ARM_TIP_TR). Differs from
+    ASC_TOP (which picks min-row + max-col) and from ARM_TIP_R (which
+    needs ≥ 3 mid-row endpoints — Y/y's top tips are at the bbox top,
+    not mid-row)."""
+    eps = _main_skeleton_endpoints(mask)
+    _, mbbox = _largest_component_bbox(mask)
+    rmin, rmax = mbbox[1], mbbox[3]
+    mid = (rmin + rmax) / 2
+    top = [p for p in eps if p[1] < mid]
+    if not top:
+        raise ValueError("No skeleton endpoint in upper half")
+    return min(top, key=lambda p: (p[0], p[1]))
+
+
+def _top_tip_r(mask: np.ndarray) -> tuple[int, int]:
+    """ARM_TIP_TR — skeleton endpoint in the upper half of the main
+    bbox with maximum col; tie-break by minimum row. Lands at the
+    top-right arm tip for Y / y."""
+    eps = _main_skeleton_endpoints(mask)
+    _, mbbox = _largest_component_bbox(mask)
+    rmin, rmax = mbbox[1], mbbox[3]
+    mid = (rmin + rmax) / 2
+    top = [p for p in eps if p[1] < mid]
+    if not top:
+        raise ValueError("No skeleton endpoint in upper half")
+    return max(top, key=lambda p: (p[0], -p[1]))
+
+
+def _components_by_centroid_col(mask: np.ndarray) -> list[np.ndarray]:
+    """Return all 4-connected ink components sorted by centroid col
+    (left-to-right). Used by letters with disjoint stem + arm
+    components (K, k — stem and V-arms don't touch in Prima)."""
+    comps = _mask_components(mask)
+    def cx(comp: np.ndarray) -> float:
+        _, cols = np.where(comp)
+        return float(cols.mean()) if cols.size else 0.0
+    return sorted(comps, key=cx)
+
+
+def _skel_endpoints_of(comp: np.ndarray) -> list[tuple[int, int]]:
+    """Endpoint pixels (degree ≤ 1) of the skeleton of a single
+    component mask. Shared by L* / R* resolvers."""
+    skel = morph.skeletonize(comp)
+    H, W = skel.shape
+    eps: list[tuple[int, int]] = []
+    for r in range(H):
+        for c in range(W):
+            if not skel[r, c]:
+                continue
+            n = 0
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    rr, cc = r + dr, c + dc
+                    if (0 <= rr < H and 0 <= cc < W
+                            and skel[rr, cc]):
+                        n += 1
+            if n <= 1:
+                eps.append((c, r))
+    return eps
+
+
+def _lstem_t(mask: np.ndarray) -> tuple[int, int]:
+    """LSTEM_T — top skeleton endpoint of the LEFTMOST component
+    (sorted by centroid col). Used for K / k whose stem and V-arms
+    are disjoint in Prima — the stem is a separate component sitting
+    left of the arms. For single-component letters this falls back
+    to the main skeleton's top endpoint."""
+    comps = _components_by_centroid_col(mask)
+    if not comps:
+        raise ValueError("No ink")
+    eps = _skel_endpoints_of(comps[0])
+    if not eps:
+        raise ValueError("Left component has no skeleton endpoints")
+    return min(eps, key=lambda p: (p[1], p[0]))
+
+
+def _lstem_b(mask: np.ndarray) -> tuple[int, int]:
+    """LSTEM_B — bottom skeleton endpoint of the LEFTMOST component.
+    Counterpart to LSTEM_T."""
+    comps = _components_by_centroid_col(mask)
+    if not comps:
+        raise ValueError("No ink")
+    eps = _skel_endpoints_of(comps[0])
+    if not eps:
+        raise ValueError("Left component has no skeleton endpoints")
+    return max(eps, key=lambda p: (p[1], -p[0]))
+
+
+def _rtip_t(mask: np.ndarray) -> tuple[int, int]:
+    """RTIP_T — top skeleton endpoint of the RIGHTMOST component.
+    Used for K / k upper arm tip (the V-arms component sits right
+    of the stem in Prima)."""
+    comps = _components_by_centroid_col(mask)
+    if not comps:
+        raise ValueError("No ink")
+    eps = _skel_endpoints_of(comps[-1])
+    if not eps:
+        raise ValueError("Right component has no skeleton endpoints")
+    return min(eps, key=lambda p: (p[1], p[0]))
+
+
+def _rtip_b(mask: np.ndarray) -> tuple[int, int]:
+    """RTIP_B — bottom skeleton endpoint of the RIGHTMOST component.
+    Used for K / k lower arm tip."""
+    comps = _components_by_centroid_col(mask)
+    if not comps:
+        raise ValueError("No ink")
+    eps = _skel_endpoints_of(comps[-1])
+    if not eps:
+        raise ValueError("Right component has no skeleton endpoints")
+    return max(eps, key=lambda p: (p[1], -p[0]))
+
+
+def _rvertex(mask: np.ndarray) -> tuple[int, int]:
+    """RVERTEX — leftmost-col skeleton pixel of the RIGHTMOST component.
+    Used for K / k arm join — the V-arms component traces a single
+    skeleton path from upper-right tip through this vertex to lower-
+    right tip; the vertex is the point at which the two arms meet."""
+    comps = _components_by_centroid_col(mask)
+    if not comps:
+        raise ValueError("No ink")
+    skel = morph.skeletonize(comps[-1])
+    rows, cols = np.where(skel)
+    if rows.size == 0:
+        raise ValueError("Right component has empty skeleton")
+    idx = int(cols.argmin())
+    return int(cols[idx]), int(rows[idx])
+
+
 def _asc_top(mask: np.ndarray) -> tuple[int, int]:
     """ASC_TOP — skeleton endpoint in the upper half of the main bbox,
     picking the minimum row, then the maximum col (i.e. the
@@ -1187,6 +1377,20 @@ def resolve_anchor(name: str, mask: np.ndarray,
         pos = _branch_r(mask)
     elif name == "BRANCH_T":
         pos = _branch_t(mask)
+    elif name == "ARM_TIP_TL":
+        pos = _top_tip_l(mask)
+    elif name == "ARM_TIP_TR":
+        pos = _top_tip_r(mask)
+    elif name == "LSTEM_T":
+        pos = _lstem_t(mask)
+    elif name == "LSTEM_B":
+        pos = _lstem_b(mask)
+    elif name == "RTIP_T":
+        pos = _rtip_t(mask)
+    elif name == "RTIP_B":
+        pos = _rtip_b(mask)
+    elif name == "RVERTEX":
+        pos = _rvertex(mask)
     else:
         raise KeyError(f"Unknown anchor name: {name!r}")
     if dt is not None and name in TIP_ANCHORS:
