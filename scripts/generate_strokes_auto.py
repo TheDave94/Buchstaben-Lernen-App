@@ -142,6 +142,14 @@ WALK_PLATEAU_SLOPE_THRESHOLD = 0.20
 # reversal. More negative = more permissive.
 FILLET_BRIDGE_REVERSAL_TOLERANCE = -0.5
 
+# BRANCH_T overlap. After the curvature detector finds the hook→stem
+# transition pixel, walk this many pixels further along the skeleton
+# toward DESC_HOOK_L before returning. Puts the seam between the
+# hook stroke and the stem stroke in established-vertical territory
+# so the visual handoff is kink-free. 0 = land at the first vertical
+# pixel; higher = deeper into the stem section.
+BRANCH_OVERLAP_PX = 15
+
 
 # -----------------------------------------------------------------------------
 # Hand-authored stroke decompositions
@@ -323,6 +331,57 @@ LETTERS: dict[str, list[StrokeSpec]] = {
         # over cubic Bézier and quadratic Bézier variants).
         {"kind": "line", "anchors": ["STEM_T", "CURL_TIP_R"],
          "arms": ["smoothed_medial_axis"]},
+    ],
+    "r": [
+        # Two strokes: a vertical stem and a hook curve that joins
+        # back onto the stem. ASC_TOP / DESC_HOOK_L are used in lieu
+        # of STEM_T / STEM_B because the column-extremum resolvers
+        # don't work for r's off-center stem (STEM_T lands on the
+        # arm top at (556, 418), STEM_B on the arm-side bulge at
+        # (582, 508)). The skeleton-endpoint resolvers correctly pick
+        # the stem's two skeleton terminals at (450, 438) and
+        # (432, 687). Stem uses straight_line so the LSQ fit absorbs
+        # any BFS detour through the branch junction. Hook walks the
+        # medial axis from ARM_TIP_R back to BRANCH_R (the rightmost
+        # mid-row skeleton junction — where the hook joins the stem).
+        {"kind": "line", "anchors": ["ASC_TOP", "DESC_HOOK_L"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["ARM_TIP_R", "BRANCH_R"],
+         "arms": ["smoothed_medial_axis"]},
+    ],
+    "f": [
+        # Three strokes: ascender hook + straight stem + crossbar.
+        # The hook walks ASC_TOP → BRANCH_T via smoothed_medial_axis;
+        # BRANCH_T is curvature-detected as the first skeleton pixel
+        # where the medial axis settles into vertical motion (col-band
+        # ≤ 2 over a 10-px ancestor window). For f this lands at
+        # ~(488, 293), just below the ascender hook curl. The stem
+        # walks BRANCH_T → DESC_HOOK_L via straight_line — LSQ-fits
+        # the BFS path which detours through the crossbar T-junction
+        # (would dip with smoothed_medial_axis; arm_straight_line
+        # absorbs it). DESC_HOOK_L = descender bottom skeleton
+        # endpoint at (442, 890); STEM_B's column-extremum lands
+        # mid-stem and doesn't work for f. Crossbar at x-height,
+        # same construction as t.
+        {"kind": "line", "anchors": ["ASC_TOP", "BRANCH_T"],
+         "arms": ["smoothed_medial_axis"]},
+        {"kind": "line", "anchors": ["BRANCH_T", "DESC_HOOK_L"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["XBAR_L", "XBAR_R"],
+         "arms": ["straight_line"]},
+    ],
+    "j": [
+        # Stem + descender hook as one smoothed_medial_axis stroke. The
+        # main component skeleton walks from the stem-top cap apex
+        # (snap_to_medial_axis maps STEM_T to the nearby skeleton
+        # endpoint at row 440) down through the baseline into the
+        # descender, and bends left at the hook to terminate at
+        # DESC_HOOK_L. Plus a dot stroke for the tittle above
+        # x-height. Same architecture as i (separated dot via DOT_C)
+        # combined with the curve pattern from l.
+        {"kind": "line", "anchors": ["STEM_T", "DESC_HOOK_L"],
+         "arms": ["smoothed_medial_axis"]},
+        {"kind": "dot", "anchor": "DOT_C"},
     ],
     "t": [
         # Stem-then-curl as one continuous smoothed-medial-axis stroke
@@ -930,7 +989,10 @@ def _xbar_r(mask: np.ndarray) -> tuple[int, int]:
 def _asc_top(mask: np.ndarray) -> tuple[int, int]:
     """ASC_TOP — skeleton endpoint in the upper half of the main bbox,
     picking the minimum row, then the maximum col (i.e. the
-    ascender-hook termination going up and right). Used for f."""
+    ascender-hook termination going up and right). Used for f. Also
+    used as r's stem-top because the skeleton endpoint at (450, 438)
+    matches this selection — same upper-half-min-row-max-col rule;
+    "ascender" is a misnomer for r but the geometry is identical."""
     eps = _main_skeleton_endpoints(mask)
     _, mbbox = _largest_component_bbox(mask)
     rmin, rmax = mbbox[1], mbbox[3]
@@ -939,6 +1001,135 @@ def _asc_top(mask: np.ndarray) -> tuple[int, int]:
     if not top:
         raise ValueError("No skeleton endpoint in upper half")
     return min(top, key=lambda p: (p[1], -p[0]))
+
+
+def _skel_junctions(mask: np.ndarray) -> list[tuple[int, int]]:
+    """All skeleton pixels with degree ≥ 3 on the main connected
+    component. Used by BRANCH_R / BRANCH_T resolvers."""
+    main, _ = _largest_component_bbox(mask)
+    skel = morph.skeletonize(main)
+    H, W = skel.shape
+    junctions: list[tuple[int, int]] = []
+    for r in range(H):
+        for c in range(W):
+            if not skel[r, c]:
+                continue
+            n = 0
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    rr, cc = r + dr, c + dc
+                    if 0 <= rr < H and 0 <= cc < W and skel[rr, cc]:
+                        n += 1
+            if n >= 3:
+                junctions.append((c, r))
+    return junctions
+
+
+def _branch_r(mask: np.ndarray) -> tuple[int, int]:
+    """BRANCH_R — lowest-row skeleton branch pixel (degree ≥ 3) in the
+    mid-row range (strictly between the top-most and bottom-most
+    skeleton endpoint rows). Lands at the lower edge of the
+    merge-region between an entering stroke and a continuous stem,
+    i.e. where the stem returns to single-line skeleton width below
+    the merge. Used as the termination anchor for r's hook stroke.
+
+    Generalises to U / u (and any letter with the same pattern: a
+    continuous stem with a secondary stroke entering it and a stem
+    continuation past the merge to a bottom terminal). Justification:
+    a wide merge produces a vertical cluster of branch pixels in the
+    skeleton; the topmost branch is where the entering ink first
+    touches the stem, the bottom-most is where the stem returns to
+    single-line width — visually the latter is where the entering
+    stroke "ends" on the stem."""
+    eps = _main_skeleton_endpoints(mask)
+    top_row = min(e[1] for e in eps)
+    bot_row = max(e[1] for e in eps)
+    junctions = [(c, r) for (c, r) in _skel_junctions(mask)
+                  if top_row < r < bot_row]
+    if not junctions:
+        raise ValueError("No mid-row skeleton junction")
+    return max(junctions, key=lambda p: (p[1], -p[0]))
+
+
+def _branch_t(mask: np.ndarray) -> tuple[int, int]:
+    """BRANCH_T — skeleton pixel marking the transition from a curved
+    hook to a vertical stem section. Walks BFS along the main-component
+    skeleton starting at ASC_TOP, and returns the first pixel whose
+    last 10 ancestors all sit within a 2-px column band (i.e. the
+    medial axis has settled into purely vertical motion). For f this
+    lands just below the ascender hook where the stem starts; for
+    letters whose hook is short or absent, falls back to the first
+    skeleton junction encountered. Geometry-driven because not every
+    hook→stem transition produces a skeleton branch point."""
+    main, _ = _largest_component_bbox(mask)
+    skel = morph.skeletonize(main)
+    H, W = skel.shape
+    asc = _asc_top(mask)
+
+    from collections import deque
+    parent: dict[tuple[int, int], tuple[int, int] | None] = {asc: None}
+    q = deque([asc])
+    order: list[tuple[int, int]] = [asc]
+    junctions = set(_skel_junctions(mask))
+    while q:
+        x, y = q.popleft()
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                rr, cc = y + dr, x + dc
+                if (0 <= rr < H and 0 <= cc < W and skel[rr, cc]
+                        and (cc, rr) not in parent):
+                    parent[(cc, rr)] = (x, y)
+                    order.append((cc, rr))
+                    q.append((cc, rr))
+
+    WINDOW = 10
+    COL_BAND = 2
+
+    def ancestors(p, n):
+        out = [p]
+        cur = parent.get(p)
+        while cur is not None and len(out) < n:
+            out.append(cur)
+            cur = parent.get(cur)
+        return out
+
+    # Walk in BFS order (skipping ASC_TOP itself); find first pixel
+    # whose 10-ancestor column-band ≤ COL_BAND — that's where the
+    # medial axis first settles into vertical motion.
+    transition = None
+    for p in order[WINDOW:]:
+        anc = ancestors(p, WINDOW)
+        if len(anc) < WINDOW:
+            continue
+        cols = [a[0] for a in anc]
+        if max(cols) - min(cols) <= COL_BAND:
+            transition = p
+            break
+    if transition is None:
+        # Fallback: first junction encountered in BFS order (= crossbar
+        # T-junction for f). Better than failing the bake outright.
+        for p in order:
+            if p in junctions and p != asc:
+                return p
+        raise ValueError("Could not locate hook-to-stem transition")
+    # Overlap shift: walk further down the skeleton toward
+    # DESC_HOOK_L so the seam between the hook stroke and the stem
+    # stroke lands in established-vertical territory rather than at
+    # the first vertical pixel (avoids visible kinks where the hook
+    # is still slightly curving).
+    if BRANCH_OVERLAP_PX > 0:
+        try:
+            desc = _desc_hook_l(mask)
+        except ValueError:
+            return transition
+        stem_path = _bfs_skeleton_path(transition, desc, skel)
+        if stem_path is not None and len(stem_path) > BRANCH_OVERLAP_PX:
+            return stem_path[BRANCH_OVERLAP_PX]
+    return transition
 
 
 def resolve_anchor(name: str, mask: np.ndarray,
@@ -988,6 +1179,10 @@ def resolve_anchor(name: str, mask: np.ndarray,
         pos = _xbar_r(mask)
     elif name == "ASC_TOP":
         pos = _asc_top(mask)
+    elif name == "BRANCH_R":
+        pos = _branch_r(mask)
+    elif name == "BRANCH_T":
+        pos = _branch_t(mask)
     else:
         raise KeyError(f"Unknown anchor name: {name!r}")
     if dt is not None and name in TIP_ANCHORS:
