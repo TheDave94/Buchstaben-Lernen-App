@@ -1,5 +1,9 @@
 """Anchor-spec stroke generator for Primae.
 
+See `docs/INVARIANTS.md` for the permanent centerline rules — every
+bake must satisfy centerline location, centerline shape, stroke type
+purity, and junction continuity. Apply to every letter, every weight.
+
 Each letter is authored as a list of `StrokeSpec` dicts where each spec
 holds a sequence of pedagogical anchor names. At bake time, anchors
 resolve to font-specific pixel positions on the rasterised glyph and a

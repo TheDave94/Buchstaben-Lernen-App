@@ -1,5 +1,7 @@
 # Roadmap — Primae
 
+See `docs/INVARIANTS.md` for permanent bake invariants — apply to every letter, every weight, every bake.
+
 _Single forward-looking work log. Last updated 2026-05-14 against `main` (commit `6eb144d`). Only items still requiring work appear here — every shipped item has been removed. Shipped items live in commit history._
 
 ---
