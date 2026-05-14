@@ -28,7 +28,11 @@ Endpoint pixel distance = 0; tangent delta ≤ 10°. For consecutive stroke pair
 
 ## Rule 5 — Y-junction continuity
 
-Curved-branch endpoint ≤ 2 px from the trunk's inner edge along the branching row/col; the trunk centerline is unaffected. For Y-junctions flagged in LETTERS. **The branching stroke does NOT land at the trunk's centerline.**
+At every Y-junction, the curved stroke's endpoint and the trunk stroke's endpoint are both the geometric intersection of their centerlines (extended tangentially if needed). The intersection pixel is shared by both polylines.
+
+**Measurement**: gap between the two polylines' shared-end checkpoints = 0 px by construction. Threshold = 0 px (both polylines literally terminate at the same pixel).
+
+**Fallback**: when the two tangent lines are near-parallel (angle < 10°), or the computed intersection lies outside the ink mask, or is more than stem_width away from the nominal anchor row — the implementation falls back to the literal resolved anchor pixel. Both polylines still terminate at the same pixel (gap = 0); only the geometric "intersection" interpretation is approximated. Fallback cases are documented in the bake's debug output for review.
 
 ## Rule 6 — Determinism
 

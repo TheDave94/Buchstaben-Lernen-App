@@ -87,6 +87,20 @@ from fontTools.ttLib import TTFont
 from scipy.ndimage import distance_transform_edt
 import skimage.morphology as morph
 
+# Stem-meeting anchors: their literal resolved pixel is forced as the
+# polyline first/last point so connecting strokes (stem + bowl, bowl +
+# leg) share their endpoint exactly. The skeleton walk snaps to the
+# nearest skeleton pixel for BFS purposes, but the polyline endpoint
+# is the anchor verbatim.
+STEM_MEETING_ANCHORS = frozenset({
+    "STEM_CENTER_T", "STEM_CENTER_B",
+    "STEM_BOWL_TOP", "STEM_BOWL_BOT",
+    "STEM_BOWL_TOP_UPPER", "STEM_BOWL_BOT_LOWER",
+    "WAIST",
+    "BRANCH_T_ON_STEM", "BRANCH_B_ON_STEM",
+})
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FONTS = {
     "regular": REPO_ROOT / "design-system/fonts/Primae-Regular.otf",
@@ -514,8 +528,108 @@ LETTERS: dict[str, list[StrokeSpec]] = {
     # the current line/curve primitives. Reopen with a dedicated
     # curve-kind authoring once Prima reference is consulted.
     "b": [
-        {"path": ["T", "LOWER_TOUCH"]},
-        {"path": ["UPPER_TOUCH", "RIGHT_MID", "LOWER_TOUCH"]},
+        # 1 straight stem + 1 curved bowl. Stem uses STEM_CENTER_T /
+        # STEM_CENTER_B (max-span column's top + bottom rows, spans
+        # the full visible glyph height from cap apex to foot
+        # bottom). Bowl uses BOWL_TOP_TOUCH / BOWL_BOT_TOUCH (first
+        # and last row with ≥2 ink runs — where the bowl first /
+        # last separates from the stem) so the polyline lands at
+        # the visible stem-bowl outline junction, not deep inside
+        # the stem ink. Old hand-tuned b at a803d9d is replaced.
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
+         "arms": ["analytical_line_stem"]},
+        {"kind": "line",
+         "anchors": ["BOWL_TOP_TOUCH", "RIGHT_MID", "BOWL_BOT_TOUCH"],
+         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+    ],
+    "p": [
+        # 1 straight stem + 1 curved bowl. STEM_CENTER from x-height
+        # top through descender to descender bottom. Bowl endpoints
+        # land ON the stem polyline at the bowl-stem junction rows
+        # (skeleton branches at rows 548 / 677), via BRANCH_*_ON_STEM
+        # which pairs the branch row with the stem-center column.
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
+         "arms": ["analytical_line_stem"]},
+        {"kind": "line",
+         "anchors": ["BRANCH_T_ON_STEM", "RIGHT_MID", "BRANCH_B_ON_STEM"],
+         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+    ],
+    "q": [
+        # Mirror of p: stem on RIGHT, bowl on LEFT. STEM_CENTER auto-
+        # picks the right-side stem column (q's max-span). Bowl
+        # anchors via BRANCH_*_ON_STEM since band detection on q has
+        # a 1-row gap from the cap-arc that splits the band wrongly;
+        # skeleton branches at rows 471 / 556 give clean bowl-top
+        # and bowl-bot on the stem polyline.
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
+         "arms": ["analytical_line_stem"]},
+        {"kind": "line",
+         "anchors": ["BRANCH_T_ON_STEM", "LEFT_MID", "BRANCH_B_ON_STEM"],
+         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+    ],
+    "P": [
+        # 1 straight stem + 1 curved bowl. Bowl top starts at the
+        # cap apex (STEM_CENTER_T), arcs through RIGHT_MID, closes
+        # at the skeleton-branch row on the stem (BRANCH_B_ON_STEM).
+        # Both bowl endpoints land ON the stem polyline.
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
+         "arms": ["analytical_line_stem"]},
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "RIGHT_MID", "BRANCH_B_ON_STEM"],
+         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+    ],
+    "R": [
+        # P + a diagonal leg. Bowl bot endpoint at BRANCH_B_ON_STEM
+        # (skeleton-branch row at stem-center col), same point as
+        # the leg's start so the leg polyline begins exactly where
+        # the bowl polyline ends — both ON the stem polyline.
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
+         "arms": ["analytical_line_stem"]},
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "RIGHT_MID", "BRANCH_B_ON_STEM"],
+         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+        {"kind": "line",
+         "anchors": ["BRANCH_B_ON_STEM", "BR"],
+         "arms": ["analytical_line_stem"]},
+    ],
+    "D": [
+        # D's skeleton has no branches (bowl meets stem at TL / BL
+        # corners forming one continuous closed loop). Stem on the
+        # left via STEM_CENTER. Bowl uses TL / BL as intermediate
+        # waypoints between the stem endpoints — BFS dog-legs from
+        # stem-center col straight to RIGHT_MID otherwise; routing
+        # through the TL / BL cap-arc corners gives a smooth arc.
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
+         "arms": ["analytical_line_stem"]},
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "TL", "RIGHT_MID", "BL", "STEM_CENTER_B"],
+         "arms": ["smoothed_medial_axis"] * 4},
+    ],
+    "B": [
+        # 3-stroke: stem + upper bowl + lower bowl. Per David's
+        # drawing: upper bowl's first anchor IS the stem's first
+        # (STEM_CENTER_T) so the polylines share that pixel; lower
+        # bowl's last anchor IS the stem's last (STEM_CENTER_B);
+        # both bowls meet at WAIST on the stem. TOP_BOWL_PEAK_UPPER
+        # forces BFS through the cap-apex route to avoid the
+        # figure-8 shortcut that previously produced a 177° U-turn.
+        # RIGHT_MID_LOWER is the lower bowl's row-bounded right
+        # extent.
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "STEM_CENTER_B"],
+         "arms": ["analytical_line_stem"]},
+        {"kind": "line",
+         "anchors": ["STEM_CENTER_T", "TOP_BOWL_PEAK_UPPER", "WAIST"],
+         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
+        {"kind": "line",
+         "anchors": ["WAIST", "RIGHT_MID_LOWER", "STEM_CENTER_B"],
+         "arms": ["smoothed_medial_axis", "smoothed_medial_axis"]},
     ],
 }
 
@@ -1241,14 +1355,443 @@ def _branch_r(mask: np.ndarray) -> tuple[int, int]:
     touches the stem, the bottom-most is where the stem returns to
     single-line width — visually the latter is where the entering
     stroke "ends" on the stem."""
-    eps = _main_skeleton_endpoints(mask)
-    top_row = min(e[1] for e in eps)
-    bot_row = max(e[1] for e in eps)
+    try:
+        eps = _main_skeleton_endpoints(mask)
+    except ValueError:
+        eps = []
+    _, mbbox = _largest_component_bbox(mask)
+    if (len(eps) >= 2 and
+            (max(e[1] for e in eps) - min(e[1] for e in eps))
+            > 0.5 * (mbbox[3] - mbbox[1])):
+        top_row = min(e[1] for e in eps)
+        bot_row = max(e[1] for e in eps)
+    else:
+        top_row, bot_row = mbbox[1], mbbox[3]
     junctions = [(c, r) for (c, r) in _skel_junctions(mask)
                   if top_row < r < bot_row]
     if not junctions:
         raise ValueError("No mid-row skeleton junction")
     return max(junctions, key=lambda p: (p[1], -p[0]))
+
+
+def _left_edge_endpoints(mask: np.ndarray
+                          ) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Helper: locate the leftmost column whose ink SPANS at least
+    70% of the glyph height (top-to-bottom vertical reach, not total
+    row count). 70% is tight enough to filter out artifact pixels
+    and cap-rounded outer cols whose ink is confined to the middle
+    of the glyph, loose enough that Primae-Light's rounder caps
+    (where max column span tops out at ~76% for P) still qualify.
+    Returns ((col, top_row), (col, bot_row)) at that column's
+    topmost and bottommost ink rows. Shared by LEFT_TOP / LEFT_BOT.
+
+    For closed-bowl letters with a vertical stem on the left
+    (b / B / D / P / R), this lands on the stem-edge top and bottom
+    — the leftmost col that touches both the cap and the foot of
+    the stem. Distinct from K / k's LSTEM_T / LSTEM_B which select
+    a whole component (those have disjoint stem + arm pieces; these
+    closed-bowl letters have the stem fused into one component with
+    the bowl)."""
+    H, W = mask.shape
+    rows, cols = np.where(mask)
+    if rows.size == 0:
+        raise ValueError("No ink")
+    glyph_top = int(rows.min())
+    glyph_bot = int(rows.max())
+    glyph_h = glyph_bot - glyph_top + 1
+    threshold = 0.7 * glyph_h
+    for c in range(W):
+        col_rows = rows[cols == c]
+        if col_rows.size == 0:
+            continue
+        top = int(col_rows.min())
+        bot = int(col_rows.max())
+        if (bot - top + 1) >= threshold:
+            return ((c, top), (c, bot))
+    raise ValueError("No column spans ≥ 70% of glyph height")
+
+
+def _max_span_column(mask: np.ndarray) -> tuple[int, int, int]:
+    """Return (col, top_row, bot_row) for the stem-center column.
+    Among columns with span ≥ 70% of glyph height AND ink density ≥
+    85% (filters out bowl-outline cols that touch only the top and
+    bottom but cross the bowl interior void), picks the MEDIAN col
+    by index — lands in the INTERIOR of the stem rather than at the
+    right edge where the stem-bowl 2-run boundary fluctuates ±1 col.
+    Falls back to unfiltered max-span if no col qualifies."""
+    H, W = mask.shape
+    rows, cols = np.where(mask)
+    if rows.size == 0:
+        raise ValueError("No ink")
+    glyph_h = int(rows.max() - rows.min() + 1)
+    span_min = 0.7 * glyph_h
+    density_min = 0.85
+    qualifying: list[tuple[int, int, int]] = []  # (col, top, bot)
+    fallback_col = -1
+    fallback_span = -1
+    fallback_top = -1
+    fallback_bot = -1
+    for c in range(W):
+        col_rows = rows[cols == c]
+        if col_rows.size == 0:
+            continue
+        top = int(col_rows.min())
+        bot = int(col_rows.max())
+        span = bot - top + 1
+        if span > fallback_span:
+            fallback_span = span
+            fallback_col = c
+            fallback_top = top
+            fallback_bot = bot
+        density = col_rows.size / span
+        if span >= span_min and density >= density_min:
+            qualifying.append((c, top, bot))
+    if qualifying:
+        qualifying.sort()
+        col, top, bot = qualifying[len(qualifying) // 2]
+        return col, top, bot
+    return fallback_col, fallback_top, fallback_bot
+
+
+def _stem_width_at_col(mask: np.ndarray, stem_col: int) -> int:
+    """Maximum width across all rows of the ink run containing
+    stem_col. Used by _stem_center_t/b to set the ≥60% threshold
+    for "stem has widened past the apex"."""
+    rows, _ = np.where(mask)
+    glyph_top = int(rows.min())
+    glyph_bot = int(rows.max())
+    max_w = 0
+    for r in range(glyph_top, glyph_bot + 1):
+        for s, e in _row_runs(mask, r):
+            if s <= stem_col <= e:
+                w = e - s + 1
+                if w > max_w:
+                    max_w = w
+                break
+    return max_w
+
+
+STEM_CAP_OFFSET = 2  # px in from literal cap/foot apex
+
+
+def _stem_center_t(mask: np.ndarray) -> tuple[int, int]:
+    """STEM_CENTER_T — top row of the stem polyline at the stem-center
+    column, offset STEM_CAP_OFFSET pixels in from the literal topmost
+    ink row at that column. The offset steps past the single-pixel
+    cap apex to where the stem reads as full-width, matching David's
+    reference drawings."""
+    col, top, _ = _max_span_column(mask)
+    rows, _ = np.where(mask)
+    glyph_bot = int(rows.max())
+    return col, min(top + STEM_CAP_OFFSET, glyph_bot)
+
+
+def _stem_center_b(mask: np.ndarray) -> tuple[int, int]:
+    """STEM_CENTER_B — bottom row of the stem polyline at the
+    stem-center column, offset STEM_CAP_OFFSET pixels up from the
+    literal bottommost ink row."""
+    col, _, bot = _max_span_column(mask)
+    rows, _ = np.where(mask)
+    glyph_top = int(rows.min())
+    return col, max(bot - STEM_CAP_OFFSET, glyph_top)
+
+
+def _row_runs(mask: np.ndarray, row: int) -> list[tuple[int, int]]:
+    """List of (start_col, end_col) contiguous ink runs in one row."""
+    cols = np.where(mask[row])[0]
+    if cols.size == 0:
+        return []
+    runs: list[tuple[int, int]] = []
+    start = int(cols[0])
+    prev = int(cols[0])
+    for c in cols[1:]:
+        c = int(c)
+        if c == prev + 1:
+            prev = c
+        else:
+            runs.append((start, prev))
+            start = c
+            prev = c
+    runs.append((start, prev))
+    return runs
+
+
+def _stem_on_left(mask: np.ndarray) -> bool:
+    """True when the stem's central column sits left of the bbox
+    center (bowl on right). False when stem is on the right (q)."""
+    rows, cols = np.where(mask)
+    bbox_cx = (int(cols.min()) + int(cols.max())) / 2
+    stem_col, _, _ = _max_span_column(mask)
+    return stem_col < bbox_cx
+
+
+def _bowl_top_touch(mask: np.ndarray) -> tuple[int, int]:
+    """BOWL_TOP_TOUCH — first row from glyph top where the row has
+    ≥ 2 ink runs (the bowl is now separable from the stem). Anchor at
+    the stem-run's edge facing the bowl: for left-stem letters
+    (b / p / B / D / P / R) the stem-run's RIGHT edge; for right-stem
+    letters (q) the stem-run's LEFT edge. Replaces UPPER_TOUCH /
+    UPPER_BRANCH for bowls where those anchors sat too far inside
+    the stem ink, causing the bowl polyline to dog-leg out of the
+    stem to reach the bowl curve."""
+    rows, _ = np.where(mask)
+    if rows.size == 0:
+        raise ValueError("No ink")
+    glyph_top = int(rows.min())
+    glyph_bot = int(rows.max())
+    left = _stem_on_left(mask)
+    for r in range(glyph_top, glyph_bot + 1):
+        runs = _row_runs(mask, r)
+        if len(runs) >= 2:
+            if left:
+                return runs[0][1], r       # right edge of leftmost (stem) run
+            else:
+                return runs[-1][0], r      # left edge of rightmost (stem) run
+    raise ValueError("No 2-run row for BOWL_TOP_TOUCH")
+
+
+def _bowl_bot_touch(mask: np.ndarray) -> tuple[int, int]:
+    """BOWL_BOT_TOUCH — last row from glyph top where the row has
+    ≥ 2 ink runs (counterpart to BOWL_TOP_TOUCH at the bowl's bottom
+    end on the stem)."""
+    rows, _ = np.where(mask)
+    if rows.size == 0:
+        raise ValueError("No ink")
+    glyph_top = int(rows.min())
+    glyph_bot = int(rows.max())
+    left = _stem_on_left(mask)
+    for r in range(glyph_bot, glyph_top - 1, -1):
+        runs = _row_runs(mask, r)
+        if len(runs) >= 2:
+            if left:
+                return runs[0][1], r
+            else:
+                return runs[-1][0], r
+    raise ValueError("No 2-run row for BOWL_BOT_TOUCH")
+
+
+def _stem_bowl_bands(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Return contiguous bands of rows where the row has ≥ 2 ink runs
+    AND the stem-center column is inside one of the runs. Each band
+    is (start_row, end_row). For single-bowl letters there is one
+    band (the bowl interior). For B (stacked bowls) there are two
+    bands separated by the waist row. For R the second band is the
+    leg ink; for p / q the second band is the descender foot curl."""
+    stem_col, _, _ = _max_span_column(mask)
+    rows, _ = np.where(mask)
+    if rows.size == 0:
+        return []
+    glyph_top = int(rows.min())
+    glyph_bot = int(rows.max())
+    bands: list[tuple[int, int]] = []
+    in_band = False
+    band_start = -1
+    last_band_row = -1
+    for r in range(glyph_top, glyph_bot + 1):
+        runs = _row_runs(mask, r)
+        is_2run = (len(runs) >= 2
+                    and any(s <= stem_col <= e for s, e in runs))
+        if is_2run:
+            if not in_band:
+                in_band = True
+                band_start = r
+            last_band_row = r
+        else:
+            if in_band:
+                bands.append((band_start, last_band_row))
+                in_band = False
+    if in_band:
+        bands.append((band_start, last_band_row))
+    return bands
+
+
+def _stem_bowl_top(mask: np.ndarray) -> tuple[int, int]:
+    """STEM_BOWL_TOP — anchor at (stem_center_col, start_of_first_2-run_
+    band). The first band is the (only) bowl for b / D / P / p / q,
+    and the upper bowl for B. Anchor lies ON the stem polyline."""
+    stem_col, _, _ = _max_span_column(mask)
+    bands = _stem_bowl_bands(mask)
+    if not bands:
+        raise ValueError("No 2-run band at stem-center column")
+    return stem_col, bands[0][0]
+
+
+def _stem_bowl_bot(mask: np.ndarray) -> tuple[int, int]:
+    """STEM_BOWL_BOT — anchor at (stem_center_col, end_of_first_2-run_
+    band). End-of-FIRST-band (not last-band-from-bottom-up) so the
+    leg of R and the descender foot curl of p / q (which form a
+    second 2-run band) don't pollute the bowl close."""
+    stem_col, _, _ = _max_span_column(mask)
+    bands = _stem_bowl_bands(mask)
+    if not bands:
+        raise ValueError("No 2-run band at stem-center column")
+    return stem_col, bands[0][1]
+
+
+def _stem_bowl_top_upper(mask: np.ndarray) -> tuple[int, int]:
+    """STEM_BOWL_TOP_UPPER — same as STEM_BOWL_TOP for now; B's upper
+    bowl is the first band so this resolver matches STEM_BOWL_TOP.
+    Named separately to make B's spec readable."""
+    return _stem_bowl_top(mask)
+
+
+def _branch_t_on_stem(mask: np.ndarray) -> tuple[int, int]:
+    """BRANCH_T_ON_STEM — UPPER_BRANCH's row at the stem-center
+    column. For letters whose bowl produces clear skeleton branches
+    at the top and bottom of the bowl-stem merge (p, q), this gives
+    a bowl-top anchor that lies ON the stem polyline. Band detection
+    is unreliable for these letters because the bowl-stem outlines
+    cross the stem-center column at row ranges that don't line up
+    with the visible bowl junctions."""
+    _, r = _upper_branch(mask)
+    stem_col, _, _ = _max_span_column(mask)
+    return stem_col, r
+
+
+def _branch_b_on_stem(mask: np.ndarray) -> tuple[int, int]:
+    """BRANCH_B_ON_STEM — BRANCH_R's row (lowest mid-row branch)
+    at the stem-center column. Bowl-bottom-on-stem anchor for
+    P / R / p / q where the bowl close registers as a skeleton
+    branch at the stem."""
+    _, r = _branch_r(mask)
+    stem_col, _, _ = _max_span_column(mask)
+    return stem_col, r
+
+
+def _stem_bowl_bot_lower(mask: np.ndarray) -> tuple[int, int]:
+    """STEM_BOWL_BOT_LOWER — anchor at the end of the SECOND 2-run
+    band at the stem-center column. For B this lands at the lower
+    bowl's foot-bowl closure on the stem; the first band's end is
+    the waist (= upper bowl close)."""
+    stem_col, _, _ = _max_span_column(mask)
+    bands = _stem_bowl_bands(mask)
+    if len(bands) < 2:
+        raise ValueError("STEM_BOWL_BOT_LOWER needs ≥ 2 stem-col 2-run bands")
+    return stem_col, bands[1][1]
+
+
+def _top_bowl_peak_upper(mask: np.ndarray) -> tuple[int, int]:
+    """TOP_BOWL_PEAK_UPPER — rightmost ink column within the top
+    quarter of glyph rows. Used by B's upper-bowl path to force the
+    BFS through the cap-top apex; without it, BFS on B's figure-8
+    skeleton takes a shortcut and produces a 177° U-turn."""
+    rows, cols = np.where(mask)
+    if rows.size == 0:
+        raise ValueError("No ink")
+    glyph_top = int(rows.min())
+    glyph_bot = int(rows.max())
+    quarter = glyph_top + (glyph_bot - glyph_top + 1) // 4
+    band_mask = (rows >= glyph_top) & (rows <= quarter)
+    rb = rows[band_mask]
+    cb = cols[band_mask]
+    if cb.size == 0:
+        raise ValueError("No ink in top quarter")
+    max_col = int(cb.max())
+    rows_at_max = rb[cb == max_col]
+    cy = (glyph_top + quarter) / 2
+    idx = int(np.argmin(np.abs(rows_at_max - cy)))
+    return max_col, int(rows_at_max[idx])
+
+
+def _left_top(mask: np.ndarray) -> tuple[int, int]:
+    """LEFT_TOP — top endpoint of the leftmost sustained-ink column.
+    Lands at the stem's visible top edge for closed-bowl letters."""
+    return _left_edge_endpoints(mask)[0]
+
+
+def _left_bot(mask: np.ndarray) -> tuple[int, int]:
+    """LEFT_BOT — bottom endpoint of the leftmost sustained-ink column.
+    Counterpart to LEFT_TOP, lands at the stem's visible bottom edge."""
+    return _left_edge_endpoints(mask)[1]
+
+
+def _waist(mask: np.ndarray) -> tuple[int, int]:
+    """WAIST — anchor on the stem polyline at the row where the two
+    bowls of a stacked-bowl letter (B) meet the stem. The ROW comes
+    from the leftmost mid-row skeleton branch (distinguishes the
+    stem-side waist from the bowl-interior cluster); the COLUMN is
+    the stem-center column so the anchor sits on the stem polyline
+    and the upper-bowl + lower-bowl polylines visibly meet the stem
+    polyline at the waist. Mid-row filter falls back to the bbox
+    when the skeleton has no endpoints (B / D have closed-loop
+    skeletons) or fewer than 2 (P / R have a single stem-bottom
+    endpoint)."""
+    try:
+        eps = _main_skeleton_endpoints(mask)
+    except ValueError:
+        eps = []
+    if len(eps) >= 2:
+        top_row = min(e[1] for e in eps)
+        bot_row = max(e[1] for e in eps)
+    else:
+        _, mbbox = _largest_component_bbox(mask)
+        top_row, bot_row = mbbox[1], mbbox[3]
+    junctions = [(c, r) for (c, r) in _skel_junctions(mask)
+                  if top_row < r < bot_row]
+    if not junctions:
+        raise ValueError("No mid-row skeleton junction for WAIST")
+    _, waist_row = min(junctions, key=lambda p: (p[0], p[1]))
+    stem_col, _, _ = _max_span_column(mask)
+    return stem_col, waist_row
+
+
+def _right_mid_band(mask: np.ndarray, top_row: int,
+                    bot_row: int) -> tuple[int, int]:
+    """Helper: rightmost ink column within rows [top_row, bot_row],
+    returning the row in that band closest to the band's center."""
+    if top_row >= bot_row:
+        raise ValueError(f"Invalid band rows: top={top_row} bot={bot_row}")
+    band = mask[top_row:bot_row + 1]
+    rb, cb = np.where(band)
+    if cb.size == 0:
+        raise ValueError(f"No ink in row band {top_row}..{bot_row}")
+    max_col = int(cb.max())
+    rows_at_max = rb[cb == max_col]
+    cy = (top_row + bot_row) / 2
+    idx = int(np.argmin(np.abs(rows_at_max + top_row - cy)))
+    return max_col, int(rows_at_max[idx] + top_row)
+
+
+def _right_mid_upper(mask: np.ndarray) -> tuple[int, int]:
+    """RIGHT_MID_UPPER — rightmost ink column within the upper bowl
+    region of a two-bowl letter (B). Upper-bowl span is LEFT_TOP row
+    to WAIST row."""
+    top = _left_top(mask)[1]
+    waist = _waist(mask)[1]
+    return _right_mid_band(mask, top, waist)
+
+
+def _right_mid_lower(mask: np.ndarray) -> tuple[int, int]:
+    """RIGHT_MID_LOWER — rightmost ink column within the lower bowl
+    region. Lower-bowl span is WAIST row to LEFT_BOT row."""
+    waist = _waist(mask)[1]
+    bot = _left_bot(mask)[1]
+    return _right_mid_band(mask, waist, bot)
+
+
+def _upper_branch(mask: np.ndarray) -> tuple[int, int]:
+    """UPPER_BRANCH — highest-row mid-row skeleton branch pixel
+    (mirror of BRANCH_R's lowest-row). Lands at the TOP of a bowl-
+    stem merge region for letters whose bowl skeleton joins the
+    stem at two distinct branch rows (p, q, B). Tie-break by max
+    col."""
+    try:
+        eps = _main_skeleton_endpoints(mask)
+    except ValueError:
+        eps = []
+    _, mbbox = _largest_component_bbox(mask)
+    if (len(eps) >= 2 and
+            (max(e[1] for e in eps) - min(e[1] for e in eps))
+            > 0.5 * (mbbox[3] - mbbox[1])):
+        top_row = min(e[1] for e in eps)
+        bot_row = max(e[1] for e in eps)
+    else:
+        top_row, bot_row = mbbox[1], mbbox[3]
+    junctions = [(c, r) for (c, r) in _skel_junctions(mask)
+                  if top_row < r < bot_row]
+    if not junctions:
+        raise ValueError("No mid-row skeleton junction")
+    return min(junctions, key=lambda p: (p[1], -p[0]))
 
 
 def _branch_t(mask: np.ndarray) -> tuple[int, int]:
@@ -1381,6 +1924,40 @@ def resolve_anchor(name: str, mask: np.ndarray,
         pos = _branch_r(mask)
     elif name == "BRANCH_T":
         pos = _branch_t(mask)
+    elif name == "UPPER_BRANCH":
+        pos = _upper_branch(mask)
+    elif name == "LEFT_TOP":
+        pos = _left_top(mask)
+    elif name == "LEFT_BOT":
+        pos = _left_bot(mask)
+    elif name == "WAIST":
+        pos = _waist(mask)
+    elif name == "RIGHT_MID_UPPER":
+        pos = _right_mid_upper(mask)
+    elif name == "RIGHT_MID_LOWER":
+        pos = _right_mid_lower(mask)
+    elif name == "STEM_CENTER_T":
+        pos = _stem_center_t(mask)
+    elif name == "STEM_CENTER_B":
+        pos = _stem_center_b(mask)
+    elif name == "BOWL_TOP_TOUCH":
+        pos = _bowl_top_touch(mask)
+    elif name == "BOWL_BOT_TOUCH":
+        pos = _bowl_bot_touch(mask)
+    elif name == "TOP_BOWL_PEAK_UPPER":
+        pos = _top_bowl_peak_upper(mask)
+    elif name == "STEM_BOWL_TOP":
+        pos = _stem_bowl_top(mask)
+    elif name == "STEM_BOWL_BOT":
+        pos = _stem_bowl_bot(mask)
+    elif name == "STEM_BOWL_TOP_UPPER":
+        pos = _stem_bowl_top_upper(mask)
+    elif name == "STEM_BOWL_BOT_LOWER":
+        pos = _stem_bowl_bot_lower(mask)
+    elif name == "BRANCH_T_ON_STEM":
+        pos = _branch_t_on_stem(mask)
+    elif name == "BRANCH_B_ON_STEM":
+        pos = _branch_b_on_stem(mask)
     elif name == "ARM_TIP_TL":
         pos = _top_tip_l(mask)
     elif name == "ARM_TIP_TR":
@@ -2194,83 +2771,52 @@ def arm_straight_line(rough_a: tuple[int, int],
                       end_pixel: tuple[float, float] | None = None,
                       end_distance_from_outline: float | None = None,
                       ) -> list[tuple[float, float]] | None:
-    """LSQ-fit a straight line through the skeleton pixels between
-    `rough_a` and `rough_b`, project both endpoints onto the line, trim
-    the joint-adjacent end(s) by `trim_pct` of the segment length, and
-    return the rasterized straight segment (sampled at 1-px spacing by
-    `line_sampler`).
+    """Pure analytical line sampling from `rough_a` to `rough_b`. No
+    skeleton walk, no LSQ fit — the polyline is the straight segment
+    between the two anchors, sampled at 1-px spacing by
+    `line_sampler`. For a stem-like band of constant width centred on
+    its medial axis this passes through the middle of the ink at
+    every checkpoint.
 
-    `fit_trim_start_pct` / `fit_trim_end_pct`: discard this fraction of
-    BFS pixels from the rough_a-side / rough_b-side BEFORE the LSQ fit.
-    Use asymmetric trimming to exclude cap-rounding pixels that bias
-    line direction on one end while preserving the apex-side pixels on
-    the other. If trimming leaves <5 points, the full path is used.
+    `start_pixel` / `end_pixel`: optional float pixel overrides for
+    the segment endpoints. Used by the shared-apex / T-junction
+    pre-computes to force two strokes' meeting endpoint onto the
+    same pixel.
 
-    `start_pixel` / `end_pixel`: optional float pixel overrides
-    replacing the (trimmed) projected endpoint on the respective side.
-    Used by `bake_letter`'s shared-apex pre-compute to force two
-    strokes' meeting endpoint onto the same pixel even though their
-    individual LSQ projections would diverge.
+    `end_distance_from_outline`: optional target dt value at the end.
+    When set, walk from `a` along the segment direction and stop at
+    the last pixel where dt > target. Used by group-aligned bars
+    (E's three horizontals, F / L) so they all terminate at the same
+    distance from the right outline.
 
-    `end_distance_from_outline`: optional target dt value at the end
-    pixel. When set, walk from the LSQ projection of `rough_b` back
-    along the fitted line direction and stop at the first pixel where
-    `dt >= end_distance_from_outline`. Used to make a group of arms
-    (e.g. E's three horizontal bars) terminate at the same distance
-    from the right outline regardless of where each individual LSQ
-    projection lands. Ignored when `end_pixel` is also set.
+    `trim_pct`: fraction of segment length to chop on each
+    joint-adjacent side (no trim on free-end side for arm 0 / last
+    arm). The fit_trim_start_pct / fit_trim_end_pct params are
+    obsolete with no LSQ; kept in the signature for back-compat but
+    ignored.
 
-    The arm's polyline endpoints define the fitted line — downstream
-    joint primitives can recover it from `arm[0]` / `arm[-1]` without
-    re-running the SVD."""
-    pts = _bfs_skeleton_path(rough_a, rough_b, skeleton)
-    if pts is None or len(pts) < 5:
-        return None
-    n_pts = len(pts)
-    n_start = int(n_pts * fit_trim_start_pct) if fit_trim_start_pct > 0.0 else 0
-    n_end = int(n_pts * fit_trim_end_pct) if fit_trim_end_pct > 0.0 else 0
-    if n_start + n_end > 0 and n_pts - n_start - n_end >= 5:
-        fit_pts = pts[n_start:n_pts - n_end] if n_end > 0 else pts[n_start:]
-    else:
-        fit_pts = pts
-    arr = np.array(fit_pts, dtype=float)
-    centroid = arr.mean(axis=0)
-    _, _, vt = np.linalg.svd(arr - centroid, full_matrices=False)
-    direction = vt[0]
-    ox, oy = float(centroid[0]), float(centroid[1])
-    dx, dy = float(direction[0]), float(direction[1])
-
-    def _proj(p):
-        vx = p[0] - ox; vy = p[1] - oy
-        t = vx * dx + vy * dy
-        return (ox + t * dx, oy + t * dy)
-
-    a_proj = _proj(rough_a)
-    b_proj = _proj(rough_b)
-    seg_dx = b_proj[0] - a_proj[0]
-    seg_dy = b_proj[1] - a_proj[1]
+    The arm's polyline endpoints are the (trimmed) segment endpoints
+    — downstream joint primitives recover the line direction from
+    `arm[0]` / `arm[-1]`."""
+    a0 = (float(rough_a[0]), float(rough_a[1]))
+    b0 = (float(rough_b[0]), float(rough_b[1]))
+    if start_pixel is not None:
+        a0 = (float(start_pixel[0]), float(start_pixel[1]))
+    if end_pixel is not None:
+        b0 = (float(end_pixel[0]), float(end_pixel[1]))
+    seg_dx = b0[0] - a0[0]
+    seg_dy = b0[1] - a0[1]
     L = math.hypot(seg_dx, seg_dy)
     if L < 1e-6:
         return None
     ux, uy = seg_dx / L, seg_dy / L
     left_pct = 0.0 if k == 0 else trim_pct
     right_pct = 0.0 if k == n_arms - 1 else trim_pct
-    a_trim = (a_proj[0] + ux * L * left_pct,
-              a_proj[1] + uy * L * left_pct)
-    b_trim = (b_proj[0] - ux * L * right_pct,
-              b_proj[1] - uy * L * right_pct)
-    if start_pixel is not None:
-        a_trim = (float(start_pixel[0]), float(start_pixel[1]))
-    if end_pixel is not None:
-        b_trim = (float(end_pixel[0]), float(end_pixel[1]))
-    elif end_distance_from_outline is not None:
-        # Walk from a_trim along the fitted line in the b direction.
-        # Record the LAST pixel where dt > target — the bar terminates
-        # at the first interior-side point before dt drops below
-        # `target`. Walking continues until we step off the canvas
-        # OR encounter a non-ink pixel (dt = 0 outside the mask), so
-        # short BFS paths between snapped anchors don't prematurely
-        # cap the walk before it reaches the actual cap interior.
+    a_trim = (a0[0] + ux * L * left_pct,
+              a0[1] + uy * L * left_pct)
+    b_trim = (b0[0] - ux * L * right_pct,
+              b0[1] - uy * L * right_pct)
+    if (end_pixel is None and end_distance_from_outline is not None):
         target = float(end_distance_from_outline)
         H_, W_ = dt.shape
         last_in: tuple[float, float] | None = None
@@ -2286,7 +2832,6 @@ def arm_straight_line(rough_a: tuple[int, int],
             if d > target:
                 last_in = (fx, fy)
             elif d == 0.0:
-                # walked off the ink — no more bar to extend into.
                 break
             step += 1
         if last_in is not None:
@@ -2307,6 +2852,8 @@ def arm_analytical_line_stem(rough_a: tuple[int, int],
                               trim_pct: float = DEFAULT_ARM_TRIM_PCT,
                               start_pixel: tuple[float, float] | None = None,
                               end_pixel: tuple[float, float] | None = None,
+                              inset_start: bool = True,
+                              inset_end: bool = True,
                               ) -> list[tuple[float, float]] | None:
     """Least-squares line through per-row stem-run midpoints.
 
@@ -2427,6 +2974,22 @@ def arm_analytical_line_stem(rough_a: tuple[int, int],
     if L < 1e-6:
         return None
     ux, uy = seg_dx / L, seg_dy / L
+    # Cap-rounding inset: pull each end stem_radius along the fitted
+    # line so the polyline lands at the cap-arc tangent point, not at
+    # the literal ink boundary. Matches the shipped 33-letter
+    # convention measured at dist_to_edge ≈ stem_radius. Applied per
+    # endpoint — shared anchors (Y-junctions with other strokes) keep
+    # the literal pixel so connecting strokes meet there.
+    inset = stem_width_est / 2.0
+    if inset_start:
+        a_proj = (a_proj[0] + ux * inset, a_proj[1] + uy * inset)
+    if inset_end:
+        b_proj = (b_proj[0] - ux * inset, b_proj[1] - uy * inset)
+    seg_dx = b_proj[0] - a_proj[0]
+    seg_dy = b_proj[1] - a_proj[1]
+    L = math.hypot(seg_dx, seg_dy)
+    if L < 1e-6:
+        return None
     left_pct = 0.0 if k == 0 else trim_pct
     right_pct = 0.0 if k == n_arms - 1 else trim_pct
     a_trim = (a_proj[0] + ux * L * left_pct,
@@ -3331,7 +3894,7 @@ def bake_letter(letter: str, font_path: Path
                 # Inject shared-apex / T-junction overrides only for
                 # arm_straight_line. Shared-apex takes priority when
                 # both apply to the same endpoint.
-                if name == "straight_line":
+                if name in ("straight_line", "analytical_line_stem"):
                     left_name = names[k]
                     right_name = names[k + 1]
                     sp_left = shared_apex_cache.get(left_name)
@@ -3340,18 +3903,98 @@ def bake_letter(letter: str, font_path: Path
                         (i - 1, k, "start"))
                     tj_right = t_junction_cache.get(
                         (i - 1, k, "end"))
-                    if sp_left is not None:
+                    # Stem-meeting anchors → literal pixel as endpoint
+                    # (analytical arm_straight_line samples between
+                    # literal anchors, polyline is pure straight). Falls
+                    # back to shared-apex / T-junction overrides if those
+                    # apply. For analytical_line_stem we skip the
+                    # literal forcing so the primitive's LSQ projection
+                    # establishes the slanted endpoint; downstream
+                    # strokes pick that up via shared_apex_cache.
+                    is_slanted = (name == "analytical_line_stem")
+                    if left_name in STEM_MEETING_ANCHORS and not is_slanted:
+                        target = (shared_apex_cache.get(left_name)
+                                   or (float(anchors[k][0]),
+                                       float(anchors[k][1])))
+                        call_params["start_pixel"] = (
+                            float(target[0]), float(target[1]))
+                    elif sp_left is not None:
                         call_params["start_pixel"] = sp_left
                     elif tj_left is not None:
                         call_params["start_pixel"] = tj_left
-                    if sp_right is not None:
+                    if right_name in STEM_MEETING_ANCHORS and not is_slanted:
+                        target = (shared_apex_cache.get(right_name)
+                                   or (float(anchors[k + 1][0]),
+                                       float(anchors[k + 1][1])))
+                        call_params["end_pixel"] = (
+                            float(target[0]), float(target[1]))
+                    elif sp_right is not None:
                         call_params["end_pixel"] = sp_right
                     elif tj_right is not None:
                         call_params["end_pixel"] = tj_right
-                arms.append(fn(rough_snapped[k], rough_snapped[k + 1],
+                    # Cap-inset is applied per endpoint only when the
+                    # anchor name isn't shared with another stroke of
+                    # this letter. Shared anchors are Y-junction
+                    # meeting points and must stay at the literal
+                    # anchor pixel so the connecting stroke meets
+                    # there.
+                    if is_slanted:
+                        current_stroke_idx = i - 1
+
+                        def _is_shared(anchor_name: str) -> bool:
+                            for j_other, spec_other in enumerate(specs):
+                                if j_other == current_stroke_idx:
+                                    continue
+                                if anchor_name in spec_other.get("anchors", []):
+                                    return True
+                            return False
+                        call_params["inset_start"] = not _is_shared(left_name)
+                        call_params["inset_end"] = not _is_shared(right_name)
+                # analytical_line_stem fits a line through per-row stem
+                # midpoints, so it needs the literal cap/foot anchor
+                # rows — not the medial-axis-snapped positions, which
+                # can land deep inside a bowl-merge row range with too
+                # few pure rows for a fit.
+                if name == "analytical_line_stem":
+                    arm_a = anchors[k]
+                    arm_b = anchors[k + 1]
+                else:
+                    arm_a = rough_snapped[k]
+                    arm_b = rough_snapped[k + 1]
+                arms.append(fn(arm_a, arm_b,
                                k, n_arms,
                                mask=mask, dt=dt, skeleton=skeleton,
                                **call_params))
+                # Force-literal endpoints: for stem-meeting anchors,
+                # replace the primitive's first/last point with the
+                # resolved anchor pixel so connecting strokes share
+                # their endpoint exactly. For analytical_line_stem the
+                # primitive's LSQ-projected endpoint IS the new anchor
+                # — keep it and seed shared_apex_cache so downstream
+                # strokes pick up the slanted-stem position. For other
+                # primitives prefer shared_apex_cache (which carries
+                # the slanted-stem projection) over the literal anchor.
+                is_slanted = (name == "analytical_line_stem")
+                if arms[-1] is not None:
+                    p = arms[-1]
+                    if names[k] in STEM_MEETING_ANCHORS and not is_slanted:
+                        target = (shared_apex_cache.get(names[k])
+                                   or anchors[k])
+                        p = [(float(target[0]), float(target[1]))] + list(p[1:])
+                    if (names[k + 1] in STEM_MEETING_ANCHORS
+                            and not is_slanted):
+                        target = (shared_apex_cache.get(names[k + 1])
+                                   or anchors[k + 1])
+                        p = list(p[:-1]) + [(float(target[0]),
+                                              float(target[1]))]
+                    arms[-1] = p
+                # The slanted stem keeps its own LSQ-projected endpoints
+                # but does NOT propagate them to STEM_MEETING_ANCHORS.
+                # Y-junctions (bowl-stem, leg-stem) are spatially
+                # adjacent through the ink, not coincident pixels —
+                # Rule 5 permits ≤2 px gap. Downstream bowl/leg strokes
+                # snap to their own bowl-only-mask medial axis from the
+                # literal anchor positions, identical to v3 behaviour.
 
             joints: list[dict | None] = []
             for j in range(n_arms - 1):
@@ -3445,6 +4088,178 @@ def bake_letter(letter: str, font_path: Path
                 for p in resampled
             ],
         })
+
+    # ---- Y-junction intersection post-processing -----------------------
+    # For every STEM_MEETING_ANCHOR shared between 2+ strokes, find the
+    # geometric intersection of the strokes' local tangent lines at the
+    # shared end and re-trim both chains so they meet at that pixel.
+    # This is Rule 5: Y-junction continuity at the centerline
+    # intersection, not at the inner stem edge.
+    y_junction_records: list[dict] = []
+    by_anchor: dict[str, list[int]] = {}
+    for s_idx, sp in enumerate(specs or []):
+        for an in sp.get("anchors", []):
+            if an in STEM_MEETING_ANCHORS:
+                by_anchor.setdefault(an, []).append(s_idx)
+    shared = {a: ix for a, ix in by_anchor.items() if len(ix) >= 2}
+
+    def _line_intersect(p1, d1, p2, d2):
+        det = d1[0] * (-d2[1]) - d1[1] * (-d2[0])
+        if abs(det) < 1e-6:
+            return None
+        ddx = p2[0] - p1[0]; ddy = p2[1] - p1[1]
+        t1 = (ddx * (-d2[1]) - ddy * (-d2[0])) / det
+        return (p1[0] + t1 * d1[0], p1[1] + t1 * d1[1])
+
+    def _tangent(chain: list[tuple[int, int]], at_end: bool,
+                  n: int = 5) -> tuple[tuple[float, float],
+                                          tuple[float, float]] | None:
+        """LSQ-fit a short line through the last/first n chain pixels.
+        Returns (centroid, unit-direction) pointing AWAY from the end
+        (i.e. toward the body of the stroke)."""
+        if len(chain) < n:
+            return None
+        pts = chain[-n:] if at_end else chain[:n]
+        arr = np.array(pts, dtype=float)
+        centroid = arr.mean(axis=0)
+        if (arr - centroid).any():
+            _, _, vt = np.linalg.svd(arr - centroid, full_matrices=False)
+            direction = vt[0]
+        else:
+            return None
+        d = (float(direction[0]), float(direction[1]))
+        return ((float(centroid[0]), float(centroid[1])), d)
+
+    # Need a stem_width_est for the "far from anchor" sanity check.
+    # Use the same dt-along-stem estimate the primitive uses — the
+    # single-run-width approach fails for B/D/R where the stem column
+    # is rarely isolated from the bowl ink.
+    try:
+        _sct = _stem_center_t(mask)
+        _scb = _stem_center_b(mask)
+        _samples_dt: list[float] = []
+        for _tt in (0.15, 0.35, 0.5, 0.65, 0.85):
+            _cy = int(round(_sct[1] + (_scb[1] - _sct[1]) * _tt))
+            _cx = int(round(_sct[0] + (_scb[0] - _sct[0]) * _tt))
+            if 0 <= _cy < mask.shape[0] and 0 <= _cx < mask.shape[1]:
+                _samples_dt.append(float(dt[_cy, _cx]))
+        _half_w = max(_samples_dt) if _samples_dt else 0.0
+        stem_w_est = max(int(round(_half_w * 2.0)), 15)
+    except (ValueError, KeyError):
+        stem_w_est = 43
+    H_glyph, W_glyph = mask.shape
+
+    for anchor_name, stroke_idxs in shared.items():
+        try:
+            anchor_pos = _cached_resolve(anchor_name, "line", None)
+        except (KeyError, ValueError):
+            continue
+        ends: list[tuple[int, bool]] = []  # (stroke_idx, at_end)
+        for s_idx in stroke_idxs:
+            if s_idx >= len(stroke_pixel_chains):
+                continue
+            poly = stroke_pixel_chains[s_idx]
+            if len(poly) < 6:
+                continue
+            d0 = math.hypot(poly[0][0] - anchor_pos[0],
+                              poly[0][1] - anchor_pos[1])
+            dL = math.hypot(poly[-1][0] - anchor_pos[0],
+                              poly[-1][1] - anchor_pos[1])
+            ends.append((s_idx, d0 > dL))
+        if len(ends) < 2:
+            continue
+        # Compute tangent of each end
+        tangents = []
+        for s_idx, at_end in ends:
+            t = _tangent(stroke_pixel_chains[s_idx], at_end, n=5)
+            if t is None:
+                tangents = []
+                break
+            tangents.append((s_idx, at_end, t))
+        if len(tangents) < 2:
+            continue
+        # 2-line intersection (pairwise — current spec has at most
+        # 2 strokes sharing any one anchor).
+        (_, _, (p1, d1)) = tangents[0]
+        (_, _, (p2, d2)) = tangents[1]
+        # Angle between tangents (deg)
+        cos_a = max(-1.0, min(1.0,
+                              d1[0] * d2[0] + d1[1] * d2[1]))
+        angle_deg = math.degrees(math.acos(abs(cos_a)))
+        ipt = _line_intersect(p1, d1, p2, d2)
+        fallback_reason = None
+        if ipt is None or angle_deg < 10.0:
+            fallback_reason = "near-parallel tangents"
+            intersection = (int(round(anchor_pos[0])),
+                              int(round(anchor_pos[1])))
+        else:
+            ix_i = int(round(ipt[0])); iy_i = int(round(ipt[1]))
+            dist_to_nominal = math.hypot(ipt[0] - anchor_pos[0],
+                                          ipt[1] - anchor_pos[1])
+            inside_ink = (0 <= iy_i < H_glyph and 0 <= ix_i < W_glyph
+                           and mask[iy_i, ix_i])
+            if not inside_ink:
+                fallback_reason = (
+                    f"intersection ({ix_i}, {iy_i}) outside ink")
+                intersection = (int(round(anchor_pos[0])),
+                                  int(round(anchor_pos[1])))
+            elif dist_to_nominal > stem_w_est:
+                fallback_reason = (
+                    f"intersection {dist_to_nominal:.1f}px from anchor "
+                    f"(> stem_width {stem_w_est})")
+                intersection = (int(round(anchor_pos[0])),
+                                  int(round(anchor_pos[1])))
+            else:
+                intersection = (ix_i, iy_i)
+        # Trim/extend each stroke's chain so its shared end IS the
+        # intersection pixel. Strategy: replace the end pixel with
+        # the intersection; if the gap to the previous chain pixel
+        # is large, sample additional pixels in between.
+        for s_idx, at_end, _t in tangents:
+            chain = stroke_pixel_chains[s_idx]
+            if at_end:
+                # If intersection is "beyond" current end along
+                # tangent: extend with line_sampler.
+                prev = chain[-1]
+                seg = line_sampler([prev, intersection])
+                # Drop the duplicate prev pixel at seg[0]; append rest
+                if len(seg) > 1:
+                    chain[-1:] = [tuple(int(c) for c in pt) for pt in seg]
+                else:
+                    chain[-1] = intersection
+            else:
+                nxt = chain[0]
+                seg = line_sampler([intersection, nxt])
+                if len(seg) > 1:
+                    chain[:1] = [tuple(int(c) for c in pt) for pt in seg]
+                else:
+                    chain[0] = intersection
+        y_junction_records.append({
+            "anchor": anchor_name,
+            "intersection": intersection,
+            "angle_deg": angle_deg,
+            "fallback": fallback_reason,
+            "strokes": [s_idx for s_idx, _, _ in tangents],
+        })
+
+    # Re-emit json_strokes for line-kind strokes (resample from mutated
+    # chains). Dots are left untouched.
+    if y_junction_records:
+        for i, sp in enumerate(specs):
+            if sp.get("kind") == "dot":
+                continue
+            chain = stroke_pixel_chains[i]
+            if len(chain) < 2:
+                continue
+            resampled = resample_uniform(chain, CHECKPOINT_COUNT)
+            json_strokes[i] = {
+                "id": i + 1,
+                "checkpoints": [
+                    {"x": round(pixel_to_rel(p, bbox)[0], 4),
+                     "y": round(pixel_to_rel(p, bbox)[1], 4)}
+                    for p in resampled
+                ],
+            }
 
     skeleton_pts, skeleton_adj = build_skeleton_and_adj(
         stroke_pixel_chains, bbox)
