@@ -1650,6 +1650,18 @@ public final class TracingViewModel {
         reloadStrokeCheckpoints(for: letters[letterIndex])
     }
 
+    /// Variant that persists to an explicit schriftArt — required when the
+    /// active schriftArt has just changed (the calibrator's navigation
+    /// auto-save fires after vm.schriftArt has already become the new
+    /// value, so the unsaved edits belong to the PREVIOUS schriftArt). No
+    /// tracker reload here because the live tracker is already loading
+    /// the new schriftArt; restamping the previous one would fight that.
+    func persistCalibratedStrokes(_ strokes: [[CGPoint]],
+                                   for letter: String,
+                                   schriftArt: SchriftArt) {
+        calibrationStore.persist(strokes, for: letter, schriftArt: schriftArt)
+    }
+
     func toast(_ text: String) {
         messages.show(toast: text)
     }

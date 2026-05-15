@@ -177,17 +177,35 @@ struct StrokeCalibrationOverlay: View {
                 refreshSkeleton()
             }
             .onChange(of: vm.currentLetterName) {
-                // Persist before loadFromVM overwrites editableStrokes —
-                // navigation used to silently destroy unsaved SKELETT/ANKER
-                // edits. Reset is the explicit discard path.
-                if hasUnsavedEdits, loaded { saveToVM() }
+                // Persist before loadFromVM overwrites editableStrokes.
+                // CRITICAL: vm.currentLetterName has ALREADY become the
+                // new letter by the time this onChange closure fires —
+                // saveToVM() would persist the previous letter's edits
+                // under the new letter's key, corrupting both. Use the
+                // explicit loadedKey.letter (still the previous letter)
+                // as the save target instead. vm.schriftArt is unchanged
+                // on a letter switch so the single-arg overload is fine.
+                if hasUnsavedEdits, loaded, let prevKey = loadedKey {
+                    vm.persistCalibratedStrokes(editableStrokes,
+                                                 for: prevKey.letter)
+                    hasUnsavedEdits = false
+                }
                 loadFromVM()
                 bootstrapAnchorsFromExistingStrokes()
                 bootstrapHandles()
                 refreshSkeleton()
             }
             .onChange(of: vm.schriftArt) {
-                if hasUnsavedEdits, loaded { saveToVM() }
+                // Same correctness issue as the letter-switch handler
+                // PLUS vm.schriftArt has also already changed — use
+                // both fields from loadedKey to target the previous
+                // (letter, schriftArt) explicitly.
+                if hasUnsavedEdits, loaded, let prevKey = loadedKey {
+                    vm.persistCalibratedStrokes(editableStrokes,
+                                                 for: prevKey.letter,
+                                                 schriftArt: prevKey.schriftArt)
+                    hasUnsavedEdits = false
+                }
                 loadFromVM(force: true)
                 bootstrapAnchorsFromExistingStrokes()
                 bootstrapHandles()
