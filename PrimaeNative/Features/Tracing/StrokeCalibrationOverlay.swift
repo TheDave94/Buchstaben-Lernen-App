@@ -46,6 +46,12 @@ struct StrokeCalibrationOverlay: View {
     /// Pencil micro-jitter (5-15 px during natural taps) that was
     /// invisibly drifting handles.
     @State private var gestureExceededDragThreshold: Bool = false
+    /// Captured at threshold-crossing: vector from current Pencil pt
+    /// to the handle's original pt. Subsequent moves apply this
+    /// offset so the handle tracks the Pencil 1:1 instead of jumping
+    /// 12 px to the threshold-crossing position. Result: any motion
+    /// past threshold yields the same magnitude of handle motion.
+    @State private var dragHandleOffset: CGPoint? = nil
     /// SKELETT mode: show "1, 2, 3 …" numbers inside each handle.
     /// Off by default — numbers are debug noise during skeleton
     /// editing.
@@ -281,6 +287,7 @@ struct StrokeCalibrationOverlay: View {
         let bboxPt = screenToGlyph(screenPt, in: size)
         dragStartPt = bboxPt
         gestureExceededDragThreshold = false
+        dragHandleOffset = nil
         if skelettTool == .drag, let target = closestHandle(to: bboxPt) {
             dragTargetSi = target.si
             dragTargetCi = target.ci
@@ -291,8 +298,9 @@ struct StrokeCalibrationOverlay: View {
     }
 
     /// SKELETT touch-move. Below drag threshold = no-op (tap in
-    /// progress). Once threshold crossed, push undo, switch active
-    /// stroke if needed, then follow the Pencil with the handle.
+    /// progress). At threshold crossing, capture the handle's offset
+    /// from the Pencil so subsequent motion tracks the Pencil 1:1
+    /// instead of snapping to it.
     private func handleSkelettChanged(atScreen screenPt: CGPoint, in size: CGSize) {
         let bboxPt = screenToGlyph(screenPt, in: size)
         guard let start = dragStartPt else { return }
@@ -302,17 +310,28 @@ struct StrokeCalibrationOverlay: View {
             guard dist > skelettDragThreshold else { return }
             gestureExceededDragThreshold = true
             if skelettTool == .drag,
-               let si = dragTargetSi,
-               handles.indices.contains(si) {
+               let si = dragTargetSi, let ci = dragTargetCi,
+               handles.indices.contains(si),
+               handles[si].indices.contains(ci) {
                 pushUndoSnapshot()
                 if activeStroke != si { activeStroke = si }
+                // Capture the offset from Pencil to handle at the
+                // moment we engage drag. Subsequent moves preserve
+                // this offset, so the handle's position relative to
+                // its original anchor matches the Pencil's relative
+                // motion — no 12-px snap.
+                let h = handles[si][ci]
+                dragHandleOffset = CGPoint(x: h.x - bboxPt.x,
+                                           y: h.y - bboxPt.y)
             }
         }
         if skelettTool == .drag,
            let si = dragTargetSi, let ci = dragTargetCi,
+           let offset = dragHandleOffset,
            handles.indices.contains(si),
            handles[si].indices.contains(ci) {
-            handles[si][ci] = bboxPt
+            handles[si][ci] = CGPoint(x: bboxPt.x + offset.x,
+                                       y: bboxPt.y + offset.y)
             syncEditableForStroke(si)
         }
     }
@@ -330,6 +349,7 @@ struct StrokeCalibrationOverlay: View {
         dragTargetSi = nil
         dragTargetCi = nil
         gestureExceededDragThreshold = false
+        dragHandleOffset = nil
     }
 
     private func handleSkelettTap(at bboxPt: CGPoint) {
@@ -1473,6 +1493,10 @@ struct StrokeCalibrationOverlay: View {
     }
 
     private func screenToGlyph(_ pt: CGPoint, in size: CGSize) -> CGPoint {
+        // No edit-time rounding: quantising bbox-rel here used to snap to
+        // 0.01 (≈ 8 px on a 1024-px canvas), making fine handle
+        // positioning impossible. The single quantisation point is
+        // CalibrationStore.persist's 3-decimal rounding at save time.
         guard let gr = PrimaeLetterRenderer.normalizedGlyphRect(
             for: vm.currentLetterName, canvasSize: size, schriftArt: vm.schriftArt,
             openTypeFeatures: vm.currentGlyphFeatures),
@@ -1480,15 +1504,15 @@ struct StrokeCalibrationOverlay: View {
             let x = pt.x / size.width
             let y = pt.y / size.height
             return CGPoint(
-                x: max(-0.05, min(1.05, (x * 100).rounded() / 100)),
-                y: max(-0.05, min(1.05, (y * 100).rounded() / 100))
+                x: max(-0.05, min(1.05, x)),
+                y: max(-0.05, min(1.05, y))
             )
         }
         let x = (pt.x / size.width - gr.minX) / gr.width
         let y = (pt.y / size.height - gr.minY) / gr.height
         return CGPoint(
-            x: max(-0.10, min(1.10, (x * 100).rounded() / 100)),
-            y: max(-0.10, min(1.10, (y * 100).rounded() / 100))
+            x: max(-0.10, min(1.10, x)),
+            y: max(-0.10, min(1.10, y))
         )
     }
 
