@@ -2602,7 +2602,7 @@ def _bfs_skeleton_path(a: tuple[int, int], b: tuple[int, int],
 def _trim_bfs_to_on_axis(bfs_pts: list[tuple[int, int]],
                           a_raw: tuple[int, int],
                           b_raw: tuple[int, int],
-                          angle_threshold_deg: float = 30.0
+                          angle_threshold_deg: float = 45.0
                           ) -> list[tuple[int, int]]:
     """Trim the BFS skeleton path to its longest contiguous run whose
     per-segment tangent is within ±`angle_threshold_deg` of the
