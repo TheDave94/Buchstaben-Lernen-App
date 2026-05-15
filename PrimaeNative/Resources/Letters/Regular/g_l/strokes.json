@@ -3,8 +3,6 @@
   "checkpointRadius": 0.05,
   "strokes": [
     {
-      "id": 1,
-      "comment": "Stroke 1",
       "checkpoints": [
         {
           "x": 0.78,
@@ -454,11 +452,10 @@
           "x": 0.92,
           "y": 0.04
         }
-      ]
+      ],
+      "id": 1
     },
     {
-      "id": 2,
-      "comment": "Stroke 2",
       "checkpoints": [
         {
           "x": 0.916,
@@ -780,7 +777,8 @@
           "x": 0.08,
           "y": 0.9
         }
-      ]
+      ],
+      "id": 2
     }
   ],
   "skeleton": [
