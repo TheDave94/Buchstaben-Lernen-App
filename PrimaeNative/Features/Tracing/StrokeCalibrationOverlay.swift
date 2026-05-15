@@ -40,6 +40,12 @@ struct StrokeCalibrationOverlay: View {
     @State private var dragTargetCi: Int? = nil
     /// Touch-down position in bbox-rel; used to detect tap vs drag.
     @State private var dragStartPt: CGPoint? = nil
+    /// True once movement from `dragStartPt` exceeds the drag-threshold
+    /// (0.025 bbox-rel ≈ 12 px). Below this, the touch is treated as a
+    /// tap — no handle movement, no undo snapshot. This kills the
+    /// Pencil micro-jitter (5-15 px during natural taps) that was
+    /// invisibly drifting handles.
+    @State private var gestureExceededDragThreshold: Bool = false
     /// SKELETT mode: show "1, 2, 3 …" numbers inside each handle.
     /// Off by default — numbers are debug noise during skeleton
     /// editing.
@@ -136,6 +142,18 @@ struct StrokeCalibrationOverlay: View {
                     anchorsLayer(in: size)
                     polylineReferenceLayer(in: size)
                 }
+                if topMode == .skelett {
+                    // Pencil-only canvas gesture, clipped to glyph bbox.
+                    // Sits above visual layers so it gets first crack at
+                    // touches in the canvas area; below controlsLayer
+                    // so the mode/sub-tool buttons remain reachable.
+                    PencilDragLayer(
+                        glyphRectScreen: glyphRectScreen(in: size),
+                        onBegan: { handleSkelettBegan(atScreen: $0, in: size) },
+                        onChanged: { handleSkelettChanged(atScreen: $0, in: size) },
+                        onEnded: { handleSkelettEnded(atScreen: $0, in: size) }
+                    )
+                }
                 controlsLayer
             }
             .onAppear {
@@ -227,102 +245,92 @@ struct StrokeCalibrationOverlay: View {
                     let bboxPt = screenToGlyph(location, in: size)
                     addAnchor(bboxPt)
                 }
-        } else if topMode == .skelett {
-            // Single top-level gesture for all SKELETT tools so
-            // closest-checkpoint picking disambiguates dense regions
-            // (CHANGE 2). Per-dot gestures were the disambiguation
-            // problem; the gesture layer sits ABOVE the dots and
-            // does its own hit-testing.
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(skelettGesture(in: size))
         }
+        // SKELETT canvas gesture moved to PencilDragLayer (palm
+        // rejection + bbox clip). Finger touches and out-of-bbox
+        // contacts no longer fire the gesture.
     }
 
-    private func skelettGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                let bboxPt = screenToGlyph(value.location, in: size)
-                if dragStartPt == nil {
-                    // first onChanged of this gesture → touch-down
-                    #if DEBUG
-                    logSkelettTouchDown(at: bboxPt, screenPt: value.location)
-                    #endif
-                    dragStartPt = bboxPt
-                    if skelettTool == .drag,
-                       let target = closestHandle(to: bboxPt) {
-                        pushUndoSnapshot()
-                        dragTargetSi = target.si
-                        dragTargetCi = target.ci
-                        if activeStroke != target.si { activeStroke = target.si }
-                    }
-                }
-                if skelettTool == .drag,
-                   let si = dragTargetSi, let ci = dragTargetCi,
-                   handles.indices.contains(si),
-                   handles[si].indices.contains(ci) {
-                    handles[si][ci] = bboxPt
-                    syncEditableForStroke(si)
-                }
-            }
-            .onEnded { value in
-                let bboxPt = screenToGlyph(value.location, in: size)
-                let movement: CGFloat = {
-                    guard let s = dragStartPt else { return 0 }
-                    let dx = bboxPt.x - s.x, dy = bboxPt.y - s.y
-                    return (dx * dx + dy * dy).squareRoot()
-                }()
-                // <0.01 bbox-rel ≈ ~3 px on 1024² = finger jitter.
-                let wasTap = movement < 0.01
-                #if DEBUG
-                logSkelettTouchUp(at: bboxPt, movement: movement, wasTap: wasTap)
-                #endif
-                if wasTap {
-                    handleSkelettTap(at: bboxPt)
-                }
-                dragTargetSi = nil
-                dragTargetCi = nil
-                dragStartPt = nil
-            }
+    /// Bbox-relative drag threshold. Movement below this is a tap;
+    /// movement above this engages drag mode. 0.025 bbox-rel ≈ 12 px
+    /// on a 1024² canvas — comfortably above Pencil micro-jitter
+    /// (5-15 px) but small enough that intentional drags feel
+    /// responsive.
+    private let skelettDragThreshold: CGFloat = 0.025
+
+    /// Glyph bbox in SwiftUI screen-coord space — passed to the
+    /// PencilDragLayer for hit-test clipping.
+    private func glyphRectScreen(in size: CGSize) -> CGRect {
+        let gr = PrimaeLetterRenderer.normalizedGlyphRect(
+            for: vm.currentLetterName,
+            canvasSize: size,
+            schriftArt: vm.schriftArt,
+            openTypeFeatures: vm.currentGlyphFeatures)
+            ?? CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+        return CGRect(x: gr.minX * size.width,
+                      y: gr.minY * size.height,
+                      width: gr.width * size.width,
+                      height: gr.height * size.height)
     }
 
-    #if DEBUG
-    /// SKELETT hit-registration instrumentation — temporary. David
-    /// reports Pencil taps land only ~1-in-4. These logs distinguish
-    /// (a) taps that never reach the gesture (no DOWN line at all),
-    /// (b) taps that reach but closestHandle returns nothing, and
-    /// (c) taps that pick the wrong handle. Strip once the cause is
-    /// identified and fixed.
-    private func logSkelettTouchDown(at bboxPt: CGPoint, screenPt: CGPoint) {
-        let nearestDesc: String
-        if let n = closestHandle(to: bboxPt),
-           handles.indices.contains(n.si),
-           handles[n.si].indices.contains(n.ci) {
-            let hp = handles[n.si][n.ci]
-            let dx = hp.x - bboxPt.x, dy = hp.y - bboxPt.y
-            let d = (dx * dx + dy * dy).squareRoot()
-            let scope = (n.si == activeStroke && d <= 0.06) ? "active" : "global"
-            nearestDesc = "si=\(n.si) ci=\(n.ci) d=\(fmt3(d)) (\(scope))"
+    /// SKELETT touch-down. Pick the closest handle as the drag
+    /// target but DON'T commit (no undo snapshot, no activeStroke
+    /// switch yet). Commitment happens only when movement crosses
+    /// `skelettDragThreshold`.
+    private func handleSkelettBegan(atScreen screenPt: CGPoint, in size: CGSize) {
+        let bboxPt = screenToGlyph(screenPt, in: size)
+        dragStartPt = bboxPt
+        gestureExceededDragThreshold = false
+        if skelettTool == .drag, let target = closestHandle(to: bboxPt) {
+            dragTargetSi = target.si
+            dragTargetCi = target.ci
         } else {
-            nearestDesc = "none"
+            dragTargetSi = nil
+            dragTargetCi = nil
         }
-        print("[SKELETT-TAP] DOWN bbox=(\(fmt3(bboxPt.x)), \(fmt3(bboxPt.y))) "
-              + "screen=(\(Int(screenPt.x)), \(Int(screenPt.y))) "
-              + "tool=\(skelettTool.rawValue) "
-              + "activeStroke=\(activeStroke) "
-              + "nearest=\(nearestDesc)")
     }
 
-    private func logSkelettTouchUp(at bboxPt: CGPoint,
-                                   movement: CGFloat, wasTap: Bool) {
-        print("[SKELETT-TAP] UP   bbox=(\(fmt3(bboxPt.x)), \(fmt3(bboxPt.y))) "
-              + "movement=\(fmt3(movement)) wasTap=\(wasTap)")
+    /// SKELETT touch-move. Below drag threshold = no-op (tap in
+    /// progress). Once threshold crossed, push undo, switch active
+    /// stroke if needed, then follow the Pencil with the handle.
+    private func handleSkelettChanged(atScreen screenPt: CGPoint, in size: CGSize) {
+        let bboxPt = screenToGlyph(screenPt, in: size)
+        guard let start = dragStartPt else { return }
+        if !gestureExceededDragThreshold {
+            let dx = bboxPt.x - start.x, dy = bboxPt.y - start.y
+            let dist = (dx * dx + dy * dy).squareRoot()
+            guard dist > skelettDragThreshold else { return }
+            gestureExceededDragThreshold = true
+            if skelettTool == .drag,
+               let si = dragTargetSi,
+               handles.indices.contains(si) {
+                pushUndoSnapshot()
+                if activeStroke != si { activeStroke = si }
+            }
+        }
+        if skelettTool == .drag,
+           let si = dragTargetSi, let ci = dragTargetCi,
+           handles.indices.contains(si),
+           handles[si].indices.contains(ci) {
+            handles[si][ci] = bboxPt
+            syncEditableForStroke(si)
+        }
     }
 
-    private func fmt3(_ v: CGFloat) -> String {
-        String(format: "%.3f", Double(v))
+    /// SKELETT touch-up. If the gesture never crossed the drag
+    /// threshold, it was a tap → dispatch to `handleSkelettTap`.
+    /// Otherwise the drag already committed the edit during
+    /// `handleSkelettChanged`.
+    private func handleSkelettEnded(atScreen screenPt: CGPoint, in size: CGSize) {
+        let bboxPt = screenToGlyph(screenPt, in: size)
+        if !gestureExceededDragThreshold {
+            handleSkelettTap(at: bboxPt)
+        }
+        dragStartPt = nil
+        dragTargetSi = nil
+        dragTargetCi = nil
+        gestureExceededDragThreshold = false
     }
-    #endif
 
     private func handleSkelettTap(at bboxPt: CGPoint) {
         switch skelettTool {
@@ -1176,22 +1184,17 @@ struct StrokeCalibrationOverlay: View {
     @ViewBuilder
     private var controlsLayer: some View {
         VStack {
-            topBar
-                .padding(10)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                // 50 pt keeps the bar flush under the debug chips and
-                // above the glyph render area for all demo letters.
-                .padding(.top, 50)
-
+            // Top: status text + skeleton diagnostic capsules. Small,
+            // non-interactive — they don't compete with tall letters
+            // for canvas space.
             Text(statusHint)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 .background(.ultraThinMaterial, in: Capsule())
+                .padding(.top, 50)
 
-            // Skeleton diagnostics: count + orientation legend so we can
-            // verify the centerline extracted at the right position.
             let skLabel: String = {
                 guard let sk = skeleton else { return "Skelett: nil" }
                 return "Skelett: \(sk.points.count) Punkte (rot=oben, blau=unten)"
@@ -1205,10 +1208,20 @@ struct StrokeCalibrationOverlay: View {
 
             Spacer()
 
-            bottomBar
-                .padding(10)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                .padding(.bottom, 40)
+            // Bottom: control stack (mode toggle + sub-tools + chips on
+            // top, persistent action buttons below). Leaves the full
+            // upper canvas free for tall uppercase letters.
+            VStack(spacing: 10) {
+                topBar
+                    .padding(10)
+                    .background(.ultraThinMaterial,
+                                in: RoundedRectangle(cornerRadius: 10))
+                bottomBar
+                    .padding(10)
+                    .background(.ultraThinMaterial,
+                                in: RoundedRectangle(cornerRadius: 10))
+            }
+            .padding(.bottom, 40)
         }
     }
 
@@ -1594,6 +1607,93 @@ struct StrokeCalibrationOverlay: View {
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
               let str = String(data: data, encoding: .utf8) else { return "{}" }
         return str
+    }
+}
+
+// MARK: - Pencil-only canvas gesture (palm rejection + bbox clip)
+
+/// SKELETT-mode canvas input. Uses a UILongPressGestureRecognizer
+/// (minimumPressDuration=0) restricted to `.pencil` touches so palm
+/// contacts never fire the gesture. The hosting UIView's `hitTest`
+/// clips to the glyph bbox so Pencil touches outside the letter
+/// (e.g. on the bottom bar buttons) fall through to SwiftUI layers
+/// below.
+private struct PencilDragLayer: UIViewRepresentable {
+    let glyphRectScreen: CGRect
+    let onBegan: (CGPoint) -> Void
+    let onChanged: (CGPoint) -> Void
+    let onEnded: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onBegan: onBegan, onChanged: onChanged, onEnded: onEnded)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = PencilHitTestView()
+        view.backgroundColor = .clear
+        view.bboxScreen = glyphRectScreen
+        let r = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handle(_:)))
+        r.minimumPressDuration = 0
+        // Don't cancel the gesture on movement — we own tap-vs-drag.
+        r.allowableMovement = .greatestFiniteMagnitude
+        r.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.pencil.rawValue)
+        ]
+        view.addGestureRecognizer(r)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        if let v = uiView as? PencilHitTestView {
+            v.bboxScreen = glyphRectScreen
+        }
+        context.coordinator.onBegan = onBegan
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    final class Coordinator: NSObject {
+        var onBegan: (CGPoint) -> Void
+        var onChanged: (CGPoint) -> Void
+        var onEnded: (CGPoint) -> Void
+
+        init(onBegan: @escaping (CGPoint) -> Void,
+             onChanged: @escaping (CGPoint) -> Void,
+             onEnded: @escaping (CGPoint) -> Void) {
+            self.onBegan = onBegan
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+        }
+
+        @objc func handle(_ r: UILongPressGestureRecognizer) {
+            let pt = r.location(in: r.view)
+            switch r.state {
+            case .began:
+                onBegan(pt)
+            case .changed:
+                onChanged(pt)
+            case .ended, .cancelled, .failed:
+                onEnded(pt)
+            default:
+                break
+            }
+        }
+    }
+}
+
+/// Hit-test only claims touches within the glyph bbox (plus a small
+/// margin). Touches outside fall through to SwiftUI layers below so
+/// the control bar buttons remain reachable.
+private final class PencilHitTestView: UIView {
+    var bboxScreen: CGRect = .zero
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let margin: CGFloat = 20
+        let expanded = bboxScreen.insetBy(dx: -margin, dy: -margin)
+        guard expanded.contains(point) else { return nil }
+        return super.hitTest(point, with: event)
     }
 }
 
