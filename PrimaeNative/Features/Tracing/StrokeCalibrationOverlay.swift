@@ -245,6 +245,9 @@ struct StrokeCalibrationOverlay: View {
                 let bboxPt = screenToGlyph(value.location, in: size)
                 if dragStartPt == nil {
                     // first onChanged of this gesture → touch-down
+                    #if DEBUG
+                    logSkelettTouchDown(at: bboxPt, screenPt: value.location)
+                    #endif
                     dragStartPt = bboxPt
                     if skelettTool == .drag,
                        let target = closestHandle(to: bboxPt) {
@@ -271,6 +274,9 @@ struct StrokeCalibrationOverlay: View {
                 }()
                 // <0.01 bbox-rel ≈ ~3 px on 1024² = finger jitter.
                 let wasTap = movement < 0.01
+                #if DEBUG
+                logSkelettTouchUp(at: bboxPt, movement: movement, wasTap: wasTap)
+                #endif
                 if wasTap {
                     handleSkelettTap(at: bboxPt)
                 }
@@ -279,6 +285,44 @@ struct StrokeCalibrationOverlay: View {
                 dragStartPt = nil
             }
     }
+
+    #if DEBUG
+    /// SKELETT hit-registration instrumentation — temporary. David
+    /// reports Pencil taps land only ~1-in-4. These logs distinguish
+    /// (a) taps that never reach the gesture (no DOWN line at all),
+    /// (b) taps that reach but closestHandle returns nothing, and
+    /// (c) taps that pick the wrong handle. Strip once the cause is
+    /// identified and fixed.
+    private func logSkelettTouchDown(at bboxPt: CGPoint, screenPt: CGPoint) {
+        let nearestDesc: String
+        if let n = closestHandle(to: bboxPt),
+           handles.indices.contains(n.si),
+           handles[n.si].indices.contains(n.ci) {
+            let hp = handles[n.si][n.ci]
+            let dx = hp.x - bboxPt.x, dy = hp.y - bboxPt.y
+            let d = (dx * dx + dy * dy).squareRoot()
+            let scope = (n.si == activeStroke && d <= 0.06) ? "active" : "global"
+            nearestDesc = "si=\(n.si) ci=\(n.ci) d=\(fmt3(d)) (\(scope))"
+        } else {
+            nearestDesc = "none"
+        }
+        print("[SKELETT-TAP] DOWN bbox=(\(fmt3(bboxPt.x)), \(fmt3(bboxPt.y))) "
+              + "screen=(\(Int(screenPt.x)), \(Int(screenPt.y))) "
+              + "tool=\(skelettTool.rawValue) "
+              + "activeStroke=\(activeStroke) "
+              + "nearest=\(nearestDesc)")
+    }
+
+    private func logSkelettTouchUp(at bboxPt: CGPoint,
+                                   movement: CGFloat, wasTap: Bool) {
+        print("[SKELETT-TAP] UP   bbox=(\(fmt3(bboxPt.x)), \(fmt3(bboxPt.y))) "
+              + "movement=\(fmt3(movement)) wasTap=\(wasTap)")
+    }
+
+    private func fmt3(_ v: CGFloat) -> String {
+        String(format: "%.3f", Double(v))
+    }
+    #endif
 
     private func handleSkelettTap(at bboxPt: CGPoint) {
         switch skelettTool {
