@@ -571,18 +571,23 @@ LETTERS: dict[str, list[StrokeSpec]] = {
 }
 
 
-# Letters that ship as static, hand-tuned artifacts. The bake pipeline
-# does not produce them; their strokes.json files are committed
-# verbatim and never re-generated. Listed here for documentation only.
+# NOTE: For Druckschrift Regular, all 59 letters are hand-tuned via
+# the iPad calibrator and committed verbatim. The bake pipeline is
+# retained for future letters (Schreibschrift, Druckschrift Light via
+# template warping, future fonts) but produces no shipped output for
+# Druckschrift Regular. LETTERS dict and primitives stay in place as
+# starting points for those future flows.
 SHIPPED_AS_STATIC_ARTIFACT: frozenset[str] = frozenset({
-    "C", "O", "S", "G", "Q",  # original spline-calibrator bakes
-    "B", "b", "p",            # added in walker/firewall rounds; now
-                              # also restored to 914ef6c5 content
-    "a", "g", "h", "m", "q", "u", "U",  # restored from 914ef6c5; the
-                              # successive bake-pipeline changes had
-                              # degraded these letters relative to the
-                              # original spline-calibrator ship
-    # A, Y, D: pending separate review before any restore decision
+    # Uppercase
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+    "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+    "U", "V", "W", "X", "Y", "Z",
+    # Lowercase
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
+    "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
+    "u", "v", "w", "x", "y", "z",
+    # Umlauts + ß
+    "Ä", "Ö", "Ü", "ä", "ö", "ü", "ß",
 })
 
 ALL_LETTERS = tuple(LETTERS.keys())
