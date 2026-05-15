@@ -52,6 +52,14 @@ struct StrokeCalibrationOverlay: View {
     /// 12 px to the threshold-crossing position. Result: any motion
     /// past threshold yields the same magnitude of handle motion.
     @State private var dragHandleOffset: CGPoint? = nil
+    /// True after any mutation to editableStrokes / handles /
+    /// anchorsPerStroke since the last Speichern. Drives the auto-
+    /// save guards before navigation (letter switch, schriftArt
+    /// switch) and before the "Alle" export — without those guards
+    /// in-memory edits silently disappear when loadFromVM
+    /// overwrites editableStrokes, and the "Alle" export reads only
+    /// persisted data so it would miss unsaved edits entirely.
+    @State private var hasUnsavedEdits: Bool = false
     /// SKELETT mode: show "1, 2, 3 …" numbers inside each handle.
     /// Off by default — numbers are debug noise during skeleton
     /// editing.
@@ -169,12 +177,17 @@ struct StrokeCalibrationOverlay: View {
                 refreshSkeleton()
             }
             .onChange(of: vm.currentLetterName) {
+                // Persist before loadFromVM overwrites editableStrokes —
+                // navigation used to silently destroy unsaved SKELETT/ANKER
+                // edits. Reset is the explicit discard path.
+                if hasUnsavedEdits, loaded { saveToVM() }
                 loadFromVM()
                 bootstrapAnchorsFromExistingStrokes()
                 bootstrapHandles()
                 refreshSkeleton()
             }
             .onChange(of: vm.schriftArt) {
+                if hasUnsavedEdits, loaded { saveToVM() }
                 loadFromVM(force: true)
                 bootstrapAnchorsFromExistingStrokes()
                 bootstrapHandles()
@@ -198,6 +211,7 @@ struct StrokeCalibrationOverlay: View {
                 editableStrokes = []
                 loadedKey = nil
                 loaded = false
+                hasUnsavedEdits = false
             }
             Button("Abbrechen", role: .cancel) {}
         } message: {
@@ -486,6 +500,7 @@ struct StrokeCalibrationOverlay: View {
         guard handles.indices.contains(si),
               originalCpCounts.indices.contains(si),
               editableStrokes.indices.contains(si) else { return }
+        hasUnsavedEdits = true
         let hs = handles[si]
         let n = originalCpCounts[si]
         guard n > 0 else {
@@ -538,6 +553,7 @@ struct StrokeCalibrationOverlay: View {
         guard let last = undoStack.popLast() else { return }
         handles = last.handles
         editableStrokes = last.editableStrokes
+        hasUnsavedEdits = true
         if activeStroke >= editableStrokes.count {
             activeStroke = max(0, editableStrokes.count - 1)
         }
@@ -557,6 +573,7 @@ struct StrokeCalibrationOverlay: View {
             anchors.append(pt)
         }
         anchorsPerStroke[activeStroke] = anchors
+        hasUnsavedEdits = true
         rebuildStrokeFromAnchors()
     }
 
@@ -616,6 +633,7 @@ struct StrokeCalibrationOverlay: View {
     private func commitDragWithReorder(_ snapped: CGPoint, draggedIdx: Int) {
         guard var anchors = anchorsPerStroke[activeStroke] else { return }
         anchors[draggedIdx] = snapped
+        hasUnsavedEdits = true
         var others = anchors
         others.remove(at: draggedIdx)
         guard let bestInsertIdx = closestSegmentInsertIndex(
@@ -670,6 +688,7 @@ struct StrokeCalibrationOverlay: View {
               anchorIdx < anchors.count else { return }
         anchors.remove(at: anchorIdx)
         anchorsPerStroke[strokeIdx] = anchors
+        hasUnsavedEdits = true
         if strokeIdx == activeStroke { rebuildStrokeFromAnchors() }
     }
 
@@ -1021,6 +1040,7 @@ struct StrokeCalibrationOverlay: View {
                             .onChanged { value in
                                 anchorsPerStroke[activeStroke]?[idx] =
                                     screenToGlyph(value.location, in: size)
+                                hasUnsavedEdits = true
                             }
                             .onEnded { value in
                                 let final = screenToGlyph(value.location, in: size)
@@ -1440,6 +1460,11 @@ struct StrokeCalibrationOverlay: View {
             .tint(.orange)
 
             Button("Alle") {
+                // Auto-save before reading from persistence. Without
+                // this, loadAllEffectiveStrokes returns CalibrationStore
+                // + bundle data only and the current letter's unsaved
+                // SKELETT/ANKER edits are absent from the export.
+                if hasUnsavedEdits { saveToVM() }
                 exportText = generateAllJSON()
                 showExport = true
             }
@@ -1523,6 +1548,7 @@ struct StrokeCalibrationOverlay: View {
         editableStrokes.append([])
         activeStroke = editableStrokes.count - 1
         anchorsPerStroke[activeStroke] = []
+        hasUnsavedEdits = true
         topMode = .anker
         ankerTool = .place
     }
@@ -1530,6 +1556,7 @@ struct StrokeCalibrationOverlay: View {
     private func deleteStroke(_ idx: Int) {
         guard editableStrokes.indices.contains(idx) else { return }
         editableStrokes.remove(at: idx)
+        hasUnsavedEdits = true
         activeStroke = max(0, min(activeStroke, editableStrokes.count - 1))
     }
 
@@ -1558,6 +1585,8 @@ struct StrokeCalibrationOverlay: View {
         undoStack.removeAll()
         handles.removeAll()
         originalCpCounts.removeAll()
+        // Fresh from persistence/bundle — nothing unsaved yet.
+        hasUnsavedEdits = false
     }
 
     private func applyToVM() {
@@ -1568,6 +1597,7 @@ struct StrokeCalibrationOverlay: View {
     private func saveToVM() {
         vm.applyCalibration(editableStrokes)
         vm.persistCalibratedStrokes(editableStrokes, for: vm.currentLetterName)
+        hasUnsavedEdits = false
         savedFlashUntil = Date().addingTimeInterval(1.2)
         Task {
             try? await Task.sleep(for: .milliseconds(1300))
