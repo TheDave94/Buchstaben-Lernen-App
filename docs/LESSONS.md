@@ -1,10 +1,178 @@
-# LESSONS.md — Code-level invariants
+# LESSONS.md
 
-Hard-won invariants that catch regressions a typecheck won't. Read this
-before touching `AudioEngine.swift`, `StrokeTracker.swift`, or the
-`load(letter:)` path. (Earlier revisions of this file logged a
-council-style automation pipeline's post-mortems; that pipeline is
-gone, so only the invariants survived the trim.)
+Two layers of lessons. The first (Part A) is architectural — read
+before designing the next font/weight pipeline or any similar
+algorithm-vs-tool decision. The second (Part B) is code-level —
+read before touching `AudioEngine.swift`, `StrokeTracker.swift`,
+or the `load(letter:)` path.
+
+---
+
+# Part A — Lessons from Druckschrift Regular
+
+Audience: future maintainers facing similar architectural questions
+("should this be fully automated or tool-assisted?", "should I
+train an ML model or hand-author the data?", "the algorithm
+produces something different from what I'd draw — why?").
+
+## 1. Tool-assisted authorship beats fully automated bake for handwriting pedagogy
+
+We spent a long time trying to build a bake pipeline that produced
+ship-quality polylines from glyph rasters. For simple letters
+(straight lines, single curves) it worked. For visually complex
+letters (closed bowls, asymmetric curves, multi-stroke junctions)
+every algorithmic approach we tried either failed or required so
+much tuning that hand-authorship via the calibrator was faster.
+
+The right architecture turned out to be:
+
+- bake produces drafts (good for simple geometry)
+- calibrator (with skeleton-edit mode) produces ship-quality
+  polylines for everything else
+- the runtime ships the calibrator output for all 59 letters
+
+The lesson to internalize: for creative or pedagogical artifacts
+where human judgment is the quality criterion, "build the
+algorithm" and "build the editor" are different investments. The
+editor compounds across all letters; the algorithm has diminishing
+returns past a certain point.
+
+## 2. Medial-axis math ≠ pedagogical centerline
+
+The mathematical medial axis (locus of points equidistant from
+the ink boundary) is well-defined and computable. For simple
+shapes it coincides with what a human reads as "the line through
+the middle of the stroke." For asymmetric or junction-heavy
+shapes it branches, takes detours, or sits visibly off-center.
+
+We spent significant time building post-processing (snap-to-middle,
+Y-junction reconciliation, per-stroke mask isolation, slanted-stem
+LSQ) to bridge this gap. Each layer either failed or introduced
+new artifacts. The fundamental problem is representational: medial
+axis is a property of ink geometry; centerline (as humans read it)
+is a property of intended stroke trajectory. The algorithm and
+the goal aren't measuring the same thing.
+
+When the algorithmic output of a geometric primitive doesn't match
+what looks right, the answer is often not "tune the primitive
+more" — it's "this primitive isn't measuring what you want."
+
+## 3. Training data IS the deliverable (for small fixed corpora)
+
+We considered training an ML model to produce polylines from
+glyph masks. The external evaluator's framing:
+
+> For a 59-letter font, the training set and the deliverable are
+> the same set. A model trained on 30 to predict the 15 only
+> matters if the model output is acceptable without correction —
+> and if it were, we wouldn't have needed the calibrator. A model
+> trained on all 59 has nothing left to predict.
+
+ML pays off when:
+
+- the corpus is open-ended (new examples will keep arriving)
+- hand-correction of model output is meaningfully faster than
+  hand-authoring from scratch
+- you have enough training data to span the topological space
+
+For 59 letters with high topological diversity, none of those
+held. We deferred ML and shipped via hand-tuning.
+
+## 4. The BFS-trim regression cycle (worked example)
+
+A specific bug pattern worth documenting because it'll recur in
+any pipeline that runs SVD on pixel-discretized skeleton paths.
+
+**Problem:** A's crossbar polyline sat 7.5 px above the ink's
+center because the SVD fit over the L-shaped BFS path (diagonal
+leg + on-axis crossbar + diagonal leg) was pulled off-center by
+the perpendicular legs.
+
+**Fix:** trim BFS path to the longest contiguous run of segments
+whose tangent matches the chord direction within ±30°.
+
+**Regression:** the same trim broke A's diagonals. Pixel-staircase
+zigzag on the diagonal skeleton produced per-segment tangent
+noise (some segments at 0°, some at 45°). The longest contiguous
+on-axis run was 12 segments out of 444. SVD over 12 segments
+produced a degenerate fit.
+
+**Re-fix:** raise threshold to ±45° (enough to absorb staircase
+noise on diagonals; still tight enough to drop crossbar-
+perpendicular legs at 90°).
+
+**Generalizable lesson:** any time you set an angle threshold
+against pixel-discretized data, sanity-check it against ALL the
+shapes that data could plausibly produce. Pixel staircases are
+noisier than continuous geometry suggests. A smoothing pass
+before the angle check (the eventual cleaner solution if this
+recurs) sidesteps the issue.
+
+## 5. NFC vs NFD gotcha for letter-named filesystem paths
+
+When importing data with non-ASCII letter names (Ä Ö Ü ß ä ö ü on
+Linux/macOS), normalize to NFC before constructing paths.
+
+The iPad calibrator exported `Ä` in NFD (A + combining diaeresis).
+Linux filesystems treated this as a different path from the
+existing NFC `Ä` directory. The import created NFD-named
+directories alongside the NFC ones, silently splitting the letter
+data.
+
+Fix: `unicodedata.normalize("NFC", letter)` before any path
+construction. Always. Even when you think the input is "obviously"
+NFC. See `scripts/calibration_to_override.py` for the canonical
+helper.
+
+## 6. Polyline diff isn't always shape diff
+
+When comparing two polylines (e.g. bake output vs reference), a
+high per-checkpoint distance can mean either (a) the shapes are
+different, or (b) the same shape is sampled at different
+parameterizations.
+
+Example: t's bake and calibrator polylines had a 179‰-of-bbox
+max checkpoint distance at t=0.75 along the parameter. Both
+polylines traced the same geometric path; the calibrator
+distributed more checkpoints along the curl, the bake distributed
+more along the stem.
+
+When diff metrics flag something, check parameterization before
+chasing a shape bug. Cheap check: compare endpoints first, then
+sample at fixed arc-length percentages, not at fixed checkpoint
+indices.
+
+## 7. The iPad calibrator's design evolution
+
+The calibrator started as anchor-placement (ANKER mode). Anchors
+are pedagogical waypoints; placing them on top of an
+algorithmically-baked polyline gave the runtime the start / stop /
+check points it needed.
+
+That worked until the polyline itself was wrong. Anchors snap to
+polylines, so a wrong polyline produced wrong anchor positions
+with no escape.
+
+The fix: SKELETT mode for direct polyline editing. Sparse RDP-
+derived handles, Catmull-Rom interpolation between them, save
+resamples back to the original checkpoint count. The two modes
+(SKELETT and ANKER) stay strictly separate; editing one never
+affects the other.
+
+**Generalizable lesson:** if your tool's edit affordances only
+operate on the wrong layer of abstraction, that's not a bug —
+that's a missing tool. Building the second tool is often less
+work than fighting around its absence.
+
+---
+
+# Part B — Code-level invariants
+
+Hard-won invariants that catch regressions a typecheck won't. Read
+this before touching `AudioEngine.swift`, `StrokeTracker.swift`,
+or the `load(letter:)` path. (Earlier revisions of this file
+logged a council-style automation pipeline's post-mortems; that
+pipeline is gone, so only the invariants survived the trim.)
 
 _Last audited 2026-04-29 against `main` after the Primae rebrand
 + design-system rollout + U11 dark-mode parity (Asset-Catalog
