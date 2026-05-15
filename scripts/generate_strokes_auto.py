@@ -364,40 +364,23 @@ LETTERS: dict[str, list[StrokeSpec]] = {
          "arms": ["smoothed_medial_axis"]},
     ],
     "r": [
-        # Two strokes: a vertical stem and a hook curve that joins
-        # back onto the stem. ASC_TOP / DESC_HOOK_L are used in lieu
-        # of STEM_T / STEM_B because the column-extremum resolvers
-        # don't work for r's off-center stem (STEM_T lands on the
-        # arm top at (556, 418), STEM_B on the arm-side bulge at
-        # (582, 508)). The skeleton-endpoint resolvers correctly pick
-        # the stem's two skeleton terminals at (450, 438) and
-        # (432, 687). Stem uses straight_line so the LSQ fit absorbs
-        # any BFS detour through the branch junction. Hook walks the
-        # medial axis from ARM_TIP_R back to BRANCH_R (the rightmost
-        # mid-row skeleton junction — where the hook joins the stem).
-        {"kind": "line", "anchors": ["ASC_TOP", "DESC_HOOK_L"],
-         "arms": ["straight_line"]},
-        {"kind": "line", "anchors": ["ARM_TIP_R", "BRANCH_R"],
-         "arms": ["smoothed_medial_axis"]},
+        # Calibrator-confirmed single-stroke decomposition: the child
+        # writes r without lifting — down the stem to the descender
+        # hook, back up the stem to the branch, out to the arm tip.
+        # BFS naturally walks the skeleton's branch detour for the
+        # second arm.
+        {"kind": "line",
+         "anchors": ["ASC_TOP", "DESC_HOOK_L", "ARM_TIP_R"],
+         "arms": ["straight_line", "smoothed_medial_axis"]},
     ],
     "f": [
-        # Three strokes: ascender hook + straight stem + crossbar.
-        # The hook walks ASC_TOP → BRANCH_T via smoothed_medial_axis;
-        # BRANCH_T is curvature-detected as the first skeleton pixel
-        # where the medial axis settles into vertical motion (col-band
-        # ≤ 2 over a 10-px ancestor window). For f this lands at
-        # ~(488, 293), just below the ascender hook curl. The stem
-        # walks BRANCH_T → DESC_HOOK_L via straight_line — LSQ-fits
-        # the BFS path which detours through the crossbar T-junction
-        # (would dip with smoothed_medial_axis; arm_straight_line
-        # absorbs it). DESC_HOOK_L = descender bottom skeleton
-        # endpoint at (442, 890); STEM_B's column-extremum lands
-        # mid-stem and doesn't work for f. Crossbar at x-height,
-        # same construction as t.
-        {"kind": "line", "anchors": ["ASC_TOP", "BRANCH_T"],
+        # Calibrator-confirmed two-stroke decomposition: cap curl
+        # through stem to descender in one motion + crossbar. The
+        # medial-axis BFS from ASC_TOP to DESC_HOOK_L walks through
+        # BRANCH_T (curl→stem transition) as part of the natural
+        # centerline so no explicit waypoint is needed.
+        {"kind": "line", "anchors": ["ASC_TOP", "DESC_HOOK_L"],
          "arms": ["smoothed_medial_axis"]},
-        {"kind": "line", "anchors": ["BRANCH_T", "DESC_HOOK_L"],
-         "arms": ["straight_line"]},
         {"kind": "line", "anchors": ["XBAR_L", "XBAR_R"],
          "arms": ["straight_line"]},
     ],
@@ -465,38 +448,33 @@ LETTERS: dict[str, list[StrokeSpec]] = {
          "arms": ["straight_line"]},
     ],
     "Y": [
-        # Three straight strokes meeting at a single shared apex — the
-        # diagonals enter the stem at BRANCH_R (lowest-row mid-row
-        # skeleton junction, here the only junction at (491, 488)).
-        # STEM_B reaches the column-extremum bottom of the glyph just
-        # past the skeleton terminus. ARM_TIP_TL / ARM_TIP_TR pick the
-        # upper-half min-col / max-col endpoints; existing ASC_TOP
-        # would pick min-row + max-col which falls on the left tip
-        # for Y (mins on row) and on the right tip for y (mins on
-        # row), so the resolver is inconsistent — the explicit *_TL /
-        # *_TR resolvers are stable across both.
-        {"kind": "line", "anchors": ["ARM_TIP_TL", "BRANCH_R"],
-         "arms": ["straight_line"]},
-        {"kind": "line", "anchors": ["ARM_TIP_TR", "BRANCH_R"],
-         "arms": ["straight_line"]},
-        {"kind": "line", "anchors": ["BRANCH_R", "STEM_B"],
-         "arms": ["straight_line"]},
+        # Calibrator-confirmed two-stroke decomposition: each diagonal
+        # tip continues into the stem so the child traces tip → branch
+        # → bottom as one continuous motion. Both strokes overlap on
+        # the stem segment; pedagogically the stem ink is reinforced.
+        {"kind": "line",
+         "anchors": ["ARM_TIP_TL", "BRANCH_R", "STEM_B"],
+         "arms": ["straight_line", "straight_line"],
+         "joints": ["sharp_meeting_at_intersection"]},
+        {"kind": "line",
+         "anchors": ["ARM_TIP_TR", "BRANCH_R", "STEM_B"],
+         "arms": ["straight_line", "straight_line"],
+         "joints": ["sharp_meeting_at_intersection"]},
     ],
     "y": [
-        # Same V-arms-meet-stem decomposition as Y, but the stem is a
-        # descender that slants left from the join to DESC_HOOK_L. The
-        # diagonals are straight; the descender follows the medial
-        # axis (slight curve toward the hook bottom). BRANCH_R lands
-        # at the diagonals-descender junction (496, 685) — the
-        # criterion ignores the top-tip cluster artifacts because
-        # they're skeletonization burr near the rounded caps, not
-        # the lowest mid-row branch.
+        # Calibrator-confirmed two-stroke decomposition. Unlike Y the
+        # left arm terminates at the branch (the descender slants
+        # leftward, so it continues naturally from the right arm).
+        # Right arm + descender curl traced as one motion. Joint is
+        # default (cubic_bezier_clamped) — the descender continues
+        # in roughly the same down-leftward direction as the right
+        # arm, so a sharp_meeting_at_intersection would overshoot
+        # (both arms' fitted lines nearly parallel).
         {"kind": "line", "anchors": ["ARM_TIP_TL", "BRANCH_R"],
          "arms": ["straight_line"]},
-        {"kind": "line", "anchors": ["ARM_TIP_TR", "BRANCH_R"],
-         "arms": ["straight_line"]},
-        {"kind": "line", "anchors": ["BRANCH_R", "DESC_HOOK_L"],
-         "arms": ["smoothed_medial_axis"]},
+        {"kind": "line",
+         "anchors": ["ARM_TIP_TR", "BRANCH_R", "DESC_HOOK_L"],
+         "arms": ["straight_line", "smoothed_medial_axis"]},
     ],
     "K": [
         # Prima's K is two disjoint components: a vertical stem (left)
@@ -528,9 +506,15 @@ LETTERS: dict[str, list[StrokeSpec]] = {
          "arms": ["straight_line"]},
     ],
     "z": [
-        {"kind": "line", "anchors": ["TL", "TR", "BL", "BR"],
-         "arms": ["straight_line"] * 3,
-         "joints": ["sharp_meeting_at_intersection"] * 2},
+        # Calibrator-confirmed three-stroke decomposition: top bar,
+        # diagonal, bottom bar — the standard didactic z. Each stroke
+        # traced as a separate motion.
+        {"kind": "line", "anchors": ["TL", "TR"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["TR", "BL"],
+         "arms": ["straight_line"]},
+        {"kind": "line", "anchors": ["BL", "BR"],
+         "arms": ["straight_line"]},
     ],
     # ß deferred — Druckschrift design has a compound left vertical
     # plus right-side double-bowl that doesn't decompose cleanly into
