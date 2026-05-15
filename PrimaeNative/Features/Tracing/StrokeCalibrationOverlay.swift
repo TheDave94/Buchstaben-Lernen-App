@@ -20,14 +20,46 @@ struct StrokeCalibrationOverlay: View {
     @State private var topMode: TopMode = .skelett
     @State private var skelettTool: SkelettTool = .drag
     @State private var ankerTool: AnkerTool = .place
-    @State private var smoothRangeStart: (stroke: Int, index: Int)? = nil
     /// Whole-state snapshots of `editableStrokes` pushed before every
     /// mutation. Capped at 10 entries; popping replaces the entire
     /// polyline state. Cleared on letter/script switch.
-    @State private var undoStack: [[[CGPoint]]] = []
-    /// Tracks whether a drag is currently in flight so the undo
-    /// snapshot fires once per drag (not on every onChanged tick).
-    @State private var isDragInProgress: Bool = false
+    /// Snapshots of (handles, editableStrokes) pushed before each
+    /// mutation. SKELETT edits mutate handles (and downstream
+    /// editableStrokes via resampling); ANKER edits mutate
+    /// editableStrokes directly. Snapshotting both keeps undo
+    /// consistent across modes.
+    @State private var undoStack: [UndoSnapshot] = []
+
+    private struct UndoSnapshot {
+        let handles: [[CGPoint]]
+        let editableStrokes: [[CGPoint]]
+    }
+    /// Handle the active SKELETT drag is moving (picked at touch-
+    /// down by closest-handle hit-test, carried until touch-up).
+    @State private var dragTargetSi: Int? = nil
+    @State private var dragTargetCi: Int? = nil
+    /// Touch-down position in bbox-rel; used to detect tap vs drag.
+    @State private var dragStartPt: CGPoint? = nil
+    /// SKELETT mode: show "1, 2, 3 …" numbers inside each handle.
+    /// Off by default — numbers are debug noise during skeleton
+    /// editing.
+    @State private var showSkelettNumbers: Bool = false
+    /// Sparse editable handles per stroke. Derived from the file's
+    /// polyline via RDP on SKELETT entry; the rendered curve is the
+    /// Catmull-Rom spline through these handles. NOT persisted —
+    /// `strokes.json` continues to hold the resampled checkpoints.
+    @State private var handles: [[CGPoint]] = []
+    /// Original checkpoint count per stroke, captured at load
+    /// time. Save resamples the spline back to this count so the
+    /// file's density is preserved (40-cp files stay at 40, 104-cp
+    /// stay at 104).
+    @State private var originalCpCounts: [Int] = []
+    /// RDP epsilon in bbox-rel. Picked from the per-letter cp-count
+    /// diagnostic (max=120 → mid bucket → 0.025).
+    private let handleRdpEps: CGFloat = 0.025
+    /// Catmull-Rom sampling density per handle pair when rendering
+    /// the smooth path and computing closest-point hit-tests.
+    private let splineSamplesPerSegment: Int = 80
     @State private var savedFlashUntil: Date? = nil
     @State private var showResetConfirm = false
     /// (letter, schriftArt) of the last reload — both invalidate so a
@@ -47,13 +79,16 @@ struct StrokeCalibrationOverlay: View {
         case anker = "Anker"
     }
 
-    /// Sub-tools active when `topMode == .skelett`. Each affects the
-    /// polyline directly; anchors are hidden.
+    /// Sub-tools active when `topMode == .skelett`. The polyline is
+    /// shown as a Catmull-Rom spline through a small set of handles
+    /// derived from the file's checkpoints via RDP; sub-tools edit
+    /// the HANDLES, not the underlying checkpoints. Glätten was
+    /// removed — the handle model makes it redundant (reduce local
+    /// detail by deleting handles).
     enum SkelettTool: String, CaseIterable {
         case drag = "Ziehen"
-        case insert = "Einfügen"
-        case delete = "Löschen"
-        case smooth = "Glätten"
+        case insert = "Hinzufügen"
+        case delete = "Entfernen"
     }
 
     /// Sub-tools active when `topMode == .anker`. Anchor placement +
@@ -96,8 +131,7 @@ struct StrokeCalibrationOverlay: View {
                 glyphRectDebugLayer(in: size)
                 skeletonLayer(in: size)
                 strokePathsLayer(in: size)
-                smoothRangeLayer(in: size)
-                if topMode == .skelett { dotsLayer(in: size) }
+                if topMode == .skelett { handleLayer(in: size) }
                 if topMode == .anker {
                     anchorsLayer(in: size)
                     polylineReferenceLayer(in: size)
@@ -107,24 +141,24 @@ struct StrokeCalibrationOverlay: View {
             .onAppear {
                 loadFromVM()
                 bootstrapAnchorsFromExistingStrokes()
+                bootstrapHandles()
                 refreshSkeleton()
             }
             .onChange(of: vm.currentLetterName) {
                 loadFromVM()
                 bootstrapAnchorsFromExistingStrokes()
+                bootstrapHandles()
                 refreshSkeleton()
             }
             .onChange(of: vm.schriftArt) {
                 loadFromVM(force: true)
                 bootstrapAnchorsFromExistingStrokes()
+                bootstrapHandles()
                 refreshSkeleton()
             }
             .onChange(of: topMode) {
-                smoothRangeStart = nil
                 if topMode == .anker { bootstrapAnchorsFromExistingStrokes() }
-            }
-            .onChange(of: skelettTool) {
-                smoothRangeStart = nil
+                if topMode == .skelett { bootstrapHandles() }
             }
         }
         .sheet(isPresented: $showExport) {
@@ -186,80 +220,255 @@ struct StrokeCalibrationOverlay: View {
     @ViewBuilder
     private func addTapLayer(in size: CGSize) -> some View {
         if topMode == .anker && ankerTool == .place {
+            // Anchor placement: any tap, no cp picking needed.
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture { location in
                     let bboxPt = screenToGlyph(location, in: size)
                     addAnchor(bboxPt)
                 }
-        } else if topMode == .skelett && skelettTool == .insert {
+        } else if topMode == .skelett {
+            // Single top-level gesture for all SKELETT tools so
+            // closest-checkpoint picking disambiguates dense regions
+            // (CHANGE 2). Per-dot gestures were the disambiguation
+            // problem; the gesture layer sits ABOVE the dots and
+            // does its own hit-testing.
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { location in
-                    let bboxPt = screenToGlyph(location, in: size)
-                    insertCheckpointOnPath(bboxPt)
-                }
+                .gesture(skelettGesture(in: size))
         }
     }
 
-    /// Insert a checkpoint at the tap point if it lands within
-    /// `threshold` of the active stroke's polyline. The new cp is
-    /// placed at the closest projection on the nearest segment, and
-    /// the stroke grows by one cp (variable-length per question C1).
-    private func insertCheckpointOnPath(_ pt: CGPoint) {
-        guard editableStrokes.indices.contains(activeStroke) else { return }
-        let stroke = editableStrokes[activeStroke]
-        guard stroke.count >= 2 else { return }
-        var bestIdx = -1
-        var bestDist = CGFloat.infinity
-        var bestProj = CGPoint.zero
-        for i in 0..<(stroke.count - 1) {
-            let a = stroke[i], b = stroke[i + 1]
-            let proj = projectOnSegment(pt: pt, a: a, b: b)
-            let dx = proj.x - pt.x, dy = proj.y - pt.y
-            let d = (dx * dx + dy * dy).squareRoot()
-            if d < bestDist {
-                bestDist = d
-                bestIdx = i
-                bestProj = proj
+    private func skelettGesture(in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let bboxPt = screenToGlyph(value.location, in: size)
+                if dragStartPt == nil {
+                    // first onChanged of this gesture → touch-down
+                    dragStartPt = bboxPt
+                    if skelettTool == .drag,
+                       let target = closestHandle(to: bboxPt) {
+                        pushUndoSnapshot()
+                        dragTargetSi = target.si
+                        dragTargetCi = target.ci
+                        if activeStroke != target.si { activeStroke = target.si }
+                    }
+                }
+                if skelettTool == .drag,
+                   let si = dragTargetSi, let ci = dragTargetCi,
+                   handles.indices.contains(si),
+                   handles[si].indices.contains(ci) {
+                    handles[si][ci] = bboxPt
+                    syncEditableForStroke(si)
+                }
+            }
+            .onEnded { value in
+                let bboxPt = screenToGlyph(value.location, in: size)
+                let movement: CGFloat = {
+                    guard let s = dragStartPt else { return 0 }
+                    let dx = bboxPt.x - s.x, dy = bboxPt.y - s.y
+                    return (dx * dx + dy * dy).squareRoot()
+                }()
+                // <0.01 bbox-rel ≈ ~3 px on 1024² = finger jitter.
+                let wasTap = movement < 0.01
+                if wasTap {
+                    handleSkelettTap(at: bboxPt)
+                }
+                dragTargetSi = nil
+                dragTargetCi = nil
+                dragStartPt = nil
+            }
+    }
+
+    private func handleSkelettTap(at bboxPt: CGPoint) {
+        switch skelettTool {
+        case .drag:
+            // Tap (no drag) in drag mode = switch active stroke if
+            // tap lands on an inactive handle.
+            if let target = closestHandle(to: bboxPt),
+               target.si != activeStroke {
+                activeStroke = target.si
+            }
+        case .insert:
+            insertHandleOnSpline(at: bboxPt)
+        case .delete:
+            if let target = closestHandle(to: bboxPt),
+               handles.indices.contains(target.si),
+               handles[target.si].count > 2 {
+                pushUndoSnapshot()
+                handles[target.si].remove(at: target.ci)
+                syncEditableForStroke(target.si)
             }
         }
-        // Threshold tuned to swallow finger jitter in bbox-rel
-        // coordinates (~5 px on 1024² raster at typical bbox).
-        guard bestIdx >= 0, bestDist <= 0.05 else { return }
+    }
+
+    /// Closest-handle hit-test. Active stroke preferred — if any
+    /// active-stroke handle is within ACTIVE_RADIUS, return it.
+    /// Otherwise expand to all strokes.
+    private func closestHandle(to pt: CGPoint) -> (si: Int, ci: Int)? {
+        let activeRadius: CGFloat = 0.06
+        var activeBest: (si: Int, ci: Int)? = nil
+        var activeBestDist = CGFloat.infinity
+        if handles.indices.contains(activeStroke) {
+            for (ci, hp) in handles[activeStroke].enumerated() {
+                let dx = hp.x - pt.x, dy = hp.y - pt.y
+                let d = (dx * dx + dy * dy).squareRoot()
+                if d < activeBestDist {
+                    activeBestDist = d
+                    activeBest = (activeStroke, ci)
+                }
+            }
+        }
+        if let best = activeBest, activeBestDist <= activeRadius {
+            return best
+        }
+        var globalBest: (si: Int, ci: Int)? = nil
+        var globalBestDist = CGFloat.infinity
+        for (si, hs) in handles.enumerated() {
+            for (ci, hp) in hs.enumerated() {
+                let dx = hp.x - pt.x, dy = hp.y - pt.y
+                let d = (dx * dx + dy * dy).squareRoot()
+                if d < globalBestDist {
+                    globalBestDist = d
+                    globalBest = (si, ci)
+                }
+            }
+        }
+        return globalBest
+    }
+
+    /// Insert a new handle on the active stroke's spline at the
+    /// closest point to the tap. Position in the handle array is
+    /// determined by which handle-pair segment the tap projects
+    /// onto.
+    private func insertHandleOnSpline(at pt: CGPoint) {
+        guard handles.indices.contains(activeStroke),
+              handles[activeStroke].count >= 2 else { return }
+        let hs = handles[activeStroke]
+        // Sample the spline densely; find the closest sample to the
+        // tap and convert that sample's index back to a handle-pair
+        // boundary.
+        let dense = denseSpline(hs)
+        var bestIdx = 0
+        var bestDist = CGFloat.infinity
+        for (i, sp) in dense.enumerated() {
+            let dx = sp.x - pt.x, dy = sp.y - pt.y
+            let d = (dx * dx + dy * dy).squareRoot()
+            if d < bestDist { bestDist = d; bestIdx = i }
+        }
+        // Threshold: only insert if the tap is within ~30 pt of the
+        // path so a stray tap doesn't add a wild handle.
+        guard bestDist <= 0.05 else { return }
+        let segIdx = bestIdx / splineSamplesPerSegment
+        // Insertion goes between handle segIdx and segIdx+1, so the
+        // new handle sits at array index segIdx+1.
+        let insertAt = min(hs.count, segIdx + 1)
         pushUndoSnapshot()
-        editableStrokes[activeStroke].insert(bestProj, at: bestIdx + 1)
+        handles[activeStroke].insert(dense[bestIdx], at: insertAt)
+        syncEditableForStroke(activeStroke)
     }
 
-    private func projectOnSegment(pt: CGPoint, a: CGPoint, b: CGPoint) -> CGPoint {
-        let dx = b.x - a.x, dy = b.y - a.y
-        let lenSq = dx * dx + dy * dy
-        guard lenSq > 0 else { return a }
-        let t = max(0, min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / lenSq))
-        return CGPoint(x: a.x + t * dx, y: a.y + t * dy)
+    /// Bootstrap `handles` + `originalCpCounts` from the current
+    /// `editableStrokes`. Called on letter switch, on SKELETT-mode
+    /// entry, and after Save (so the next session starts from a
+    /// regenerated handle set). Edge cases:
+    ///   - 1-cp stroke (umlaut dot, i/j tittle): handles = [pt],
+    ///     no editing on this stroke.
+    ///   - 2-3 cp stroke: handles = all cps, RDP would over-
+    ///     simplify.
+    ///   - ≥4 cp stroke: RDP at ε=0.025, clamped to [4, 15].
+    private func bootstrapHandles() {
+        handles = editableStrokes.map { stroke in
+            switch stroke.count {
+            case 0: return []
+            case 1, 2, 3: return stroke
+            default:
+                var hs = Self.rdpSimplify(stroke, eps: handleRdpEps)
+                if hs.count > 15 {
+                    // Keep first/last + 13 evenly-spaced interior.
+                    var reduced: [CGPoint] = [hs[0]]
+                    for k in 1..<14 {
+                        let idx = Int(round(Double(k)
+                            * Double(hs.count - 1) / 14.0))
+                        reduced.append(hs[idx])
+                    }
+                    reduced.append(hs[hs.count - 1])
+                    hs = reduced
+                } else if hs.count < 4 {
+                    let n = stroke.count
+                    hs = [stroke[0], stroke[n / 3],
+                          stroke[2 * n / 3], stroke[n - 1]]
+                }
+                return hs
+            }
+        }
+        originalCpCounts = editableStrokes.map { $0.count }
+        // editableStrokes is already the file's polyline; we don't
+        // overwrite it on bootstrap. Sync happens on first edit.
     }
 
-    /// Stamp the current full polyline state onto the undo stack
-    /// before a mutation. Cap at 10 deep — the oldest snapshot is
-    /// dropped when the 11th is pushed (question D1).
+    /// Resample `handles[si]` back into `editableStrokes[si]` at
+    /// `originalCpCounts[si]` density. Called after every handle
+    /// mutation so the runtime preview / save reflect the edit.
+    private func syncEditableForStroke(_ si: Int) {
+        guard handles.indices.contains(si),
+              originalCpCounts.indices.contains(si),
+              editableStrokes.indices.contains(si) else { return }
+        let hs = handles[si]
+        let n = originalCpCounts[si]
+        guard n > 0 else {
+            editableStrokes[si] = hs
+            return
+        }
+        switch hs.count {
+        case 0:
+            editableStrokes[si] = []
+        case 1:
+            editableStrokes[si] = Array(repeating: hs[0], count: n)
+        case 2:
+            var pts: [CGPoint] = []
+            for k in 0..<n {
+                let t = n == 1 ? 0 : CGFloat(k) / CGFloat(n - 1)
+                pts.append(CGPoint(
+                    x: hs[0].x + t * (hs[1].x - hs[0].x),
+                    y: hs[0].y + t * (hs[1].y - hs[0].y)))
+            }
+            editableStrokes[si] = pts
+        default:
+            let dense = denseSpline(hs)
+            editableStrokes[si] = resampleUniformBbox(dense, count: n)
+        }
+    }
+
+    /// Catmull-Rom spline through `handles` at the configured
+    /// samples-per-segment. Wraps the existing centripetal CR
+    /// helper so caller doesn't need to know its sample count.
+    private func denseSpline(_ hs: [CGPoint]) -> [CGPoint] {
+        guard hs.count >= 3 else { return hs }
+        return catmullRomSpline(hs,
+                                samplesPerSegment: splineSamplesPerSegment)
+    }
+
+    /// Stamp the current (handles, editableStrokes) onto the undo
+    /// stack before a mutation. Cap at 10 deep.
     private func pushUndoSnapshot() {
-        undoStack.append(editableStrokes)
+        undoStack.append(
+            UndoSnapshot(handles: handles, editableStrokes: editableStrokes))
         if undoStack.count > 10 {
             undoStack.removeFirst()
         }
     }
 
-    /// Restore the most-recent snapshot. Anchors are NOT included in
-    /// snapshots (they're transient per question A1) — they re-
-    /// bootstrap from the restored polyline next time ANKER mode is
-    /// entered.
+    /// Restore the most-recent snapshot. Anchors are NOT included
+    /// (transient per A1) — they re-bootstrap from the restored
+    /// polyline next time ANKER mode is entered.
     private func popUndoSnapshot() {
         guard let last = undoStack.popLast() else { return }
-        editableStrokes = last
+        handles = last.handles
+        editableStrokes = last.editableStrokes
         if activeStroke >= editableStrokes.count {
             activeStroke = max(0, editableStrokes.count - 1)
         }
-        smoothRangeStart = nil
     }
 
     private func addAnchor(_ pt: CGPoint) {
@@ -777,23 +986,63 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    /// Two yellow ring markers + a dashed connecting line shown when
-    /// the user has tapped the first endpoint of a smooth-range
-    /// selection but not yet the second.
+    /// SKELETT mode handle + inactive-path layer. Replaces the old
+    /// 40-checkpoint dot grid. Handles are pure visual decoration
+    /// here — the top-level gesture layer does all hit-testing.
     @ViewBuilder
-    private func smoothRangeLayer(in size: CGSize) -> some View {
-        if topMode == .skelett, skelettTool == .smooth,
-           let start = smoothRangeStart,
-           editableStrokes.indices.contains(start.stroke),
-           editableStrokes[start.stroke].indices.contains(start.index) {
-            let pt = editableStrokes[start.stroke][start.index]
-            let screenPt = glyphToScreen(pt, in: size)
-            Circle()
-                .stroke(Color.yellow, lineWidth: 3)
-                .frame(width: 38, height: 38)
-                .shadow(color: .black.opacity(0.4), radius: 2)
-                .position(screenPt)
+    private func handleLayer(in size: CGSize) -> some View {
+        // Inactive stroke paths: faint 2 pt outline so the letter
+        // shape stays visible while the user edits the active one.
+        ForEach(Array(editableStrokes.enumerated()), id: \.offset) { si, stroke in
+            if si != activeStroke, stroke.count >= 2 {
+                let color = strokeColors[si % strokeColors.count]
+                let pts = stroke.map { glyphToScreen($0, in: size) }
+                Path { p in
+                    guard let first = pts.first else { return }
+                    p.move(to: first)
+                    for pt in pts.dropFirst() { p.addLine(to: pt) }
+                }
+                .stroke(color.opacity(0.5),
+                        style: StrokeStyle(lineWidth: 2,
+                                           lineCap: .round,
+                                           lineJoin: .round))
                 .allowsHitTesting(false)
+            }
+        }
+        // Handle dots: active stroke prominent (18 pt), inactive
+        // strokes show all handles small (10 pt @ 40 %).
+        ForEach(Array(handles.enumerated()), id: \.offset) { si, hs in
+            let color = strokeColors[si % strokeColors.count]
+            let isActive = si == activeStroke
+            let diameter: CGFloat = isActive ? 18 : 10
+            ForEach(Array(hs.enumerated()), id: \.offset) { ci, hp in
+                let screenPt = glyphToScreen(hp, in: size)
+                Circle()
+                    .fill(color.opacity(isActive ? 1.0 : 0.4))
+                    .frame(width: diameter, height: diameter)
+                    .overlay(
+                        Circle().stroke(Color.white,
+                                        lineWidth: isActive ? 2 : 1)
+                    )
+                    .shadow(color: .black.opacity(0.4), radius: 1.5)
+                    .position(screenPt)
+                    .allowsHitTesting(false)
+                if showSkelettNumbers && isActive {
+                    Text("\(ci + 1)")
+                        .font(.system(size: 10, weight: .bold,
+                                      design: .monospaced))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black, radius: 1)
+                        .position(x: screenPt.x, y: screenPt.y - 14)
+                        .allowsHitTesting(false)
+                }
+            }
+            // Active-stroke S-label near the first handle.
+            if isActive, let first = hs.first {
+                strokeLabel(si: si, pt: first, in: size)
+            } else if let first = hs.first {
+                strokeLabel(si: si, pt: first, in: size)
+            }
         }
     }
 
@@ -822,116 +1071,49 @@ struct StrokeCalibrationOverlay: View {
         let screenPt = glyphToScreen(pt, in: size)
         let color = strokeColors[si % strokeColors.count]
         let isActive = si == activeStroke
-        let diameter: CGFloat = isActive ? 32 : 20
-        let fontSize: CGFloat = isActive ? 12 : 9
-        let dragActive = topMode == .skelett && skelettTool == .drag
 
-        // Inactive start dots stay small + faint so the glyph
-        // underneath remains readable.
-        Circle()
-            .fill(color.opacity(isActive ? 1 : 0.35))
-            .frame(width: diameter, height: diameter)
-            .overlay(
+        // CHANGE 1: small unnumbered dots in SKELETT mode (gesture
+        // routing now happens at the top-level layer, so dots are
+        // pure visual decoration). Numbers come back when the user
+        // toggles "Nummern" on.
+        if topMode == .skelett {
+            let diameter: CGFloat = isActive ? 12 : 8
+            Circle()
+                .fill(color.opacity(isActive ? 1.0 : 0.35))
+                .frame(width: diameter, height: diameter)
+                .overlay(
+                    Circle().stroke(Color.white.opacity(isActive ? 0.9 : 0.4),
+                                    lineWidth: 1)
+                )
+                .position(screenPt)
+                .allowsHitTesting(false)
+            if showSkelettNumbers && isActive {
                 Text("\(ci + 1)")
-                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(.white)
-            )
-            .shadow(color: .black.opacity(0.5), radius: 2)
-            .position(screenPt)
-            .gesture(
-                dragActive
-                    ? DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            if activeStroke != si { activeStroke = si }
-                            if !isDragInProgress {
-                                pushUndoSnapshot()
-                                isDragInProgress = true
-                            }
-                            editableStrokes[si][ci] = screenToGlyph(value.location, in: size)
-                        }
-                        .onEnded { _ in
-                            isDragInProgress = false
-                        }
-                    : nil
-            )
-            .onTapGesture {
-                guard topMode == .skelett else {
-                    // ANKER mode: tapping a polyline ref dot just
-                    // switches the active stroke; anchors handle
-                    // their own taps.
-                    activeStroke = si
-                    return
-                }
-                switch skelettTool {
-                case .delete:
-                    pushUndoSnapshot()
-                    deleteCheckpoint(si: si, ci: ci)
-                case .smooth:
-                    handleSmoothTap(si: si, ci: ci)
-                case .drag, .insert:
-                    activeStroke = si
-                }
+                    .shadow(color: .black, radius: 1)
+                    .position(x: screenPt.x, y: screenPt.y - 12)
+                    .allowsHitTesting(false)
             }
-    }
-
-    /// First tap stores the range start; second tap on the same
-    /// stroke triggers the Gaussian smooth between the two indices
-    /// (endpoints preserved). Tapping on a different stroke resets
-    /// the selection to the new start. Question B1: smooth applies
-    /// immediately on the second tap, no explicit "Apply" button.
-    private func handleSmoothTap(si: Int, ci: Int) {
-        if let start = smoothRangeStart, start.stroke == si {
-            let lo = min(start.index, ci)
-            let hi = max(start.index, ci)
-            if hi - lo >= 2 {
-                pushUndoSnapshot()
-                applyGaussianSmooth(strokeIdx: si, from: lo, to: hi)
-            }
-            smoothRangeStart = nil
         } else {
-            smoothRangeStart = (stroke: si, index: ci)
-            activeStroke = si
+            // ANKER mode: full-size numbered dots, unchanged
+            // behavior. Anchors handle their own gestures via
+            // anchorsLayer; these dots are read-only reference
+            // markers, so they're non-interactive here too.
+            let diameter: CGFloat = isActive ? 32 : 20
+            let fontSize: CGFloat = isActive ? 12 : 9
+            Circle()
+                .fill(color.opacity(isActive ? 1 : 0.35))
+                .frame(width: diameter, height: diameter)
+                .overlay(
+                    Text("\(ci + 1)")
+                        .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white)
+                )
+                .shadow(color: .black.opacity(0.5), radius: 2)
+                .position(screenPt)
+                .allowsHitTesting(false)
         }
-    }
-
-    /// In-place Gaussian smooth over `[from...to]`, endpoints
-    /// preserved. σ ≈ 0.012 bbox-rel matches the RDP eps used
-    /// elsewhere (≈ 3 px on a 1024² raster). On dense polylines
-    /// (200 cp) the effect is subtle; if visual feedback is
-    /// inadequate we expose an explicit Apply button (question §10
-    /// fallback B2).
-    private func applyGaussianSmooth(strokeIdx: Int, from lo: Int, to hi: Int) {
-        guard editableStrokes.indices.contains(strokeIdx) else { return }
-        var stroke = editableStrokes[strokeIdx]
-        guard stroke.indices.contains(lo), stroke.indices.contains(hi),
-              hi - lo >= 2 else { return }
-        // Sigma in INDEX units, not coordinate units: with cp spacing
-        // ~0.025 bbox-rel for a 40-cp stroke, σ=1.5 indices covers
-        // ≈ 0.04 bbox-rel = ~10 px on 1024² — visible without
-        // destroying small features.
-        let sigma: CGFloat = 1.5
-        let radius = 3
-        var weights: [CGFloat] = []
-        for k in -radius...radius {
-            let w = exp(-CGFloat(k * k) / (2 * sigma * sigma))
-            weights.append(w)
-        }
-        var smoothed = stroke
-        for i in (lo + 1)..<hi {
-            var sx: CGFloat = 0, sy: CGFloat = 0, sw: CGFloat = 0
-            for k in -radius...radius {
-                let j = i + k
-                guard j >= lo && j <= hi else { continue }
-                let w = weights[k + radius]
-                sx += stroke[j].x * w
-                sy += stroke[j].y * w
-                sw += w
-            }
-            if sw > 0 {
-                smoothed[i] = CGPoint(x: sx / sw, y: sy / sw)
-            }
-        }
-        editableStrokes[strokeIdx] = smoothed
     }
 
     @ViewBuilder
@@ -1015,6 +1197,7 @@ struct StrokeCalibrationOverlay: View {
                     ForEach(SkelettTool.allCases, id: \.self) { t in
                         skelettToolButton(t)
                     }
+                    numbersToggleButton
                 } else {
                     ForEach(AnkerTool.allCases, id: \.self) { t in
                         ankerToolButton(t)
@@ -1068,6 +1251,21 @@ struct StrokeCalibrationOverlay: View {
     }
 
     @ViewBuilder
+    private var numbersToggleButton: some View {
+        Button(showSkelettNumbers ? "Nummern ✓" : "Nummern") {
+            showSkelettNumbers.toggle()
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(showSkelettNumbers ? Color.white.opacity(0.22) : Color.clear)
+        .foregroundStyle(showSkelettNumbers ? Color.white : Color.gray)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(showSkelettNumbers
+                                  ? Color.white.opacity(0.5) : Color.clear))
+    }
+
+    @ViewBuilder
     private func ankerToolButton(_ t: AnkerTool) -> some View {
         let selected = ankerTool == t
         Button(t.rawValue) { ankerTool = t }
@@ -1086,18 +1284,15 @@ struct StrokeCalibrationOverlay: View {
         let strichLabel = "Strich \(activeStroke + 1)"
         switch topMode {
         case .skelett:
+            let handleCount = handles.indices.contains(activeStroke)
+                ? handles[activeStroke].count : 0
             switch skelettTool {
             case .drag:
-                return "Skelett-Bearbeitung — \(strichLabel): Punkt ziehen"
+                return "Skelett-Bearbeitung — \(strichLabel) (\(handleCount) Griffe): Griff ziehen"
             case .insert:
-                return "Skelett-Bearbeitung — \(strichLabel): auf den Verlauf tippen, um Punkt einzufügen"
+                return "Skelett-Bearbeitung — \(strichLabel): auf den Verlauf tippen, um einen Griff hinzuzufügen"
             case .delete:
-                return "Skelett-Bearbeitung — \(strichLabel): Punkt antippen, um zu entfernen"
-            case .smooth:
-                if smoothRangeStart != nil {
-                    return "Skelett-Bearbeitung — \(strichLabel): zweiten Punkt antippen, um zu glätten"
-                }
-                return "Skelett-Bearbeitung — \(strichLabel): Start-Punkt antippen, dann End-Punkt"
+                return "Skelett-Bearbeitung — \(strichLabel): Griff antippen, um zu entfernen"
             }
         case .anker:
             let count = anchorsPerStroke[activeStroke]?.count ?? 0
@@ -1242,15 +1437,6 @@ struct StrokeCalibrationOverlay: View {
 
     // MARK: - Editing
 
-    private func deleteCheckpoint(si: Int, ci: Int) {
-        guard editableStrokes.indices.contains(si),
-              editableStrokes[si].indices.contains(ci) else { return }
-        editableStrokes[si].remove(at: ci)
-        if editableStrokes[si].isEmpty {
-            deleteStroke(si)
-        }
-    }
-
     private func addStroke() {
         pushUndoSnapshot()
         editableStrokes.append([])
@@ -1289,7 +1475,8 @@ struct StrokeCalibrationOverlay: View {
         loaded = true
         savedFlashUntil = nil
         undoStack.removeAll()
-        smoothRangeStart = nil
+        handles.removeAll()
+        originalCpCounts.removeAll()
     }
 
     private func applyToVM() {
