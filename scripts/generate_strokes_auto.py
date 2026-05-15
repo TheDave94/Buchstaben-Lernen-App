@@ -107,7 +107,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import distance_transform_edt, label as nd_label
 import skimage.morphology as morph
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -551,6 +551,30 @@ LETTERS: dict[str, list[StrokeSpec]] = {
          "from": "TL", "to": "BL"},
         {"kind": "walker", "primitive": "continuous",
          "anchors": ["TL", "MR", "BL"]},
+    ],
+    # ----- Composite letters (umlauts + ß) -----
+    # Composite spec: bake the named `base` letter standalone, then
+    # transform its polylines into the composite's bbox; add dot strokes
+    # at the centroids of any non-base connected components (the
+    # diaeresis dots). Auto-detection: the largest component is the
+    # base; smaller ones are decorations.
+    "Ä": {"kind": "compose", "base": "A"},
+    "Ö": {"kind": "compose", "base": "O"},
+    "Ü": {"kind": "compose", "base": "U"},
+    "ä": {"kind": "compose", "base": "a"},
+    "ö": {"kind": "compose", "base": "o"},
+    "ü": {"kind": "compose", "base": "u"},
+    # ß as its own glyph (not a composite). Calibrator landed on one
+    # continuous stroke from the stem foot up through the top bowl,
+    # through the middle junction, and out via the bottom bowl to the
+    # baseline. Curve-kind Dijkstra-routing through ink handles the
+    # bowls' closed-loop topology; the line/skeleton path shortcuts
+    # along the bottom ink. Anchor sequence: BL (stem foot, left side)
+    # → T (top of bowl) → BC (lower bowl terminus). DESC_HOOK_L picks
+    # the bottom of the LOWER BOWL on ß (not the stem foot), so BL is
+    # the right entry point for the trace.
+    "ß": [
+        {"path": ["BL", "T", "BC"]},
     ],
 }
 
@@ -3757,13 +3781,135 @@ def output_dir_for(letter: str) -> Path:
     return OUTPUT_BASE / f"{letter}{LOWERCASE_SUFFIX}"
 
 
-def bake_letter(letter: str, font_path: Path
+def bake_composite(letter: str, spec: dict, font_path: Path
+                    ) -> tuple[dict, dict]:
+    """Composite-letter bake. Rasterizes the composite glyph, finds
+    connected components, treats the largest as the base letter and the
+    rest as decoration dots (sorted left-to-right). The base letter is
+    baked standalone (via `bake_letter`), then its polylines are
+    transformed from base-bbox-rel into composite-bbox-rel by locating
+    the base ink's bbox within the composite raster. Dot strokes are
+    appended at each decoration component's centroid.
+
+    Works for German umlauts (Ä/Ö/Ü/ä/ö/ü) where the glyph is rendered
+    as a single composite OpenType glyph but rasterizes to a base + N
+    visually-separated dots.  Used wherever the base letter is also a
+    LETTERS entry; the base's static-artifact guard is suppressed for
+    the recursive bake.
+    """
+    base_letter = spec.get("base")
+    if not isinstance(base_letter, str):
+        raise ValueError(f"{letter!r} compose spec needs 'base' string")
+    comp_mask = rasterize(letter, font_path)
+    comp_bbox = bbox_from_mask(comp_mask)
+    cx_min, cy_min, cx_max, cy_max = comp_bbox
+    cw = max(1, cx_max - cx_min)
+    ch = max(1, cy_max - cy_min)
+
+    # Connected components of the rendered ink. Largest is the base
+    # glyph; smaller ones are diacritic dots / decorations.
+    labeled, n_comp = nd_label(comp_mask)
+    if n_comp == 0:
+        raise ValueError(f"{letter!r} rasterized to empty mask")
+    comps = []
+    for cid in range(1, n_comp + 1):
+        ys, xs = np.where(labeled == cid)
+        if ys.size == 0:
+            continue
+        comps.append({
+            "id": cid,
+            "size": int(ys.size),
+            "centroid": (float(xs.mean()), float(ys.mean())),
+        })
+    comps.sort(key=lambda c: -c["size"])
+    if not comps:
+        raise ValueError(f"{letter!r} produced no usable components")
+    base_comp = comps[0]
+    dot_comps = comps[1:]
+    dot_comps.sort(key=lambda c: c["centroid"][0])
+
+    # Base ink's bbox in raster coords (excluding decoration components).
+    base_pixels = np.where(labeled == base_comp["id"])
+    bx_min = int(base_pixels[1].min()); bx_max = int(base_pixels[1].max())
+    by_min = int(base_pixels[0].min()); by_max = int(base_pixels[0].max())
+    bw_px = max(1, bx_max - bx_min)
+    bh_px = max(1, by_max - by_min)
+
+    # Bake the base letter against its own raster (anchors resolve
+    # against the standalone glyph). Suppress the static-artifact guard
+    # because most base letters (A, O, U, a, o, u) are themselves on
+    # the static-artifact list. When the base has no LETTERS spec
+    # (purely static, no algorithmic recipe), fall back to reading the
+    # shipped strokes.json — the composite still produces a useful
+    # first draft by transforming those polylines into its own bbox.
+    try:
+        base_json, _ = bake_letter(base_letter, font_path,
+                                    _suppress_static_guard=True)
+    except KeyError:
+        weight_dir = next(
+            (w.capitalize() for w, p in FONTS.items() if p == font_path),
+            "Regular")
+        base_subdir = (base_letter
+                        if base_letter.isupper()
+                        or not base_letter.isalpha()
+                        else f"{base_letter}{LOWERCASE_SUFFIX}")
+        shipped_path = (OUTPUT_BASE / weight_dir / base_subdir
+                         / "strokes.json")
+        if not shipped_path.exists():
+            raise ValueError(
+                f"compose base {base_letter!r} has no LETTERS spec "
+                f"and no shipped strokes.json at {shipped_path}")
+        base_json = json.loads(shipped_path.read_text())
+
+    # Transform base strokes from base-bbox-rel into composite-bbox-rel.
+    # The base ink within the composite has the same proportions as the
+    # standalone base, so rel→pixel→rel via base_pixels_within_composite.
+    transformed_strokes = []
+    for s in base_json["strokes"]:
+        new_cps = []
+        for c in s["checkpoints"]:
+            xs_rel, ys_rel = float(c["x"]), float(c["y"])
+            px = bx_min + xs_rel * bw_px
+            py = by_min + ys_rel * bh_px
+            cxr = (px - cx_min) / cw
+            cyr = (py - cy_min) / ch
+            new_cps.append({"x": round(cxr, 4), "y": round(cyr, 4)})
+        out = {"id": s["id"], "checkpoints": new_cps}
+        if "comment" in s:
+            out["comment"] = s["comment"]
+        transformed_strokes.append(out)
+
+    # Append dot strokes at each decoration component's centroid.
+    next_id = (transformed_strokes[-1]["id"] + 1
+                if transformed_strokes else 1)
+    for dc in dot_comps:
+        cx, cy = dc["centroid"]
+        cxr = (cx - cx_min) / cw
+        cyr = (cy - cy_min) / ch
+        transformed_strokes.append({
+            "id": next_id,
+            "checkpoints": [{"x": round(cxr, 4),
+                              "y": round(cyr, 4)}],
+            "comment": "umlaut dot",
+        })
+        next_id += 1
+
+    return ({
+        "letter": letter,
+        "checkpointRadius": base_json.get("checkpointRadius",
+                                            DEFAULT_RADIUS),
+        "strokes": transformed_strokes,
+    }, {})
+
+
+def bake_letter(letter: str, font_path: Path,
+                *, _suppress_static_guard: bool = False
                 ) -> tuple[dict, dict]:
     """End-to-end bake. Returns `(json_payload, debug_info)`. Resolves
     anchors, synthesises centerlines, asserts every centerline stays in
     ink, samples to `CHECKPOINT_COUNT`, and packages into the
     strokes.json shape."""
-    if letter in SHIPPED_AS_STATIC_ARTIFACT:
+    if letter in SHIPPED_AS_STATIC_ARTIFACT and not _suppress_static_guard:
         raise KeyError(
             f"{letter!r} ships as a static artifact; bake is "
             f"intentionally not authored. See SHIPPED_AS_STATIC_ARTIFACT "
@@ -3771,6 +3917,12 @@ def bake_letter(letter: str, font_path: Path
     specs = LETTERS.get(letter)
     if not specs:
         raise KeyError(f"No spec authored for {letter!r}")
+    # Composite dispatch: a single dict spec with kind="compose" delegates
+    # to bake_composite, which bakes the base letter standalone, transforms
+    # its polylines into the composite's bbox, and appends dot strokes at
+    # the centroids of non-base connected components (diaeresis dots).
+    if isinstance(specs, dict) and specs.get("kind") == "compose":
+        return bake_composite(letter, specs, font_path)
     mask = rasterize(letter, font_path)
     bbox = bbox_from_mask(mask)
     dt = distance_transform_edt(mask)
