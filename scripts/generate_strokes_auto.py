@@ -2586,6 +2586,66 @@ def _bfs_skeleton_path(a: tuple[int, int], b: tuple[int, int],
     return pts
 
 
+def _trim_bfs_to_on_axis(bfs_pts: list[tuple[int, int]],
+                          a_raw: tuple[int, int],
+                          b_raw: tuple[int, int],
+                          angle_threshold_deg: float = 30.0
+                          ) -> list[tuple[int, int]]:
+    """Trim the BFS skeleton path to its longest contiguous run whose
+    per-segment tangent is within ±`angle_threshold_deg` of the
+    anchor-pair direction (`a_raw` → `b_raw`).
+
+    Motivation: when an arm's bbox-relative anchors snap onto adjacent
+    strokes' skeletons (A's ML/MR snap to the diagonals, not the
+    crossbar's medial ridge), the BFS path between snapped endpoints is
+    L-shaped — descend a perpendicular leg, traverse the on-axis ridge,
+    ascend the other leg. SVD over the full path averages the legs into
+    the fit, drifting the resulting line off the true centerline.
+
+    For paths whose every segment is already on-axis (most letters),
+    the trim is benign — the longest contiguous run is the full path.
+
+    Falls back to the input unchanged when:
+    - the path is too short (<5 segments) to detect direction reliably,
+    - the anchor-pair direction is degenerate (zero length),
+    - or the on-axis run is shorter than 4 segments after trimming."""
+    if len(bfs_pts) < 5:
+        return bfs_pts
+    dxp = float(b_raw[0] - a_raw[0])
+    dyp = float(b_raw[1] - a_raw[1])
+    Lp = math.hypot(dxp, dyp)
+    if Lp < 1e-6:
+        return bfs_pts
+    ux, uy = dxp / Lp, dyp / Lp
+    cos_thresh = math.cos(math.radians(angle_threshold_deg))
+    on_axis: list[bool] = []
+    for i in range(len(bfs_pts) - 1):
+        sx = float(bfs_pts[i + 1][0] - bfs_pts[i][0])
+        sy = float(bfs_pts[i + 1][1] - bfs_pts[i][1])
+        sL = math.hypot(sx, sy)
+        if sL == 0.0:
+            on_axis.append(False)
+            continue
+        cos_a = abs((sx * ux + sy * uy) / sL)
+        on_axis.append(cos_a >= cos_thresh)
+    best_start, best_len = 0, 0
+    cur_start, cur_len = -1, 0
+    for i, ok in enumerate(on_axis):
+        if ok:
+            if cur_start < 0:
+                cur_start = i
+            cur_len += 1
+            if cur_len > best_len:
+                best_len = cur_len
+                best_start = cur_start
+        else:
+            cur_start = -1
+            cur_len = 0
+    if best_len < 4:
+        return bfs_pts
+    return bfs_pts[best_start:best_start + best_len + 1]
+
+
 def _smooth_path(pts: list[tuple[int, int]],
                  left_trim_pct: float, right_trim_pct: float,
                  window: int = DEFAULT_SMOOTHING_WINDOW
@@ -3820,6 +3880,17 @@ def bake_letter(letter: str, font_path: Path
             b_snap = _cached_snap(b_raw, b_name)
             bfs_pts = _bfs_skeleton_path(a_snap, b_snap, skeleton)
             if bfs_pts is None or len(bfs_pts) < 5:
+                continue
+            # Trim the BFS path to the contiguous middle segment whose
+            # per-segment tangent is within ±30° of the anchor-pair
+            # direction. When ML/MR snap onto adjacent strokes (A:
+            # crossbar anchors snap to the diagonals' skeletons), the
+            # BFS path is L-shaped — leg/midbar/leg — and SVD over the
+            # full path averages the perpendicular legs into the fit.
+            # Trimming to the on-axis run drops those legs; benign for
+            # already-straight paths (every segment is on-axis).
+            bfs_pts = _trim_bfs_to_on_axis(bfs_pts, a_raw, b_raw)
+            if len(bfs_pts) < 5:
                 continue
             arr = np.array(bfs_pts, dtype=float)
             centroid = arr.mean(axis=0)
