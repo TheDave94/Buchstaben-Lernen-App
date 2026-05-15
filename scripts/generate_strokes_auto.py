@@ -545,14 +545,6 @@ LETTERS: dict[str, list[StrokeSpec]] = {
     # Lowercase bowl-stem junction at the inner edge resists every
     # algorithmic bake we tried (walker only, walker + mask, walker +
     # mask + snap + smooth). See SHIPPED_AS_STATIC_ARTIFACT.
-    "q": [
-        # Walker spec (mirror of d-style): bowl as closed-loop CCW +
-        # straight descender walk.
-        {"kind": "walker", "primitive": "loop",
-         "start": "T", "direction": "ccw"},
-        {"kind": "walker", "primitive": "walk",
-         "from": "TR", "to": "BR"},
-    ],
     "P": [
         # Walker spec (77f1c220 architecture).
         {"kind": "walker", "primitive": "walk",
@@ -576,15 +568,6 @@ LETTERS: dict[str, list[StrokeSpec]] = {
         {"kind": "walker", "primitive": "continuous",
          "anchors": ["TL", "MR", "BL"]},
     ],
-    "B": [
-        # Walker spec: stem + upper bowl + lower bowl.
-        {"kind": "walker", "primitive": "walk",
-         "from": "TL", "to": "BL"},
-        {"kind": "walker", "primitive": "continuous",
-         "anchors": ["TL", "TR", "MR", "ML"]},
-        {"kind": "walker", "primitive": "continuous",
-         "anchors": ["ML", "MR", "BR", "BL"]},
-    ],
 }
 
 
@@ -592,13 +575,14 @@ LETTERS: dict[str, list[StrokeSpec]] = {
 # does not produce them; their strokes.json files are committed
 # verbatim and never re-generated. Listed here for documentation only.
 SHIPPED_AS_STATIC_ARTIFACT: frozenset[str] = frozenset({
-    "b",  # restored from a803d9d firewall after walker proved unable
-          # to traverse b's skeleton topology cleanly
-    "p",  # restored from 77f1c220 walker bake; lowercase bowl-stem
-          # inner-edge junction resisted every algorithmic refinement
-          # we tried (walker only, walker+mask, walker+mask+snap+smooth)
-    "C", "O", "S", "G", "Q",  # original spline-calibrator bakes;
-                                # byte-identical since May 10–11 2026
+    "C", "O", "S", "G", "Q",  # original spline-calibrator bakes
+    "B", "b", "p",            # added in walker/firewall rounds; now
+                              # also restored to 914ef6c5 content
+    "a", "g", "h", "m", "q", "u", "U",  # restored from 914ef6c5; the
+                              # successive bake-pipeline changes had
+                              # degraded these letters relative to the
+                              # original spline-calibrator ship
+    # A, Y, D: pending separate review before any restore decision
 })
 
 ALL_LETTERS = tuple(LETTERS.keys())
