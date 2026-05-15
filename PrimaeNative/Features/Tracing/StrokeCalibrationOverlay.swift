@@ -17,7 +17,17 @@ struct StrokeCalibrationOverlay: View {
     @State private var exportText = ""
     @State private var loaded = false
     @State private var activeStroke = 0
-    @State private var mode: CalibrationMode = .drag
+    @State private var topMode: TopMode = .skelett
+    @State private var skelettTool: SkelettTool = .drag
+    @State private var ankerTool: AnkerTool = .place
+    @State private var smoothRangeStart: (stroke: Int, index: Int)? = nil
+    /// Whole-state snapshots of `editableStrokes` pushed before every
+    /// mutation. Capped at 10 entries; popping replaces the entire
+    /// polyline state. Cleared on letter/script switch.
+    @State private var undoStack: [[[CGPoint]]] = []
+    /// Tracks whether a drag is currently in flight so the undo
+    /// snapshot fires once per drag (not on every onChanged tick).
+    @State private var isDragInProgress: Bool = false
     @State private var savedFlashUntil: Date? = nil
     @State private var showResetConfirm = false
     /// (letter, schriftArt) of the last reload — both invalidate so a
@@ -29,8 +39,29 @@ struct StrokeCalibrationOverlay: View {
         let schriftArt: SchriftArt
     }
 
-    enum CalibrationMode: String, CaseIterable {
-        case points = "Anker"
+    /// Binary top-level layer toggle. SKELETT mode edits the polyline
+    /// directly; ANKER mode places pedagogical routing waypoints that
+    /// BFS-walk the skeleton between them.
+    enum TopMode: String, CaseIterable {
+        case skelett = "Skelett"
+        case anker = "Anker"
+    }
+
+    /// Sub-tools active when `topMode == .skelett`. Each affects the
+    /// polyline directly; anchors are hidden.
+    enum SkelettTool: String, CaseIterable {
+        case drag = "Ziehen"
+        case insert = "Einfügen"
+        case delete = "Löschen"
+        case smooth = "Glätten"
+    }
+
+    /// Sub-tools active when `topMode == .anker`. Anchor placement +
+    /// drag + delete mirrors the pre-refactor `.points/.drag/.delete`
+    /// triple; the polyline is rebuilt by BFS-walking the skeleton
+    /// between the anchors.
+    enum AnkerTool: String, CaseIterable {
+        case place = "Setzen"
         case drag = "Ziehen"
         case delete = "Löschen"
     }
@@ -65,8 +96,12 @@ struct StrokeCalibrationOverlay: View {
                 glyphRectDebugLayer(in: size)
                 skeletonLayer(in: size)
                 strokePathsLayer(in: size)
-                if mode != .points { dotsLayer(in: size) }
-                if mode == .points { anchorsLayer(in: size) }
+                smoothRangeLayer(in: size)
+                if topMode == .skelett { dotsLayer(in: size) }
+                if topMode == .anker {
+                    anchorsLayer(in: size)
+                    polylineReferenceLayer(in: size)
+                }
                 controlsLayer
             }
             .onAppear {
@@ -84,8 +119,12 @@ struct StrokeCalibrationOverlay: View {
                 bootstrapAnchorsFromExistingStrokes()
                 refreshSkeleton()
             }
-            .onChange(of: mode) {
-                if mode == .points { bootstrapAnchorsFromExistingStrokes() }
+            .onChange(of: topMode) {
+                smoothRangeStart = nil
+                if topMode == .anker { bootstrapAnchorsFromExistingStrokes() }
+            }
+            .onChange(of: skelettTool) {
+                smoothRangeStart = nil
             }
         }
         .sheet(isPresented: $showExport) {
@@ -146,14 +185,81 @@ struct StrokeCalibrationOverlay: View {
 
     @ViewBuilder
     private func addTapLayer(in size: CGSize) -> some View {
-        if mode == .points {
+        if topMode == .anker && ankerTool == .place {
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture { location in
                     let bboxPt = screenToGlyph(location, in: size)
                     addAnchor(bboxPt)
                 }
+        } else if topMode == .skelett && skelettTool == .insert {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { location in
+                    let bboxPt = screenToGlyph(location, in: size)
+                    insertCheckpointOnPath(bboxPt)
+                }
         }
+    }
+
+    /// Insert a checkpoint at the tap point if it lands within
+    /// `threshold` of the active stroke's polyline. The new cp is
+    /// placed at the closest projection on the nearest segment, and
+    /// the stroke grows by one cp (variable-length per question C1).
+    private func insertCheckpointOnPath(_ pt: CGPoint) {
+        guard editableStrokes.indices.contains(activeStroke) else { return }
+        let stroke = editableStrokes[activeStroke]
+        guard stroke.count >= 2 else { return }
+        var bestIdx = -1
+        var bestDist = CGFloat.infinity
+        var bestProj = CGPoint.zero
+        for i in 0..<(stroke.count - 1) {
+            let a = stroke[i], b = stroke[i + 1]
+            let proj = projectOnSegment(pt: pt, a: a, b: b)
+            let dx = proj.x - pt.x, dy = proj.y - pt.y
+            let d = (dx * dx + dy * dy).squareRoot()
+            if d < bestDist {
+                bestDist = d
+                bestIdx = i
+                bestProj = proj
+            }
+        }
+        // Threshold tuned to swallow finger jitter in bbox-rel
+        // coordinates (~5 px on 1024² raster at typical bbox).
+        guard bestIdx >= 0, bestDist <= 0.05 else { return }
+        pushUndoSnapshot()
+        editableStrokes[activeStroke].insert(bestProj, at: bestIdx + 1)
+    }
+
+    private func projectOnSegment(pt: CGPoint, a: CGPoint, b: CGPoint) -> CGPoint {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let lenSq = dx * dx + dy * dy
+        guard lenSq > 0 else { return a }
+        let t = max(0, min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / lenSq))
+        return CGPoint(x: a.x + t * dx, y: a.y + t * dy)
+    }
+
+    /// Stamp the current full polyline state onto the undo stack
+    /// before a mutation. Cap at 10 deep — the oldest snapshot is
+    /// dropped when the 11th is pushed (question D1).
+    private func pushUndoSnapshot() {
+        undoStack.append(editableStrokes)
+        if undoStack.count > 10 {
+            undoStack.removeFirst()
+        }
+    }
+
+    /// Restore the most-recent snapshot. Anchors are NOT included in
+    /// snapshots (they're transient per question A1) — they re-
+    /// bootstrap from the restored polyline next time ANKER mode is
+    /// entered.
+    private func popUndoSnapshot() {
+        guard let last = undoStack.popLast() else { return }
+        editableStrokes = last
+        if activeStroke >= editableStrokes.count {
+            activeStroke = max(0, editableStrokes.count - 1)
+        }
+        smoothRangeStart = nil
     }
 
     private func addAnchor(_ pt: CGPoint) {
@@ -642,11 +748,52 @@ struct StrokeCalibrationOverlay: View {
                             }
                     )
                     .onTapGesture {
-                        if mode == .delete {
+                        if topMode == .anker && ankerTool == .delete {
                             removeAnchor(strokeIdx: activeStroke, anchorIdx: idx)
                         }
                     }
             }
+        }
+    }
+
+    /// Faint read-only checkpoint dots shown in ANKER mode so the
+    /// underlying polyline remains visible while the user edits
+    /// anchors. The polyline path itself is still drawn by
+    /// `strokePathsLayer`; this adds the per-cp dots in a
+    /// non-editable form.
+    @ViewBuilder
+    private func polylineReferenceLayer(in size: CGSize) -> some View {
+        if editableStrokes.indices.contains(activeStroke) {
+            let stroke = editableStrokes[activeStroke]
+            let color = strokeColors[activeStroke % strokeColors.count]
+            ForEach(Array(stroke.enumerated()), id: \.offset) { _, pt in
+                let screenPt = glyphToScreen(pt, in: size)
+                Circle()
+                    .fill(color.opacity(0.35))
+                    .frame(width: 6, height: 6)
+                    .position(screenPt)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// Two yellow ring markers + a dashed connecting line shown when
+    /// the user has tapped the first endpoint of a smooth-range
+    /// selection but not yet the second.
+    @ViewBuilder
+    private func smoothRangeLayer(in size: CGSize) -> some View {
+        if topMode == .skelett, skelettTool == .smooth,
+           let start = smoothRangeStart,
+           editableStrokes.indices.contains(start.stroke),
+           editableStrokes[start.stroke].indices.contains(start.index) {
+            let pt = editableStrokes[start.stroke][start.index]
+            let screenPt = glyphToScreen(pt, in: size)
+            Circle()
+                .stroke(Color.yellow, lineWidth: 3)
+                .frame(width: 38, height: 38)
+                .shadow(color: .black.opacity(0.4), radius: 2)
+                .position(screenPt)
+                .allowsHitTesting(false)
         }
     }
 
@@ -677,6 +824,7 @@ struct StrokeCalibrationOverlay: View {
         let isActive = si == activeStroke
         let diameter: CGFloat = isActive ? 32 : 20
         let fontSize: CGFloat = isActive ? 12 : 9
+        let dragActive = topMode == .skelett && skelettTool == .drag
 
         // Inactive start dots stay small + faint so the glyph
         // underneath remains readable.
@@ -691,22 +839,99 @@ struct StrokeCalibrationOverlay: View {
             .shadow(color: .black.opacity(0.5), radius: 2)
             .position(screenPt)
             .gesture(
-                // Dragging any dot switches the active stroke to it,
-                // so cross-stroke edits don't require a separate tap.
-                mode == .drag
-                    ? DragGesture(minimumDistance: 0).onChanged { value in
-                        if activeStroke != si { activeStroke = si }
-                        editableStrokes[si][ci] = screenToGlyph(value.location, in: size)
-                    }
+                dragActive
+                    ? DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            if activeStroke != si { activeStroke = si }
+                            if !isDragInProgress {
+                                pushUndoSnapshot()
+                                isDragInProgress = true
+                            }
+                            editableStrokes[si][ci] = screenToGlyph(value.location, in: size)
+                        }
+                        .onEnded { _ in
+                            isDragInProgress = false
+                        }
                     : nil
             )
             .onTapGesture {
-                if mode == .delete {
+                guard topMode == .skelett else {
+                    // ANKER mode: tapping a polyline ref dot just
+                    // switches the active stroke; anchors handle
+                    // their own taps.
+                    activeStroke = si
+                    return
+                }
+                switch skelettTool {
+                case .delete:
+                    pushUndoSnapshot()
                     deleteCheckpoint(si: si, ci: ci)
-                } else {
+                case .smooth:
+                    handleSmoothTap(si: si, ci: ci)
+                case .drag, .insert:
                     activeStroke = si
                 }
             }
+    }
+
+    /// First tap stores the range start; second tap on the same
+    /// stroke triggers the Gaussian smooth between the two indices
+    /// (endpoints preserved). Tapping on a different stroke resets
+    /// the selection to the new start. Question B1: smooth applies
+    /// immediately on the second tap, no explicit "Apply" button.
+    private func handleSmoothTap(si: Int, ci: Int) {
+        if let start = smoothRangeStart, start.stroke == si {
+            let lo = min(start.index, ci)
+            let hi = max(start.index, ci)
+            if hi - lo >= 2 {
+                pushUndoSnapshot()
+                applyGaussianSmooth(strokeIdx: si, from: lo, to: hi)
+            }
+            smoothRangeStart = nil
+        } else {
+            smoothRangeStart = (stroke: si, index: ci)
+            activeStroke = si
+        }
+    }
+
+    /// In-place Gaussian smooth over `[from...to]`, endpoints
+    /// preserved. σ ≈ 0.012 bbox-rel matches the RDP eps used
+    /// elsewhere (≈ 3 px on a 1024² raster). On dense polylines
+    /// (200 cp) the effect is subtle; if visual feedback is
+    /// inadequate we expose an explicit Apply button (question §10
+    /// fallback B2).
+    private func applyGaussianSmooth(strokeIdx: Int, from lo: Int, to hi: Int) {
+        guard editableStrokes.indices.contains(strokeIdx) else { return }
+        var stroke = editableStrokes[strokeIdx]
+        guard stroke.indices.contains(lo), stroke.indices.contains(hi),
+              hi - lo >= 2 else { return }
+        // Sigma in INDEX units, not coordinate units: with cp spacing
+        // ~0.025 bbox-rel for a 40-cp stroke, σ=1.5 indices covers
+        // ≈ 0.04 bbox-rel = ~10 px on 1024² — visible without
+        // destroying small features.
+        let sigma: CGFloat = 1.5
+        let radius = 3
+        var weights: [CGFloat] = []
+        for k in -radius...radius {
+            let w = exp(-CGFloat(k * k) / (2 * sigma * sigma))
+            weights.append(w)
+        }
+        var smoothed = stroke
+        for i in (lo + 1)..<hi {
+            var sx: CGFloat = 0, sy: CGFloat = 0, sw: CGFloat = 0
+            for k in -radius...radius {
+                let j = i + k
+                guard j >= lo && j <= hi else { continue }
+                let w = weights[k + radius]
+                sx += stroke[j].x * w
+                sy += stroke[j].y * w
+                sw += w
+            }
+            if sw > 0 {
+                smoothed[i] = CGPoint(x: sx / sw, y: sy / sw)
+            }
+        }
+        editableStrokes[strokeIdx] = smoothed
     }
 
     @ViewBuilder
@@ -732,18 +957,12 @@ struct StrokeCalibrationOverlay: View {
                 // above the glyph render area for all demo letters.
                 .padding(.top, 50)
 
-            if mode == .points {
-                let count = anchorsPerStroke[activeStroke]?.count ?? 0
-                let hint = count < 2
-                    ? "Strich \(activeStroke + 1) — Anker setzen (\(count)/min 2)"
-                    : "Strich \(activeStroke + 1) — \(count) Anker gesetzt; ziehen oder weitere Anker korrigieren den Verlauf"
-                Text(hint)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
+            Text(statusHint)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: Capsule())
 
             // Skeleton diagnostics: count + orientation legend so we can
             // verify the centerline extracted at the right position.
@@ -769,7 +988,7 @@ struct StrokeCalibrationOverlay: View {
 
     @ViewBuilder
     private var topBar: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Label(vm.schriftArt.displayName, systemImage: "textformat")
                     .font(.system(size: 12, weight: .semibold))
@@ -780,10 +999,28 @@ struct StrokeCalibrationOverlay: View {
                     .accessibilityLabel("Schriftart: \(vm.schriftArt.displayName)")
 
                 Spacer(minLength: 0)
+            }
 
-                ForEach(CalibrationMode.allCases, id: \.self) { m in
-                    modeButton(m)
+            // Question E1: large always-visible binary toggle.
+            HStack(spacing: 10) {
+                ForEach(TopMode.allCases, id: \.self) { tm in
+                    topModeButton(tm)
                 }
+                Spacer(minLength: 0)
+            }
+
+            // Per-mode sub-tool row.
+            HStack(spacing: 6) {
+                if topMode == .skelett {
+                    ForEach(SkelettTool.allCases, id: \.self) { t in
+                        skelettToolButton(t)
+                    }
+                } else {
+                    ForEach(AnkerTool.allCases, id: \.self) { t in
+                        ankerToolButton(t)
+                    }
+                }
+                Spacer(minLength: 0)
             }
 
             HStack(spacing: 8) {
@@ -805,16 +1042,76 @@ struct StrokeCalibrationOverlay: View {
     }
 
     @ViewBuilder
-    private func modeButton(_ m: CalibrationMode) -> some View {
-        let selected = mode == m
-        Button(m.rawValue) { mode = m }
+    private func topModeButton(_ tm: TopMode) -> some View {
+        let selected = topMode == tm
+        Button(tm.rawValue) { topMode = tm }
+            .font(.system(size: 16, weight: .bold))
+            .frame(minWidth: 110, minHeight: 40)
+            .background(selected ? Color.cyan.opacity(0.35) : Color.white.opacity(0.08))
+            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.7))
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(selected ? Color.cyan : Color.white.opacity(0.2),
+                                      lineWidth: selected ? 2 : 1))
+    }
+
+    @ViewBuilder
+    private func skelettToolButton(_ t: SkelettTool) -> some View {
+        let selected = skelettTool == t
+        Button(t.rawValue) { skelettTool = t }
             .font(.system(size: 12, weight: .semibold))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(selected ? Color.white.opacity(0.2) : Color.clear)
+            .background(selected ? Color.white.opacity(0.22) : Color.clear)
             .foregroundStyle(selected ? Color.white : Color.gray)
             .clipShape(Capsule())
-            .overlay(Capsule().stroke(selected ? Color.white.opacity(0.4) : Color.clear))
+            .overlay(Capsule().stroke(selected ? Color.white.opacity(0.5) : Color.clear))
+    }
+
+    @ViewBuilder
+    private func ankerToolButton(_ t: AnkerTool) -> some View {
+        let selected = ankerTool == t
+        Button(t.rawValue) { ankerTool = t }
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(selected ? Color.white.opacity(0.22) : Color.clear)
+            .foregroundStyle(selected ? Color.white : Color.gray)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(selected ? Color.white.opacity(0.5) : Color.clear))
+    }
+
+    /// One-line user-facing hint that always reflects (topMode,
+    /// active sub-tool, range-selection state).
+    private var statusHint: String {
+        let strichLabel = "Strich \(activeStroke + 1)"
+        switch topMode {
+        case .skelett:
+            switch skelettTool {
+            case .drag:
+                return "Skelett-Bearbeitung — \(strichLabel): Punkt ziehen"
+            case .insert:
+                return "Skelett-Bearbeitung — \(strichLabel): auf den Verlauf tippen, um Punkt einzufügen"
+            case .delete:
+                return "Skelett-Bearbeitung — \(strichLabel): Punkt antippen, um zu entfernen"
+            case .smooth:
+                if smoothRangeStart != nil {
+                    return "Skelett-Bearbeitung — \(strichLabel): zweiten Punkt antippen, um zu glätten"
+                }
+                return "Skelett-Bearbeitung — \(strichLabel): Start-Punkt antippen, dann End-Punkt"
+            }
+        case .anker:
+            let count = anchorsPerStroke[activeStroke]?.count ?? 0
+            switch ankerTool {
+            case .place:
+                return count < 2
+                    ? "Anker setzen — \(strichLabel): \(count)/min 2"
+                    : "Anker setzen — \(strichLabel): \(count) Anker, weitere durch Tippen ergänzen"
+            case .drag:
+                return "Anker setzen — \(strichLabel): Anker ziehen, um den Verlauf zu korrigieren"
+            case .delete:
+                return "Anker setzen — \(strichLabel): Anker antippen, um zu entfernen"
+            }
+        }
     }
 
     @ViewBuilder
@@ -838,13 +1135,14 @@ struct StrokeCalibrationOverlay: View {
                 .buttonStyle(.bordered)
                 .tint(.gray)
 
-            Button("Undo") { undoLastCheckpoint() }
+            Button("Undo") { popUndoSnapshot() }
                 .buttonStyle(.bordered)
                 .tint(.indigo)
-                .disabled(!canUndo)
+                .disabled(undoStack.isEmpty)
 
             if editableStrokes.indices.contains(activeStroke) {
                 Button {
+                    pushUndoSnapshot()
                     deleteStroke(activeStroke)
                 } label: {
                     Label("Strich \(activeStroke + 1)", systemImage: "trash")
@@ -953,24 +1251,13 @@ struct StrokeCalibrationOverlay: View {
         }
     }
 
-    private var canUndo: Bool {
-        editableStrokes.indices.contains(activeStroke) && !editableStrokes[activeStroke].isEmpty
-    }
-
-    private func undoLastCheckpoint() {
-        guard editableStrokes.indices.contains(activeStroke),
-              !editableStrokes[activeStroke].isEmpty else { return }
-        editableStrokes[activeStroke].removeLast()
-        if editableStrokes[activeStroke].isEmpty {
-            deleteStroke(activeStroke)
-        }
-    }
-
     private func addStroke() {
+        pushUndoSnapshot()
         editableStrokes.append([])
         activeStroke = editableStrokes.count - 1
         anchorsPerStroke[activeStroke] = []
-        mode = .points
+        topMode = .anker
+        ankerTool = .place
     }
 
     private func deleteStroke(_ idx: Int) {
@@ -1001,6 +1288,8 @@ struct StrokeCalibrationOverlay: View {
         loadedKey = key
         loaded = true
         savedFlashUntil = nil
+        undoStack.removeAll()
+        smoothRangeStart = nil
     }
 
     private func applyToVM() {
