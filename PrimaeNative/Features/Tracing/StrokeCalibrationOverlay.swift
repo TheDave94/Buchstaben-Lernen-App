@@ -145,7 +145,16 @@ struct StrokeCalibrationOverlay: View {
 
     var body: some View {
         GeometryReader { geo in
-            let size = geo.size
+            // Shrink the canvas math by the calibrator UI band so the
+            // glyph (rendered in TracingCanvasView with the SAME inset)
+            // and our skeleton/bbox/handles stay aligned. The constant
+            // lives on TracingViewModel so both layers reference one
+            // source of truth — they MUST agree or the layers drift
+            // (see revert 74dcb11b for what happens when they don't).
+            let size = CGSize(
+                width: geo.size.width,
+                height: max(0, geo.size.height
+                            - TracingViewModel.calibratorBottomInset))
             ZStack {
                 addTapLayer(in: size)
                 glyphRectDebugLayer(in: size)

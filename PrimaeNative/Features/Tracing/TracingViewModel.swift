@@ -24,6 +24,14 @@ public final class TracingViewModel {
     /// Drops all learning-phase overlays during calibration so the
     /// calibrator's dots aren't buried under phase UI.
     var isCalibrating: Bool { showDebug && showCalibration }
+
+    /// Bottom-screen band reserved for the calibrator's UI bar.
+    /// `TracingCanvasView` shrinks the glyph by this much during
+    /// calibration; `StrokeCalibrationOverlay` shrinks its skeleton/
+    /// bbox/handle math by the same amount. The two MUST agree or
+    /// glyph and skeleton drift apart (see commit 1871466c → revert
+    /// 74dcb11b).
+    static let calibratorBottomInset: CGFloat = 180
     var letterOrdering: LetterOrderingStrategy = .motorSimilarity
     var schriftArt: SchriftArt = .druckschrift {
         didSet {

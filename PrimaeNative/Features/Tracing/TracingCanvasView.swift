@@ -8,7 +8,19 @@ struct TracingCanvasView: View {
 
     @ViewBuilder
     private func tracingCanvas(geo: GeometryProxy) -> some View {
-        Canvas { context, size in
+        Canvas { context, fullSize in
+            // Reserve the bottom band for the calibrator UI so the
+            // glyph doesn't render under the translucent UI cards.
+            // Reduces the geometry used for cell layout AND the
+            // progress strip at the bottom — both then sit ABOVE
+            // the UI region. StrokeCalibrationOverlay applies the
+            // same inset to its skeleton/bbox/handle math so the
+            // two layers stay aligned.
+            let size: CGSize = vm.isCalibrating
+                ? CGSize(width: fullSize.width,
+                         height: max(0, fullSize.height
+                                     - TracingViewModel.calibratorBottomInset))
+                : fullSize
             // Word sequences use stored CoreText frames; other kinds
             // recompute from `size` to avoid first-render staleness
             // and to keep CoreText off the per-frame budget.
