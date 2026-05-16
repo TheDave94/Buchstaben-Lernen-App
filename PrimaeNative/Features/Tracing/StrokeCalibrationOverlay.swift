@@ -143,21 +143,9 @@ struct StrokeCalibrationOverlay: View {
         return Date() < until
     }
 
-    /// Reserved bottom area where `controlsLayer`'s cards sit. The
-    /// canvas math treats `size.height` as `geo.size.height - this`
-    /// so the glyph (and its descender) are drawn ENTIRELY above
-    /// the UI bar instead of behind the translucent material.
-    ///
-    /// Components: 82pt topBar (segmented + pills row + chip row +
-    /// internal padding) + 10pt gap + 52pt action bar + 20pt
-    /// bottom inset + ~16pt safety margin = ~180pt.
-    private let bottomUIInset: CGFloat = 180
-
     var body: some View {
         GeometryReader { geo in
-            let size = CGSize(
-                width: geo.size.width,
-                height: max(0, geo.size.height - bottomUIInset))
+            let size = geo.size
             ZStack {
                 addTapLayer(in: size)
                 glyphRectDebugLayer(in: size)
