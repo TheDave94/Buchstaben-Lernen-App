@@ -941,10 +941,16 @@ struct StrokeCalibrationOverlay: View {
     @ViewBuilder
     private func skeletonLayer(in size: CGSize) -> some View {
         if let sk = skeleton, !sk.vizPixels.isEmpty {
-            Canvas { context, canvasSize in
+            Canvas { context, _ in
+                // Use the passed-in `size` (shrunk during calibration to
+                // match the glyph), NOT the Canvas's intrinsic frame size
+                // — the inner Canvas still fills the full ZStack so its
+                // `canvasSize` is geo.size and would render the skeleton
+                // viz at full-screen coords, drifting away from the
+                // shrunken glyph (the red K-shape outline in IMG_0863).
                 var path = Path()
                 for pt in sk.vizPixels {
-                    let screenPt = glyphToScreen(pt, in: canvasSize)
+                    let screenPt = glyphToScreen(pt, in: size)
                     path.addEllipse(in: CGRect(x: screenPt.x - 1.5,
                                                y: screenPt.y - 1.5,
                                                width: 3.0, height: 3.0))
