@@ -1242,16 +1242,25 @@ struct StrokeCalibrationOverlay: View {
     @ViewBuilder
     private var controlsLayer: some View {
         VStack {
-            // Top: status text + skeleton diagnostic capsules. Small,
-            // non-interactive — they don't compete with tall letters
-            // for canvas space.
+            // Top: schriftart badge + status text + skeleton diagnostic.
+            // All informational and small — they don't compete with tall
+            // letters for canvas space. Schriftart moved here from the
+            // bottom topBar so descenders aren't occluded.
+            Label(vm.schriftArt.displayName, systemImage: "textformat")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(.top, 50)
+                .accessibilityLabel("Schriftart: \(vm.schriftArt.displayName)")
+
             Text(statusHint)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 .background(.ultraThinMaterial, in: Capsule())
-                .padding(.top, 50)
 
             let skLabel: String = {
                 guard let sk = skeleton else { return "Skelett: nil" }
@@ -1279,35 +1288,26 @@ struct StrokeCalibrationOverlay: View {
                     .background(.ultraThinMaterial,
                                 in: RoundedRectangle(cornerRadius: 10))
             }
-            .padding(.bottom, 40)
+            .padding(.bottom, 20)
         }
     }
 
     @ViewBuilder
     private var topBar: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Label(vm.schriftArt.displayName, systemImage: "textformat")
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(.white.opacity(0.12), in: Capsule())
-                    .foregroundStyle(.white)
-                    .accessibilityLabel("Schriftart: \(vm.schriftArt.displayName)")
-
-                Spacer(minLength: 0)
-            }
-
-            // Question E1: large always-visible binary toggle.
+        VStack(spacing: 6) {
+            // Row 1: Skelett/Anker segmented control + active sub-tool
+            // pills, inline. Segmented is fixed-width so changing pill
+            // count (4 in SKELETT vs 3 in ANKER) doesn't shift it.
             HStack(spacing: 10) {
-                ForEach(TopMode.allCases, id: \.self) { tm in
-                    topModeButton(tm)
+                Picker("Modus", selection: $topMode) {
+                    ForEach(TopMode.allCases, id: \.self) { tm in
+                        Text(tm.rawValue).tag(tm)
+                    }
                 }
-                Spacer(minLength: 0)
-            }
+                .pickerStyle(.segmented)
+                .frame(width: 160)
+                .accessibilityLabel("Modus: Skelett oder Anker")
 
-            // Per-mode sub-tool row.
-            HStack(spacing: 6) {
                 if topMode == .skelett {
                     ForEach(SkelettTool.allCases, id: \.self) { t in
                         skelettToolButton(t)
@@ -1321,6 +1321,9 @@ struct StrokeCalibrationOverlay: View {
                 Spacer(minLength: 0)
             }
 
+            // Row 2: stroke chips on their own slim row. Kept separate
+            // from row 1 because chip count varies 1-4 per letter and
+            // inline reflow with the pill row is unreliable on device.
             HStack(spacing: 8) {
                 ForEach(Array(editableStrokes.indices), id: \.self) { si in
                     strokeChip(si: si)
@@ -1336,20 +1339,8 @@ struct StrokeCalibrationOverlay: View {
 
                 Spacer(minLength: 0)
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    @ViewBuilder
-    private func topModeButton(_ tm: TopMode) -> some View {
-        let selected = topMode == tm
-        Button(tm.rawValue) { topMode = tm }
-            .font(.system(size: 16, weight: .bold))
-            .frame(minWidth: 110, minHeight: 40)
-            .background(selected ? Color.cyan.opacity(0.35) : Color.white.opacity(0.08))
-            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.7))
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(selected ? Color.cyan : Color.white.opacity(0.2),
-                                      lineWidth: selected ? 2 : 1))
     }
 
     @ViewBuilder
