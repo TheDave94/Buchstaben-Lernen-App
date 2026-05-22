@@ -22,22 +22,63 @@ private nonisolated(unsafe) let sessionLogger = Logger(
     category: "CalibrationSessionLogger")
 
 @MainActor
-enum CalibrationSessionLogger {
+public enum CalibrationSessionLogger {
 
     /// Tool that produced the save. Mirrors `StrokeCalibrationOverlay`'s
     /// `TopMode` plus an explicit "OTHER" fallback for any future save
     /// path that doesn't carry a tool mode.
-    enum Tool: String {
+    public enum Tool: String {
         case skelett = "SKELETT"
         case anker = "ANKER"
         case other = "OTHER"
     }
 
+    /// Create the session-log root directory + a one-time README so the
+    /// app appears in the Files app and Finder USB share even before any
+    /// calibration save lands. Without this, iPadOS hides apps with empty
+    /// shared-document directories from the file pickers, and David
+    /// wouldn't see Primae listed under "Auf meinem iPad" → Primae
+    /// until after his first save.
+    ///
+    /// Idempotent. Errors are logged and swallowed.
+    public static func bootstrap() {
+        guard let documents = FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let root = documents.appendingPathComponent(
+            "PrimaeNative/CalibrationSessions")
+        do {
+            try FileManager.default.createDirectory(
+                at: root, withIntermediateDirectories: true)
+        } catch {
+            sessionLogger.warning("bootstrap mkdir failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let readme = root.appendingPathComponent("README.txt")
+        guard !FileManager.default.fileExists(atPath: readme.path) else { return }
+        let text = """
+        Primae calibration session logs
+        ================================
+
+        Every time you save a SKELETT or ANKER edit in the calibrator,
+        a JSON file lands here as `<letter>/<timestamp>.json` capturing
+        the polyline before and after your edit plus a few metadata
+        fields. These pairs are the training-data corpus for future
+        correction-pattern analysis.
+
+        Safe to delete this entire folder; the app re-creates it on
+        next launch. Safe to leave it growing; each save is small
+        (~5-30 KB).
+        """
+        try? text.data(using: .utf8)?.write(to: readme, options: .atomic)
+    }
+
     /// Write a pre/post pair to
-    /// `Application Support/PrimaeNative/CalibrationSessions/<letter>/<timestamp>.json`.
+    /// `Documents/PrimaeNative/CalibrationSessions/<letter>/<timestamp>.json`.
     /// No-op if `pre == post` (no-edit auto-save). Errors are logged
     /// and swallowed.
-    static func log(pre: [[CGPoint]],
+    public static func log(pre: [[CGPoint]],
                     post: [[CGPoint]],
                     letter: String,
                     schriftArt: SchriftArt,

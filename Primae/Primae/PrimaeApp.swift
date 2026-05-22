@@ -30,6 +30,9 @@ struct PrimaeApp: App {
         // covers main-bundle fonts; the SPM resource bundle needs
         // `CTFontManagerRegisterFontsForURLs`. Idempotent.
         PrimaeFonts.registerAll()
+        // Pre-create the calibration session-log root so the app
+        // appears in the Files app even before the first save lands.
+        CalibrationSessionLogger.bootstrap()
     }
 
     var body: some Scene {

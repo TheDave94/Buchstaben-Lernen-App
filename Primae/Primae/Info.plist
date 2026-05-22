@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Two Files-app / Finder-USB exposure keys. Xcode 26 silently
+        drops INFOPLIST_KEY_UIFileSharingEnabled as an unrecognized
+        auto-generated build setting (verified via plutil on the
+        built Info.plist), so this hand-written fragment is merged
+        in by GENERATE_INFOPLIST_FILE=YES + INFOPLIST_FILE pointing
+        here. LSSupportsOpeningDocumentsInPlace lives here too so a
+        single file is the source of truth for file-sharing config.
+    -->
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+</dict>
+</plist>
