@@ -393,7 +393,7 @@
 				DEVELOPMENT_TEAM = XMX37BH48B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Primae/Info.plist;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Primae;
 				INFOPLIST_KEY_UIAppFonts = "Primae-Light.otf Primae-LightCursive.otf Primae-Semilight.otf Primae-SemilightCursive.otf Primae-Regular.otf Primae-Cursive.otf Primae-Semibold.otf Primae-SemiboldCursive.otf Primae-Bold.otf Primae-BoldCursive.otf PrimaeText-Light.otf PrimaeText-LightCursive.otf PrimaeText-Semilight.otf PrimaeText-SemilightCursive.otf PrimaeText-Regular.otf PrimaeText-Cursive.otf PrimaeText-Semibold.otf PrimaeText-SemiboldCursive.otf PrimaeText-Bold.otf PrimaeText-BoldCursive.otf PlaywriteAT-Regular.ttf";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -432,7 +432,7 @@
 				DEVELOPMENT_TEAM = XMX37BH48B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Primae/Info.plist;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Primae;
 				INFOPLIST_KEY_UIAppFonts = "Primae-Light.otf Primae-LightCursive.otf Primae-Semilight.otf Primae-SemilightCursive.otf Primae-Regular.otf Primae-Cursive.otf Primae-Semibold.otf Primae-SemiboldCursive.otf Primae-Bold.otf Primae-BoldCursive.otf PrimaeText-Light.otf PrimaeText-LightCursive.otf PrimaeText-Semilight.otf PrimaeText-SemilightCursive.otf PrimaeText-Regular.otf PrimaeText-Cursive.otf PrimaeText-Semibold.otf PrimaeText-SemiboldCursive.otf PrimaeText-Bold.otf PrimaeText-BoldCursive.otf PlaywriteAT-Regular.ttf";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
