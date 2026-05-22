@@ -125,10 +125,22 @@ struct StrokeCalibrationOverlay: View {
     /// drag + delete mirrors the pre-refactor `.points/.drag/.delete`
     /// triple; the polyline is rebuilt by BFS-walking the skeleton
     /// between the anchors.
+    ///
+    /// `.punkt` is a single-checkpoint dot-placement mode: tap writes
+    /// `editableStrokes[activeStroke] = [point]` directly, bypassing
+    /// `addAnchor` / `rebuildStrokeFromAnchors` (which gates on
+    /// `anchors.count >= 2`). Activated via the "+ Punkt" button next
+    /// to "+ Strich"; intentionally NOT shown in the toolbar pill row
+    /// (see `inToolbar` below) — peer toolbar visibility would risk
+    /// clobbering a multi-checkpoint stroke if a user re-selected it
+    /// while the wrong stroke was active.
     enum AnkerTool: String, CaseIterable {
         case place = "Setzen"
+        case punkt = "Punkt"
         case drag = "Ziehen"
         case delete = "Löschen"
+
+        var inToolbar: Bool { self != .punkt }
     }
 
     /// Bbox-relative anchors set in `.points` mode, per stroke index.
@@ -232,6 +244,14 @@ struct StrokeCalibrationOverlay: View {
                 refreshSkeleton()
             }
             .onChange(of: topMode) {
+                // Prune empty strokes that "+ Strich" / "+ Punkt" may
+                // have left behind without placement, so a mode flip
+                // doesn't carry a phantom slot.
+                if editableStrokes.contains(where: \.isEmpty) {
+                    editableStrokes.removeAll(where: \.isEmpty)
+                    activeStroke = max(0, min(activeStroke,
+                                              editableStrokes.count - 1))
+                }
                 if topMode == .anker { bootstrapAnchorsFromExistingStrokes() }
                 if topMode == .skelett { bootstrapHandles() }
             }
@@ -302,6 +322,17 @@ struct StrokeCalibrationOverlay: View {
                 .onTapGesture { location in
                     let bboxPt = screenToGlyph(location, in: size)
                     addAnchor(bboxPt)
+                }
+        }
+        if topMode == .anker && ankerTool == .punkt {
+            // Single-checkpoint dot placement: tap writes one point
+            // directly to the active stroke, replacing whatever was
+            // there. Repeats move the dot.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { location in
+                    let bboxPt = screenToGlyph(location, in: size)
+                    placePunkt(at: bboxPt)
                 }
         }
         // SKELETT canvas gesture moved to PencilDragLayer (palm
@@ -1341,7 +1372,7 @@ struct StrokeCalibrationOverlay: View {
                     }
                     numbersToggleButton
                 } else {
-                    ForEach(AnkerTool.allCases, id: \.self) { t in
+                    ForEach(AnkerTool.allCases.filter(\.inToolbar), id: \.self) { t in
                         ankerToolButton(t)
                     }
                 }
@@ -1363,6 +1394,15 @@ struct StrokeCalibrationOverlay: View {
                         .font(.system(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(.green)
+
+                Button {
+                    addPunkt()
+                } label: {
+                    Label("Punkt", systemImage: "smallcircle.filled.circle")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.green)
+                .accessibilityLabel("Punktstrich hinzufügen — Einzelpunkt für Umlautpunkte und Tüpfel")
 
                 Spacer(minLength: 0)
             }
@@ -1434,6 +1474,12 @@ struct StrokeCalibrationOverlay: View {
                 return count < 2
                     ? "Anker setzen — \(strichLabel): \(count)/min 2"
                     : "Anker setzen — \(strichLabel): \(count) Anker, weitere durch Tippen ergänzen"
+            case .punkt:
+                let placed = editableStrokes.indices.contains(activeStroke)
+                    && !editableStrokes[activeStroke].isEmpty
+                return placed
+                    ? "Punkt setzen — \(strichLabel): Punkt platziert, erneut tippen zum Verschieben"
+                    : "Punkt setzen — \(strichLabel): tippen, um Punkt zu platzieren"
             case .drag:
                 return "Anker setzen — \(strichLabel): Anker ziehen, um den Verlauf zu korrigieren"
             case .delete:
@@ -1589,6 +1635,35 @@ struct StrokeCalibrationOverlay: View {
         ankerTool = .place
     }
 
+    /// Peer of `addStroke()` for single-checkpoint dot strokes
+    /// (umlaut dots, lowercase tittles, anything else that's
+    /// pedagogically a tap target). Opens an empty stroke and arms
+    /// `.punkt` mode so the next canvas tap writes the single
+    /// checkpoint via `placePunkt`. Empty strokes get pruned by
+    /// `persistAndLog` and by `topMode` transitions if no tap lands.
+    private func addPunkt() {
+        pushUndoSnapshot()
+        editableStrokes.append([])
+        activeStroke = editableStrokes.count - 1
+        anchorsPerStroke[activeStroke] = []
+        hasUnsavedEdits = true
+        topMode = .anker
+        ankerTool = .punkt
+    }
+
+    /// `.punkt` tap handler. Writes one bbox-relative point to the
+    /// active stroke, replacing prior contents. Re-tapping in
+    /// `.punkt` mode moves the dot. Silently ignores taps outside
+    /// the bbox.
+    private func placePunkt(at pt: CGPoint) {
+        guard editableStrokes.indices.contains(activeStroke) else { return }
+        guard pt.x >= 0, pt.x <= 1, pt.y >= 0, pt.y <= 1 else { return }
+        pushUndoSnapshot()
+        editableStrokes[activeStroke] = [pt]
+        anchorsPerStroke[activeStroke] = []
+        hasUnsavedEdits = true
+    }
+
     private func deleteStroke(_ idx: Int) {
         guard editableStrokes.indices.contains(idx) else { return }
         editableStrokes.remove(at: idx)
@@ -1635,10 +1710,21 @@ struct StrokeCalibrationOverlay: View {
     /// pre-state is bumped to the just-saved polyline so a later
     /// save in the same session pairs against the now-saved state
     /// rather than the original load.
+    ///
+    /// Empty strokes (created by "+ Strich" or "+ Punkt" without a
+    /// subsequent placement) are filtered before persist + log so
+    /// the saved file matches the user's actual intent and the
+    /// session log doesn't pick up a no-edit save as a phantom edit.
     private func persistAndLog(_ polyline: [[CGPoint]],
                                 letter: String,
                                 schriftArt: SchriftArt) {
-        vm.persistCalibratedStrokes(polyline,
+        let cleaned = polyline.filter { !$0.isEmpty }
+        if cleaned.count != polyline.count {
+            editableStrokes = cleaned
+            activeStroke = max(0, min(activeStroke,
+                                      editableStrokes.count - 1))
+        }
+        vm.persistCalibratedStrokes(cleaned,
                                       for: letter,
                                       schriftArt: schriftArt)
         let tool: CalibrationSessionLogger.Tool
@@ -1647,12 +1733,12 @@ struct StrokeCalibrationOverlay: View {
         case .anker:   tool = .anker
         }
         CalibrationSessionLogger.log(pre: preEditPolyline,
-                                      post: polyline,
+                                      post: cleaned,
                                       letter: letter,
                                       schriftArt: schriftArt,
                                       editCount: editsThisLoad,
                                       tool: tool)
-        preEditPolyline = polyline
+        preEditPolyline = cleaned
         editsThisLoad = 0
     }
 

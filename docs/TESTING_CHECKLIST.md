@@ -298,6 +298,56 @@ line numbers — line numbers drift, names don't.
 
 ---
 
+## 14 · Stroke calibrator — single-checkpoint dots ("+ Punkt")
+
+> DEBUG-only flow. Reach the calibrator via parent-area → Werkzeuge (or
+> the dev menu — the path varies). Verify the new `+ Punkt` workflow
+> for authoring single-checkpoint dot strokes (umlaut diaeresis,
+> tittles).
+
+- [ ] **`+ Punkt` button visible** in the calibrator's bottom action
+  row, next to `+ Strich`. Same green tint and visual weight. Icon
+  is a filled small-circle inside a circle.
+- [ ] **Tap `+ Punkt` with no letter loaded**: silent no-op (button is
+  inert until a letter is active).
+- [ ] **Tap `+ Punkt` on a loaded letter**: a new empty stroke
+  appears in the chip row; calibrator switches to ANKER mode; status
+  hint reads "Punkt setzen — Strich N: tippen, um Punkt zu platzieren".
+- [ ] **Tap once in canvas**: a single-point dot stroke is created
+  at the tap location; status hint updates to "Punkt setzen —
+  Strich N: Punkt platziert, erneut tippen zum Verschieben".
+- [ ] **Tap a different canvas location while still in `+ Punkt`
+  mode**: the dot moves to the new location (the stroke remains a
+  single checkpoint; no new stroke added).
+- [ ] **Speichern**: the dot persists. After save, reopening the
+  letter shows the dot at the same position.
+- [ ] **`+ Punkt` without placement + Speichern**: no-op. No empty
+  stroke gets persisted; the chip row drops back to the prior
+  stroke count after save.
+- [ ] **`+ Punkt` + switch to SKELETT mode without placement**:
+  the empty stroke is pruned (chip count returns to prior).
+- [ ] **Tap `+ Punkt` outside the bbox** (above the cap-height
+  margin): silent ignore — no stroke created at out-of-bbox
+  coordinates.
+- [ ] **Round-trip test on Ä**: tap `+ Punkt` → tap at (~0.34, 0.05)
+  → tap `+ Punkt` again → tap at (~0.66, 0.05) → Speichern. Reopen
+  Ä: two single-checkpoint dot strokes visible at the placed
+  positions (matches the Ü dot template).
+- [ ] **Session log captures the dot add**: open Files app → Primae
+  → `PrimaeNative/CalibrationSessions/Ä/<timestamp>.json` →
+  inspect: `post_polyline` should include the new single-point
+  stroke as a 1-element array. `tool` field reads `"ANKER"` (dot
+  placement is an ANKER-mode action). `edit_count_in_session`
+  > 0.
+
+If broken: `StrokeCalibrationOverlay.swift::addPunkt` /
+`placePunkt`. AnkerTool's `.punkt` case is filtered out of the
+toolbar (only the `+ Punkt` button can activate it) — if it
+appears in the toolbar pill row, check the `inToolbar` filter at
+the ANKER `ForEach`.
+
+---
+
 ## How to report a failure back
 
 For each unticked box, paste back:
