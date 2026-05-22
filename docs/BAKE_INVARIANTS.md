@@ -4,7 +4,8 @@ Single source of truth for what every shipped letter polyline must
 satisfy. Three layers:
 
 1. **Permanent rules (four).** Conceptual statements that apply to
-   every letter, every weight, every bake.
+   every letter, every weight, every bake — with their operational
+   interpretation under **SPEC-VISUAL-APPROVAL** (see §0 below).
 2. **Measurable acceptance thresholds (six).** The numeric form of
    the rules, the version used by visual review and by any
    automated gate.
@@ -27,48 +28,95 @@ them once verified.
 
 ---
 
+## 0. The operative spec — SPEC-VISUAL-APPROVAL
+
+A polyline IS-the-centerline if and only if it has been visually
+approved by the maintainer at iPad render scale against the live
+letter ink. The shipped corpus in
+`PrimaeNative/Resources/Letters/Regular/<letter>/strokes.json` is
+the canonical reference. Acceptance criteria below measure drift
+from that reference, not absolute geometric properties of the ink.
+
+**Empirical evidence.** Three Phase-2b investigations made the case
+that the alternative spec (SPEC-MEDIAL-AXIS — "the polyline is the
+medial axis of the ink") doesn't hold:
+
+1. The drift between shipped polylines and the geometric medial
+   axis is below the runtime's scoring tolerances on 58/59 letters
+   (freeWrite) and 42/59 (guided phase).
+2. Calibrator hand-corrections do NOT systematically move polylines
+   toward the medial axis — 20 letters improved, 16 got worse,
+   16 unchanged; D, J, L flipped from "passes G1" to "fails G1"
+   when calibrated. David's eye and the medial axis are different
+   criteria.
+3. For closed-bowl letters with junctions (R, b, d), the bare
+   `skimage.skeletonize` medial axis contains cross-branches that
+   are not part of how a human writes the letter — visually
+   wrong.
+
+Full investigation evidence in
+`research_data/spec_decision/framing.md`. This framing is also
+consistent with `docs/LESSONS.md` Part A §1 (tool-assisted
+authorship beats fully-automated bake) and §2 (medial-axis math
+≠ pedagogical centerline).
+
+**Trade-off accepted.** SPEC-VISUAL-APPROVAL is a weaker
+reproducibility claim than SPEC-MEDIAL-AXIS. Mitigated by:
+
+- The captured session-pair corpus under
+  `research_data/calibration_sessions/<date>/` — transparent
+  record of what was changed when.
+- The visual-review cadence in §4 below.
+- Threshold 6 (determinism) still automated; bake output is
+  byte-stable.
+- The spec itself is self-revising and version-controlled. When
+  the spec or thresholds change because new evidence accumulates
+  (e.g. new session pairs surface bake-bug patterns the threshold
+  should account for), the change is committed and dated. The
+  full methodology trail — including spec revisions — survives
+  in git history and in `research_data/`.
+
+---
+
 ## 1. Permanent rules
 
 A bake that violates any of these is not shippable, regardless of
 gate metrics or visual judgment.
 
-### Rule 1 — Centerline location (medial axis)
+### Rule 1 — Centerline location matches reference
 
-Every polyline point sits at the medial axis — the middle of the
-stroke width — never offset toward either border.
+Every shipped polyline's local centerline position matches the
+maintainer-approved reference at the same letter and stroke. The
+reference is the file at HEAD in
+`PrimaeNative/Resources/Letters/Regular/<letter>/strokes.json`.
 
-**Enforced by**
-- *Construction.* `smoothed_medial_axis` arm walks the
-  `skimage.morphology.skeletonize` skeleton, which IS the medial
-  axis by definition. See `ARM_STRATEGIES` in
-  `scripts/generate_strokes_auto.py` (line ~1922 of the file's
-  current top-of-script registry).
-- *Construction.* `path`-kind strokes route Dijkstra-on-distance-
-  transform between consecutive anchors, with edge weight
-  `step_length / (dt[pixel] + 1)` — deep-ink pixels are cheaper,
-  so the path tracks the medial axis. See pipeline step 6 in
-  APP_DOCUMENTATION.md §13.1.
-- *Not enforced as a measurement.* No asymmetry computation in
-  the bake, in `verify_bake.sh`, or in CI. Pending Phase 2b
-  (Threshold 1 below).
-
-### Rule 2 — Centerline shape
-
-The centerline's overall shape mirrors the inner border (counter)
-of the glyph, not the outer silhouette. For asymmetric bands (D
-bowl, P bowl, b bowl, R bowl) the centerline resembles the inner
-shape, scaled outward into the middle of the band.
-
-Visual check: place the centerline alongside the counter — same
-shape, larger size, sitting halfway out into the band.
+A re-bake or candidate edit satisfies Rule 1 iff its asymmetry
+profile (per-point local cross-section asymmetry) correlates
+strongly with the reference's asymmetry profile (Threshold 1,
+below).
 
 **Enforced by**
-- *Visual review only.* §4 "Visual-review cadence" below; primary
-  tool is the sweep-grid workflow (CLAUDE.md "Visual sweep
-  workflow" + APP_DOCUMENTATION.md §13.7).
-- *Not enforced as a measurement.* No Pearson-correlation
-  computation against the inner counter exists in the bake or
-  CI. Pending Phase 2b (Threshold 2 below).
+- *Reference comparison.* Pending Phase 2b Track B / G1 — Pearson
+  correlation of asymmetry profile vs reference, computed in
+  `scripts/audit_invariants.py`. Threshold details in §2.
+- *Construction (today).* `smoothed_medial_axis` arm + Dijkstra-
+  on-DT for `path` strokes — the bake produces medial-axis-
+  tracking polylines as a starting point; the calibrator refines
+  them. Documented for context, not enforcement.
+
+### Rule 2 — Centerline shape matches reference
+
+Every shipped polyline's overall turn-angle profile matches the
+maintainer-approved reference at the same letter and stroke. The
+reference is the file at HEAD.
+
+**Enforced by**
+- *Reference comparison.* Pending Phase 2b Track B / G2 — Pearson
+  correlation of turn-angle profile vs reference. Threshold
+  details in §2.
+- *Visual review (today).* §4 below — the sweep workflow. Direct
+  human comparison against the live letter is the ground truth
+  that the automated gate approximates.
 
 ### Rule 3 — Stroke type purity
 
@@ -118,25 +166,49 @@ fails any measured threshold must auto-reject; thresholds the bake
 doesn't measure today are reviewed by the visual-sweep workflow
 (§4) and tracked for Phase 2b coverage.
 
-### Threshold 1 — Centerline-location asymmetry (Rule 1)
+### Threshold 1 — Asymmetry-profile drift from reference (Rule 1)
 
-Mean asymmetry ≤ 0.10; p95 ≤ 0.20.
+Per-point asymmetry computed via the perpendicular cross-section
+method (`scripts/audit_invariants.py::audit_threshold_1`). The
+metric itself is unchanged from the medial-axis era; only the
+comparison object changed:
 
-Per polyline point:
-`asymmetry = |d_inner − d_outer| / (d_inner + d_outer)` along the
-local cross-section normal, where `d_inner` and `d_outer` are
-distances to the inner counter and outer silhouette respectively.
+Pearson correlation of the candidate's per-point asymmetry
+sequence against the reference's per-point asymmetry sequence
+≥ TBD.
 
-**Enforced by**: not currently enforced. Pending Phase 2b.
+**Threshold calibration.** To be calibrated against the shipped
+corpus when G1 lands. Procedure:
 
-### Threshold 2 — Centerline-shape Pearson (Rule 2)
+1. Run G1 against the 59-letter corpus, with each letter compared
+   against itself (a fresh bake of that letter → the shipped
+   reference at HEAD) under bake-determinism noise.
+2. Report `min(self-Pearson)` across the 59 letters — this is
+   the natural floor: the lowest correlation any letter achieves
+   against itself given numerical noise in the pipeline.
+3. Production threshold = `min(self-Pearson) − 0.02` (small
+   safety margin).
 
-Pearson correlation of turn-angle profiles ≥ 0.85 between the
-polyline and the inner counter. At each inner-counter corner with
-turn angle > 60°, the polyline's nearest-point corner must be
-within ±20°.
+The threshold is therefore **derived** from corpus measurement,
+not chosen by guess. Recorded here after G1 ships, with the
+corpus state SHA cited.
 
-**Enforced by**: not currently enforced. Pending Phase 2b.
+**Enforced by**: not currently enforced. Pending Phase 2b Track
+B / G1. After G1 lands, every PR's bake output must satisfy this
+against the reference at HEAD before merge.
+
+### Threshold 2 — Turn-angle-profile drift from reference (Rule 2)
+
+Pearson correlation of the candidate's turn-angle profile (signed
+angle between consecutive segments, arc-length resampled to 100
+points) against the reference's turn-angle profile ≥ TBD.
+
+**Threshold calibration.** Same procedure as T1, applied to G2's
+turn-angle measurement. `min(self-Pearson)` minus a 0.02 safety
+margin, derived from corpus measurement at G2-ship time.
+
+**Enforced by**: not currently enforced. Pending Phase 2b Track
+B / G2.
 
 ### Threshold 3 — Stroke type purity (Rule 3)
 
@@ -361,13 +433,13 @@ gameplay, keep this distinction in mind:
 
 | Rule / Threshold | Mechanism |
 |---|---|
-| Rule 1 — centerline location | Construction (`smoothed_medial_axis` arm, Dijkstra-on-DT for path strokes) |
-| Rule 2 — centerline shape | Visual review only (§4) |
+| Rule 1 — centerline matches reference | Visual review (§4) + construction (medial-axis-tracking polyline as starting point, refined via calibrator) |
+| Rule 2 — shape matches reference | Visual review (§4) |
 | Rule 3 — stroke-type purity | Construction (`kind: line` vs `path` discriminator) |
 | Rule 4 — junction (endpoint sharing) | Construction (anchor cache, shared-apex / T-junction pre-compute) |
 | Rule 4 — junction (tangent alignment) | **Not enforced** — pending Phase 2b |
-| Threshold 1 — asymmetry ≤ 0.10 | **Not enforced** — pending Phase 2b |
-| Threshold 2 — Pearson ≥ 0.85 | **Not enforced** — pending Phase 2b |
+| Threshold 1 — asymmetry-profile Pearson vs reference | **Not enforced** — pending Phase 2b / G1 |
+| Threshold 2 — turn-angle-profile Pearson vs reference | **Not enforced** — pending Phase 2b / G2 |
 | Threshold 3 — straight ≤ 1.5 px | **Not enforced** — pending Phase 2b |
 | Threshold 4 — end-to-end tangent ≤ 10° | **Not enforced** — pending Phase 2b |
 | Threshold 5 — Y-junction gap = 0 px | Construction (T-junction pre-compute) |
@@ -376,14 +448,19 @@ gameplay, keep this distinction in mind:
 **Sweep diagnostics** (overshoot, reversal, max-turn, advisory
 skeleton audit) are informational gauges, not ship gates.
 
-**Net.** Three of four permanent rules have construction-only
-enforcement; one (Rule 2) is visual-review only. Only Threshold 6
+**Net.** Rules 1 and 2 are operationally defined under
+SPEC-VISUAL-APPROVAL (§0): the shipped corpus IS the reference, and
+visual review by the maintainer is the criterion. Rule 3 has
+construction-only enforcement. Rule 4 has construction-only
+endpoint sharing; tangent alignment pending. Only Threshold 6
 (determinism) is automated. Phase 2b ships Thresholds 1–4 as
-automated gates AND lifts `verify_bake.sh` into CI (currently a
-manual / pre-commit guard). After Phase 2b, Rules 1 / 3 / 4 move
-from "construction-only" to "construction + measurement", Rule 2
-moves from "visual-review only" to "measurement-backed visual
-review", and the automated enforcement floor becomes "every PR
-passes Thresholds 1, 2, 3, 4, and 6 in CI before merge; Threshold
-5 remains construction-enforced (by the T-junction pre-compute,
-which always writes the shared pixel)."
+automated gates against the shipped reference AND lifts
+`verify_bake.sh` into CI (currently a manual / pre-commit guard).
+After Phase 2b, Rules 1 / 2 move from "visual-review only" to
+"measurement-backed visual review" (the gate detects drift from
+the approved reference); Rules 3 / 4 (tangent) move from
+"construction-only" to "construction + measurement"; and the
+automated enforcement floor becomes "every PR passes Thresholds 1,
+2, 3, 4, and 6 in CI before merge; Threshold 5 remains
+construction-enforced (by the T-junction pre-compute, which always
+writes the shared pixel)."
