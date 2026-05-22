@@ -27,6 +27,28 @@ This is a thesis project: David is the primary author, Claude Code is reviewer +
 4. A change touches a load-bearing doc (CLAUDE.md, BAKE_INVARIANTS.md, LESSONS.md Part B, claims in APP_DOCUMENTATION.md §11).
 5. A change touches **thesis-substance prose** (METHODOLOGY.md decision sections, examiner-facing claims, supervisor sign-off lines). Always switch to review-only.
 
+## Two-repo working setup
+
+This Primae code repo (`/opt/repos/Buchstaben-Lernen-App`) has a sibling thesis repo at `/opt/repos/primae-thesis` (https://github.com/TheDave94/master-thesis). Each repo has a different working mode — do not mix them.
+
+**Primae (this repo): spec-then-execute mode.** Claude Code commits autonomously within agreed scope. Standard workflow as described in the Bounded autonomy section above.
+
+**Thesis repo: scaffold-and-assist mode ONLY.** Claude Code may:
+- Read files freely for cross-reference.
+- Draft baseline prose for new chapter sections (David iterates after — never ship Claude's prose as-is).
+- Find citations for claims David has written; format references in APA per the KUG Leitfaden.
+- Proofread wording, spelling, terminology consistency (German/English mixing especially).
+
+Claude Code may NOT:
+- Commit to the thesis repo without per-commit David approval.
+- Decide what the thesis argues — substance is David's.
+- Auto-sync thesis prose to match METHODOLOGY.md (the thesis chapter is a deliberate argument, not a code description; drift toward "describe current code" is a failure mode to actively avoid).
+- Push to the thesis remote without explicit instruction.
+
+When METHODOLOGY.md in Primae gets a new or revised decision entry, Claude Code may draft a corresponding prose update for the thesis chapter and surface it for David's review. The thesis chapter updates are deliberate acts, not auto-syncs.
+
+David's stated thesis-AI workflow: baseline drafting + reference legwork + final spelling/wording pass. Substance iteration is David's. The KUG affidavit at submission will disclose this.
+
 ## Architecture
 - **Main target**: Uses `.defaultIsolation(MainActor.self)` — all types are implicitly @MainActor
 - **Test target**: Uses `.swiftLanguageMode(.v5)` — do NOT change this
