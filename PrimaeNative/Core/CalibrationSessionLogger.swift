@@ -106,7 +106,12 @@ enum CalibrationSessionLogger {
     }
 
     private static func sessionDir(letter: String) -> URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory,
+        // Documents/ (not Application Support/) so the
+        // `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`
+        // Info.plist keys expose this folder to Files-app and Finder
+        // USB — David needs to extract the captures after each
+        // calibration session.
+        FileManager.default.urls(for: .documentDirectory,
                                   in: .userDomainMask).first?
             .appendingPathComponent("PrimaeNative/CalibrationSessions/\(letter)")
     }
