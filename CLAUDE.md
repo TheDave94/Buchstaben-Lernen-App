@@ -5,6 +5,28 @@
 ## Project Overview
 iPad app for teaching German children (ages 5-6) to trace letters. Built with SwiftUI, Swift 6.3, targeting iOS 18+. Academic thesis project.
 
+## Bounded autonomy
+
+This is a thesis project: David is the primary author, Claude Code is reviewer + executor of agreed tasks. Two collaboration patterns coexist — be explicit about which one is active before acting.
+
+**Five principles.**
+1. **Default to action within scope.** Inside an agreed spec, execute — don't re-check at every step.
+2. **Spec is the contract.** What was agreed in conversation is what ships. Drift back to conversation if the work outgrows the spec.
+3. **Investigate before deciding.** Read the code / data before proposing a fix. Cheap to read, expensive to undo.
+4. **Preserve the working setup.** Existing patterns are load-bearing until proven otherwise. Don't refactor on a side-quest.
+5. **David picks direction, Claude picks implementation.** The "what" and "why" come from David; the "how" can be Claude's call within scope.
+
+**Two patterns.**
+- **Spec-then-execute (autonomous on engineering).** David scopes the spec in conversation; Claude implements + tests + commits + pushes + watches CI. Used for tactical engineering: bake changes, UI fixes, refactors, test additions. [[feedback_visual_approval_gate]] still gates any visual change inside this pattern.
+- **Review-only (Claude proposes, David executes).** Used for thesis-substance docs — anything an examiner will read for narrative or methodology rationale (e.g. a future `docs/METHODOLOGY.md`, claims, decision-log prose). Claude drafts structure / redlines / suggests phrasing; the text that ships is David's voice. Don't merge prose into thesis-substance files without David's explicit sign-off on each section.
+
+**Stop and surface (don't proceed autonomously) when:**
+1. Scope grew past the agreed spec.
+2. Two valid paths exist and the choice changes the artefact materially.
+3. Evidence contradicts the spec (e.g. doc says X, code does Y).
+4. A change touches a load-bearing doc (CLAUDE.md, BAKE_INVARIANTS.md, LESSONS.md Part B, claims in APP_DOCUMENTATION.md §11).
+5. A change touches **thesis-substance prose** (METHODOLOGY.md decision sections, examiner-facing claims, supervisor sign-off lines). Always switch to review-only.
+
 ## Architecture
 - **Main target**: Uses `.defaultIsolation(MainActor.self)` — all types are implicitly @MainActor
 - **Test target**: Uses `.swiftLanguageMode(.v5)` — do NOT change this
@@ -108,7 +130,7 @@ For any geometric or visual question with finite candidate options or a single t
 Workflow:
 1. Identify candidate constructions or parameter values (4-6 typically; include current `main` as the baseline column).
 2. Implement each, bake the target letters.
-3. Run numeric gates (1 overshoot, 2 monotonicity, 3 tangent continuity, determinism, b firewall) as a filter; gate-failing candidates get a labelled `SKIPPED` cell in the grid.
+3. Run numeric gates (1 overshoot, 2 reversal, 3 max-turn, determinism, b firewall) as a filter; gate-failing candidates get a labelled `SKIPPED` cell in the grid.
 4. Render PNGs of passing candidates through the bake pipeline at iPad-equivalent style (dark ink ~#2D3748, red polyline ~#E53E3E).
 5. Build a contact-sheet grid (rows = letters, columns = candidates) at `/tmp/sweep/grid.png`.
 6. Present to David. Wait for selection.
