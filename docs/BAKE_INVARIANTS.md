@@ -384,4 +384,6 @@ manual / pre-commit guard). After Phase 2b, Rules 1 / 3 / 4 move
 from "construction-only" to "construction + measurement", Rule 2
 moves from "visual-review only" to "measurement-backed visual
 review", and the automated enforcement floor becomes "every PR
-passes Thresholds 1–6 in CI before merge."
+passes Thresholds 1, 2, 3, 4, and 6 in CI before merge; Threshold
+5 remains construction-enforced (by the T-junction pre-compute,
+which always writes the shared pixel)."
