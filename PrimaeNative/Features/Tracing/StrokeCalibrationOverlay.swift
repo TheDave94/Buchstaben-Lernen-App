@@ -60,6 +60,16 @@ struct StrokeCalibrationOverlay: View {
     /// overwrites editableStrokes, and the "Alle" export reads only
     /// persisted data so it would miss unsaved edits entirely.
     @State private var hasUnsavedEdits: Bool = false
+    /// Polyline captured at load-time, before any user edit. Paired
+    /// with the polyline at save-time to log a (pre, post) correction
+    /// pair via `CalibrationSessionLogger`. Reset every load; replaced
+    /// by post-state after each successful save so a multi-save session
+    /// produces incremental pairs rather than absolute-against-load.
+    @State private var preEditPolyline: [[CGPoint]] = []
+    /// Total `pushUndoSnapshot` calls since the last load. Reset on
+    /// load; reported as `edit_count_in_session` on save. Accurate
+    /// (no cap, unlike `undoStack.count`).
+    @State private var editsThisLoad: Int = 0
     /// SKELETT mode: show "1, 2, 3 …" numbers inside each handle.
     /// Off by default — numbers are debug noise during skeleton
     /// editing.
@@ -195,8 +205,9 @@ struct StrokeCalibrationOverlay: View {
                 // as the save target instead. vm.schriftArt is unchanged
                 // on a letter switch so the single-arg overload is fine.
                 if hasUnsavedEdits, loaded, let prevKey = loadedKey {
-                    vm.persistCalibratedStrokes(editableStrokes,
-                                                 for: prevKey.letter)
+                    persistAndLog(editableStrokes,
+                                   letter: prevKey.letter,
+                                   schriftArt: prevKey.schriftArt)
                     hasUnsavedEdits = false
                 }
                 loadFromVM()
@@ -210,9 +221,9 @@ struct StrokeCalibrationOverlay: View {
                 // both fields from loadedKey to target the previous
                 // (letter, schriftArt) explicitly.
                 if hasUnsavedEdits, loaded, let prevKey = loadedKey {
-                    vm.persistCalibratedStrokes(editableStrokes,
-                                                 for: prevKey.letter,
-                                                 schriftArt: prevKey.schriftArt)
+                    persistAndLog(editableStrokes,
+                                   letter: prevKey.letter,
+                                   schriftArt: prevKey.schriftArt)
                     hasUnsavedEdits = false
                 }
                 loadFromVM(force: true)
@@ -571,6 +582,7 @@ struct StrokeCalibrationOverlay: View {
         if undoStack.count > 10 {
             undoStack.removeFirst()
         }
+        editsThisLoad += 1
     }
 
     /// Restore the most-recent snapshot. Anchors are NOT included
@@ -1611,6 +1623,37 @@ struct StrokeCalibrationOverlay: View {
         originalCpCounts.removeAll()
         // Fresh from persistence/bundle — nothing unsaved yet.
         hasUnsavedEdits = false
+        // Capture the load-state for the session logger's pre/post
+        // pairing. editsThisLoad resets so the next save reports
+        // edits-this-session accurately.
+        preEditPolyline = editableStrokes
+        editsThisLoad = 0
+    }
+
+    /// Persist via the VM and emit a session-log pair via
+    /// `CalibrationSessionLogger`. After a successful save the
+    /// pre-state is bumped to the just-saved polyline so a later
+    /// save in the same session pairs against the now-saved state
+    /// rather than the original load.
+    private func persistAndLog(_ polyline: [[CGPoint]],
+                                letter: String,
+                                schriftArt: SchriftArt) {
+        vm.persistCalibratedStrokes(polyline,
+                                      for: letter,
+                                      schriftArt: schriftArt)
+        let tool: CalibrationSessionLogger.Tool
+        switch topMode {
+        case .skelett: tool = .skelett
+        case .anker:   tool = .anker
+        }
+        CalibrationSessionLogger.log(pre: preEditPolyline,
+                                      post: polyline,
+                                      letter: letter,
+                                      schriftArt: schriftArt,
+                                      editCount: editsThisLoad,
+                                      tool: tool)
+        preEditPolyline = polyline
+        editsThisLoad = 0
     }
 
     private func applyToVM() {
@@ -1620,7 +1663,9 @@ struct StrokeCalibrationOverlay: View {
     /// Persists per-script and applies to the live tracker.
     private func saveToVM() {
         vm.applyCalibration(editableStrokes)
-        vm.persistCalibratedStrokes(editableStrokes, for: vm.currentLetterName)
+        persistAndLog(editableStrokes,
+                       letter: vm.currentLetterName,
+                       schriftArt: vm.schriftArt)
         hasUnsavedEdits = false
         savedFlashUntil = Date().addingTimeInterval(1.2)
         Task {
