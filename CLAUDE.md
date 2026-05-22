@@ -152,8 +152,8 @@ For any geometric or visual question with finite candidate options or a single t
 Workflow:
 1. Identify candidate constructions or parameter values (4-6 typically; include current `main` as the baseline column).
 2. Implement each, bake the target letters.
-3. Run numeric gates (1 overshoot, 2 reversal, 3 max-turn, determinism, b firewall) as a filter; gate-failing candidates get a labelled `SKIPPED` cell in the grid.
-4. Render PNGs of passing candidates through the bake pipeline at iPad-equivalent style (dark ink ~#2D3748, red polyline ~#E53E3E).
+3. Compute sweep-renderer gauges (overshoot, reversal, max-turn — see `docs/BAKE_INVARIANTS.md` §3) per candidate. Gauges are diagnostic, not ship gates; the bake itself writes output regardless. A candidate that fails a gauge gets a labelled `SKIPPED` cell in the sweep grid for visual comparison; it does NOT auto-reject from being shippable.
+4. Render PNGs of all candidates through the bake pipeline at iPad-equivalent style (dark ink ~#2D3748, red polyline ~#E53E3E).
 5. Build a contact-sheet grid (rows = letters, columns = candidates) at `/tmp/sweep/grid.png`.
 6. Present to David. Wait for selection.
 7. Set chosen value, bake, commit, push as a **single** commit.
