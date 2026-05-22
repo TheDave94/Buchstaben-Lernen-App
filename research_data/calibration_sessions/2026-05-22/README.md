@@ -1,52 +1,79 @@
 # Calibration session pairs — 2026-05-22
 
-22 (pre, post) polyline pairs captured by `CalibrationSessionLogger`
-during David's iPad calibration session on May 22, 2026. **First
-batch since the instrumentation landed** — these are the first
-training-data entries per Sub-D of the correction-corpus
-investigation.
+38 (pre, post) polyline pairs captured by `CalibrationSessionLogger`
+across **two batches** of iPad calibration on May 22, 2026. The
+first batch (22 pairs, ~17:35-17:59 UTC) is polish edits on
+already-calibrated letters; the second batch (16 pairs,
+~18:38-18:45 UTC) adds the diaeresis dots to Ä / ä / Ö / ö / Ü via
+the newly-shipped "+ Punkt" feature.
 
 ## Capture metadata
 
-| | |
-|---|---|
-| Date | 2026-05-22 |
-| Instrumentation commit | `40e275da` ("feat: log SKELETT/ANKER session pairs for future correction analysis") |
-| Bundle SHA at start of session | `cc2a8ff3` (pre-second-pass baseline import) |
-| Bundle SHA after subsequent import | `b17ab215` (round-2 import) |
-| Tool breakdown | 13 ANKER saves + 9 SKELETT saves |
-| Edit operations summed | 128 |
+| | Batch 1 | Batch 2 |
+|---|---|---|
+| Window (UTC) | 17:35–17:59 | 18:38–18:45 |
+| Instrumentation commit | `40e275da` | `40e275da` |
+| Calibrator-feature commit | (`+ Strich` only) | **`b0d26ab6`** added `+ Punkt` |
+| Bundle SHA at session start | `cc2a8ff3` | `b17ab215` |
+| Bundle SHA after import | `b17ab215` (commit) | `<this commit>` |
+| Pairs captured | 22 | 16 |
+| Tool tally | 13 ANKER + 9 SKELETT | 6 ANKER + 10 SKELETT |
+| Edit operations summed | 128 | 55 |
 
-## Letters touched (12)
+**Combined: 38 pairs · 19 ANKER + 19 SKELETT · 183 edit operations summed.**
 
-| Letter | Sessions | File diff vs `cc2a8ff3`? |
-|---|---:|:---:|
-| A | 1 | ✓ |
-| Ä | 4 | — (undone-before-save / sub-rounding) |
-| D | 1 | ✓ |
-| N | 1 | ✓ |
-| Ö | 5 | — |
-| U | 1 | ✓ |
-| W | 3 | ✓ |
-| b | 1 | ✓ |
-| l | 1 | ✓ |
-| m | 2 | ✓ |
-| p | 1 | ✓ |
-| v | 1 | ✓ |
+Tool tags reflect `topMode` at save time, not strictly the mode that
+authored each edit. Some batch-2 pairs are tagged SKELETT because
+David toggled to SKELETT to verify body strokes between dot
+placements; the underlying dot edit itself was an ANKER `.punkt`
+action.
 
-## Nature of edits — POLISH, not bake-bug fixes
+## Letters touched (13)
 
-These are refinements on already-calibrated letters from earlier
-rounds. **Not "fixing bad bake output"** — per David's framing on
-the correction-corpus investigation, the bake produces ship-acceptable
-output for many letters and the calibrator work is fine-tuning
-against visual review, not geometric correction.
+| Letter | Pairs in batch 1 | Pairs in batch 2 | File diff vs prior bundle? |
+|---|---:|---:|---|
+| A | 1 | 0 | ✓ (batch 1) |
+| Ä | 4 | 8 | ✓ (batch 2 — added 2 dots) |
+| D | 1 | 0 | ✓ (batch 1) |
+| N | 1 | 0 | ✓ (batch 1) |
+| Ö | 5 | 5 | ✓ (batch 2 — added 2 dots) |
+| U | 1 | 0 | ✓ (batch 1) |
+| Ü | 0 | 3 | ✓ (batch 2 — dot positions refined) |
+| W | 3 | 0 | ✓ (batch 1) |
+| b | 1 | 0 | ✓ (batch 1) |
+| l | 1 | 0 | ✓ (batch 1) |
+| m | 2 | 0 | ✓ (batch 1) |
+| p | 1 | 0 | ✓ (batch 1) |
+| v | 1 | 0 | ✓ (batch 1) |
 
-This framing matters for how the pairs are used downstream:
-- They are **not** error-correction labels.
-- They are **delta-from-already-good-to-visually-approved** signals.
-- A residual model trained on these would learn "polish patterns,"
-  not "common bake mistakes."
+**Note — bundle-update vs session-pair mismatch for ä / ö / ü.**
+The batch-2 bundle import updated the strokes.json files for ä and
+ö (added 2 dot strokes each) AND already had ü at the correct
+shape from earlier. But **no session pairs were captured under
+ä, ö, or ü directories on the iPad** — only their uppercase
+counterparts produced session JSONs. This anomaly is queued for
+investigation (logger-gap question after the umlaut import lands)
+as a potential NFC/NFD mismatch in the on-iPad session directory
+naming OR a David-side workflow detail. The Ü-only / ü-zero
+asymmetry rules out "David didn't touch the lowercase set" since
+Ü was already correctly dotted; Ü's 3 pairs were dot-position
+refinements.
+
+## Nature of edits
+
+**Batch 1** is POLISH — refinements on already-calibrated letters
+from prior calibrator rounds.
+
+**Batch 2** is mostly NEW-STROKE authoring — the diaeresis dots
+that didn't exist for Ä / ä / Ö / ö, plus position refinement on
+Ü's already-present dots. This is the first batch of "add-stroke"
+data category in the corpus, distinct from batch 1's "edit-
+existing" pattern. Useful for any future analysis that wants to
+separate "what new strokes look like when authored by hand" from
+"what existing strokes look like when refined."
+
+Both batches: SPEC-VISUAL-APPROVAL — every save survived David's
+eye at iPad render scale against the live letter ink.
 
 ## Per-pair payload schema
 
@@ -65,8 +92,12 @@ This framing matters for how the pairs are used downstream:
 - `<stroke>` = `[{"x": <float>, "y": <float>}, ...]` in bbox-relative
   [0, 1] coordinates
 - Coordinates rounded to 4 decimal places (~0.1 raster-px at 1024²)
-- `tool` reflects the active calibrator mode at the moment of save;
-  see `StrokeCalibrationOverlay.swift::persistAndLog`
+- Single-checkpoint strokes (umlaut dots, tittles) appear as
+  `[{"x": ..., "y": ...}]` — exactly 1 element. Created via the
+  `+ Punkt` feature (`b0d26ab6`) which bypasses the multi-anchor
+  rebuild path.
+- `tool` reflects the active calibrator `topMode` at the moment
+  of save; see `StrokeCalibrationOverlay.swift::persistAndLog`.
 
 ## References
 
