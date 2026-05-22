@@ -84,6 +84,16 @@ public enum CalibrationSessionLogger {
                     schriftArt: SchriftArt,
                     editCount: Int,
                     tool: Tool) {
+        // NFC-normalize the letter so the session-dir path is
+        // consistent regardless of whether the caller passes NFD
+        // (filesystem-native on some iOS paths) or NFC (Swift literals
+        // / repo). Without this, an NFD letter and an NFC letter
+        // produce sibling directories that the zip-extract path picks
+        // up inconsistently — the symptom that hid ä/ö/ü session
+        // captures in the 2026-05-22 batch-2 upload. See LESSONS.md
+        // Part A §5 for the original NFC-vs-NFD lesson.
+        let letterNFC = letter.precomposedStringWithCanonicalMapping
+
         // Pointwise equality after the 4-decimal rounding the JSON
         // encoder applies — keeps the no-op detection consistent with
         // what would have been written to disk.
@@ -91,7 +101,7 @@ public enum CalibrationSessionLogger {
         let postRounded = post.map { rounded($0) }
         guard preRounded != postRounded else { return }
 
-        guard let dir = sessionDir(letter: letter) else {
+        guard let dir = sessionDir(letter: letterNFC) else {
             sessionLogger.warning("session dir unavailable; skipping")
             return
         }
@@ -102,7 +112,7 @@ public enum CalibrationSessionLogger {
             sessionLogger.warning("mkdir failed at \(dir.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return
         }
-        let record = Record(letter: letter,
+        let record = Record(letter: letterNFC,
                             schriftArt: schriftArt.rawValue,
                             timestamp_iso: timestampString(),
                             pre_polyline: preRounded.map(toCodable),
