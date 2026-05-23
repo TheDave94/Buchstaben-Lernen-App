@@ -39,29 +39,33 @@ See `g1_design.md` Section "Corpus context" for the full framing.
 
 ---
 
-## What's structurally different
+## What's structurally different — two gate shapes in the family
 
-**G3 is NOT a drift-from-reference metric.** G1 and G2 both measured
-"how much does candidate diverge from reference" via per-point Pearson.
-G3 measures a **per-stroke property** (deviation from straight) of the
-candidate alone, checked against a corpus-derived upper bound.
+Per David's Q7 redline, the freeze-gate family has two shapes. Both
+serve the same purpose (catch PRs producing output David hasn't seen +
+approved) but use opposite metric directions:
 
-This changes the threshold-derivation math:
+- **Drift gate** (G1, G2): comparison metric, lower-bound Pearson
+  against reference at HEAD. "Did the candidate diverge from
+  reference?" Pass iff candidate Pearson ≥ threshold.
+- **Conformance gate** (G3, likely G4): intrinsic geometric property,
+  upper-bound deviation from spec. "Does the candidate satisfy the
+  structural constraint?" Pass iff candidate deviation ≤ threshold.
 
-| Gate | Threshold form | Pass condition |
-|---|---|---|
-| G1 | `min(Pearson)` across polished strokes | candidate Pearson ≥ threshold |
-| G2 | (would have been `min(Pearson)` — investigated, not viable) | — |
-| **G3** | `max(deviation)` across straight strokes in the corpus | candidate deviation ≤ threshold |
+This is a genuinely novel design point that future gates and the
+methodology chapter should explicitly name. The drift-vs-conformance
+distinction generalizes the freeze-gate framing.
 
-The freeze-gate purpose is the same — catch PRs producing output David
-hasn't seen + approved. The metric direction is flipped because
-deviation is "lower is better" while Pearson was "higher is better".
+| Gate | Shape | Threshold form | Pass condition |
+|---|---|---|---|
+| G1 | Drift gate | `min(Pearson)` across polished strokes | candidate Pearson ≥ threshold |
+| G2 | Drift gate | (would have been `min(Pearson)` — investigated, not viable) | — |
+| **G3** | **Conformance gate** | `max(deviation)` across straight strokes + safety margin | candidate deviation ≤ threshold |
+| G4 (proposed) | Conformance gate | `max(tangent_delta)` at junctions + safety margin | candidate tangent_delta ≤ threshold |
 
-This is flagged as a genuinely novel design point. The freeze-gate
-framing established for G1/G2 generalizes; the math direction inverts
-for upper-bound-style metrics. G4 (junction-tangent delta) will likely
-share G3's structure (max-deviation, not Pearson).
+G3 is the first conformance gate. G4 (junction-tangent delta) will
+share G3's shape (max-deviation, not Pearson). G5 (CI wiring) is
+shape-agnostic.
 
 ---
 
@@ -97,10 +101,13 @@ Polish does NOT typically:
   calibrator's anchor-rebuild resampling fidelity.
 
 **If the prediction fails:** round-2 deviations would systematically
-differ from round-1 (substantially higher or substantially lower across
-many strokes), indicating polish actively changes straightness. That
-would mirror G2's outcome (metric mismatched to freeze-gate purpose).
-Calibration is set up to verify this prediction (Section G3.7).
+differ from round-1 — specifically, polish INCREASING deviation
+systematically would indicate polish actively changes straightness,
+which is the soft-V trigger (mirroring G2's outcome). Polish DECREASING
+deviation systematically is the opposite — polish makes strokes
+straighter, which is consistent with polish-preservation. The
+calibration script reports both round-1 and round-2 deviations per
+stroke for pairwise verification (Section G3.7 step 3).
 
 The metric's polish-stability is the load-bearing assumption. State it,
 test it, then derive the threshold — not the other way around.
@@ -129,6 +136,18 @@ diagonals of A) in the G2 analysis.
 
 Non-straight strokes return vacuous pass with
 `reason="not_applicable_not_straight"`.
+
+**Classification surfacing (per David's Q1 redline).** The calibration
+script reports, for each stroke in the corpus, the actual
+`max(|ref_turn_angle|)` value and whether the classifier marked the
+stroke as straight. This lets David verify the classifier's output
+matches his intuition — particularly borderline cases like D s0 (the
+left vertical of D, which may or may not be perfectly straight at the
+bowl junction).
+
+If any stroke's classification looks wrong, the
+`G3_STRAIGHTNESS_MAX_ANGLE` threshold can be tuned post-hoc before the
+calibration commit lands.
 
 ### G3.2 — Perpendicular deviation: what's the reference line?
 
@@ -172,6 +191,16 @@ reasoning clarity; document the assumption.
 Constant: deviation values flow through as floats in raster-pixel
 units. Threshold value (derived post-calibration) recorded in
 `BAKE_INVARIANTS.md` §2 Threshold 3 alongside the corpus state SHA.
+
+**Bbox-fraction secondary column (per David's Q4 redline).** The
+calibration script also reports each stroke's
+`percentile_dev_px / bbox_dimension` (using whichever bbox dimension
+is more relevant — typically the longer axis for the stroke; or
+`max(bbox_width, bbox_height)` for simplicity). Reason: future
+debugging will want "how big is this deviation relative to the
+stroke's natural scale?" — not derivable from pixels alone without
+bbox context. The bbox-fraction column is reporting-only; the threshold
+of record stays in raster pixels.
 
 ### G3.5 — Vacuous-pass conditions
 
@@ -222,15 +251,19 @@ For each letter in `research_data/calibration_sessions/2026-05-22/`:
 
 4. **Threshold derivation.** If polish-preservation holds:
    `threshold = max(max(dev_round1, dev_round2))` across all straight
-   strokes — the worst-case deviation David's polish corpus produces
-   on either round. Recorded in `BAKE_INVARIANTS.md` with corpus state
-   SHA.
+   strokes + **1 px safety margin** (see step 5). Recorded in
+   `BAKE_INVARIANTS.md` with corpus state SHA.
 
-5. **Optional safety margin.** Same as G1: no safety margin (reference
-   is static, no algorithmic noise floor to subtract against). Unless
-   the corpus shows systematic noise in the deviation measurement
-   (e.g., all values are ~2 px ± ~0.5 px), in which case a small
-   margin may be warranted. Surface to David at calibration time.
+5. **1-pixel safety margin (per David's Q5 redline).** G3 takes a 1-px
+   safety margin because of rasterization noise. This differs from G1's
+   no-margin approach, which was specific to drift-from-reference's
+   structure (the reference is static; no algorithmic noise floor to
+   subtract against on a comparison metric). G3 is an intrinsic
+   geometric measurement on a rasterized polyline; arc-length
+   resampling and pixel quantization introduce ~1 px of jitter on top
+   of any actual geometric deviation. The 1-px margin is small enough
+   not to admit meaningful drift but large enough to absorb measurement
+   noise.
 
 6. **Sub-threshold predictions** for sanity check (mirroring G1's
    sanity-check predictions but quantitative):
@@ -388,45 +421,43 @@ a real corpus.
 
 ---
 
-## Decisions summary
+## Decisions summary (post-redline)
 
 | Section | Decision | Alternative |
 |---|---|---|
-| **G3.1** | Geometric straightness detector at gate entry via `max(|ref_turn_angle|) < π/12` | Manual per-letter classification |
+| **G3.1** | Geometric straightness detector via `max(|ref_turn_angle|) < π/12`; calibration script surfaces classification + raw angle per stroke for verification | Manual per-letter classification |
 | **G3.2** | Least-squares line through endpoint-skipped cps | Endpoint-only line; LSQ all cps |
 | **G3.3** | 95th percentile | Max; mean |
-| **G3.4** | Raster pixels on 1024² mask | Bbox-normalized fraction |
+| **G3.4** | Raster pixels on 1024² mask (threshold of record); bbox-fraction reported as secondary column for debugging | Bbox-normalized as primary |
 | **G3.5** | Vacuous-pass: too-short, not-straight, insufficient-measured | — |
 | **G3.6** | No mask (pure polyline) | — |
-| **G3.7** | Per-stroke `max(round1, round2)` deviation; threshold = max across corpus straight strokes; no safety margin | Round-2 only; with safety margin |
+| **G3.7** | Per-stroke `max(round1, round2)` deviation; threshold = max across corpus straight strokes **+ 1 px safety margin** (rasterization noise) | Round-2 only; no margin |
 | **G3.8** | New code in same `audit_invariants.py`; new calibration script + test file; add to `GATE_METADATA` | — |
-| **Structural** | G3 is upper-bound metric (deviation ≤ threshold), inverting G1/G2's lower-bound shape | — |
-| **Polish-preservation** | Predicted yes; verified empirically during calibration before threshold derivation | — |
+| **Structural** | G3 is the first **conformance gate** (deviation ≤ threshold), distinct from G1/G2's **drift gate** shape (Pearson ≥ threshold). G4 likely shares G3's shape. | — |
+| **Polish-preservation** | Predicted yes; verified empirically during calibration before threshold derivation. Soft-V trigger if polish systematically INCREASES deviation. | — |
 
 ---
 
-## Hold
+## Approved
 
-Awaiting David's approval / redlines. No code, no commits beyond this
-docs commit until then.
+All eight Y/N questions approved (2026-05-23) with five clarifying
+refinements:
+1. Q1 — Classification (straight/not-straight) + raw
+   `max(|ref_turn_angle|)` value surfaced per stroke in calibration
+   output, so David can verify the classifier's intuition match
+   particularly for borderline cases (e.g., D s0).
+2. Q4 — Calibration script reports bbox-fraction as a secondary
+   column alongside the raster-pixel deviation; threshold of record
+   stays in pixels.
+3. Q5 — 1-px safety margin added to threshold derivation. G3's
+   measurement noise floor is different from G1's (rasterization
+   jitter vs algorithmic determinism); margin documented as a
+   deliberate departure from G1's no-margin approach.
+4. Q7 — Drift-gate-vs-conformance-gate taxonomy named explicitly.
+   G3 is the first conformance gate; G4 will likely share G3's
+   shape.
+5. Q8 — Polish-preservation soft-V trigger language tightened:
+   polish INCREASING deviation systematically is the soft-V trigger;
+   polish DECREASING deviation is consistent with polish-preservation.
 
-Open questions for explicit yes/no:
-
-1. **G3.1** Geometric straightness detector via `max(|ref_turn_angle|)
-   < π/12`? **Y/N**
-2. **G3.2** Least-squares line through endpoint-skipped cps? **Y/N**
-3. **G3.3** 95th percentile? **Y/N**
-4. **G3.4** Threshold in raster pixels on 1024² mask? **Y/N**
-5. **G3.7** Calibration uses `max(dev_round1, dev_round2)` per stroke,
-   threshold = max across corpus straight strokes? **Y/N**
-6. **G3.10** Straightness classification uses round-2 (HEAD) reference
-   in both gate-time and calibration-time use? **Y/N**
-7. **Structural** Acknowledge G3's upper-bound metric direction
-   (deviation ≤ threshold) as a deliberate inversion of G1/G2's
-   lower-bound (Pearson ≥ threshold)? Document this as a new
-   freeze-gate-shape entry in the family for future gates (G4
-   junction-tangent likely follows G3's shape)? **Y/N**
-8. **Empirical predictions (G3.9)** — anything to flag before
-   calibration runs? Specifically: is the 3-7 px prediction range
-   sensible given your knowledge of the bake's typical positional
-   precision?
+Implementation lands next.
