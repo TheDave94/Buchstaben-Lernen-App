@@ -64,6 +64,19 @@ Range: `[-π, π]`. Positive = left turn (CCW), negative = right turn (CW).
 | Curvature (angle / arc-length) | After arc-length-uniform resampling, segment lengths are constant within a stroke. Curvature = angle / constant → proportional to angle → Pearson is invariant. So they're equivalent under our resampling. Pick the simpler primitive. |
 | Cumulative turn-angle (running sum) | Drifts; small errors compound. Per-segment is independent and cleaner. |
 
+**Code-site invariant (per David's Q1 redline).** At the atan2 call site
+in `_turn_angle_per_point`, an explicit comment must state:
+
+> "Signed angle convention: positive = CCW turn (left), negative = CW turn
+> (right), computed as atan2(cross, dot). The Pearson comparison is only
+> valid if BOTH candidate and reference use the same sign convention. Do
+> not refactor to a y-flip variant without updating the calibration data,
+> since flipped polylines would compare differently."
+
+The convention matters because the calibration measures *what is*, not
+*what should be*: any sign flip silently changes what "drift from
+reference" means.
+
 ### G2.2 — Resample N
 
 **Recommendation: N=100, same as G1.**
@@ -80,6 +93,15 @@ shared `_arc_length_resample` helper.
 If empirical evidence during calibration suggests N=100 is too coarse
 (e.g., turn-angle Pearson is dominated by quantization at sharp peaks),
 the constant can be revisited per-gate. Not pre-emptively.
+
+**Resample-validation diagnostic (per David's Q2 redline).**
+`calibrate_g2_threshold.py` reports `max(|turn_angle|)` per stroke
+alongside Pearson + std + edit_count. Decision rule:
+- If max(|angle|) stays below ~π/4 (45°) throughout the corpus → N=100
+  is empirically validated; no resample-density artifacts.
+- If max(|angle|) clusters near π/2 (90°) or π (180°) for real-polish
+  strokes → resample is undersampling sharp peaks. Surface and investigate
+  before threshold derivation.
 
 ### G2.3 — Endpoint handling
 
@@ -127,8 +149,16 @@ no turn-angle to drift in don't contribute to or constrain the gate.
 The cutoff value is open until calibration measures the distribution.
 G1's value (`G1_MIN_ASYMMETRY_STD = 0.05`) was derived from empirical
 gap-finding between noise-case and real-polish-case stds; G2 needs the
-same gap-finding against the turn-angle distribution. Likely range:
-0.01–0.10 radians of std, but pending measurement.
+same gap-finding against the turn-angle distribution. **Units: radians**
+(vs G1's unitless ratio).
+
+Predicted cutoff range: **0.01–0.10 rad** of std, pending measurement.
+
+**Gap-width escalation (per David's Q4 redline).** If the gap between
+noise-case and real-polish-case stds is narrow (<0.005 rad), surface and
+discuss before picking a value — same escalation path as G1's std=0.05
+derivation, where a narrow gap means the cutoff choice is load-bearing
+and should not be picked unilaterally.
 
 Constant name: `G2_MIN_TURN_ANGLE_STD`, value TBD post-calibration.
 
@@ -192,20 +222,27 @@ def gate_g2(candidate_strokes_rel, reference_strokes_rel, bbox,
 
 Approx LoC: ~110 added to `audit_invariants.py`.
 
-**`scripts/run_gates.py`** — add `g2` to `--gate` choices:
+**`scripts/run_gates.py`** — refactor to a `GATE_METADATA` table (per
+David's Q6 addition) so G3/G4/G5 are mechanical to add:
 
 ```
-parser.add_argument("--gate", required=True, choices=["g1", "g2"])
-# Branch in main loop:
-if args.gate == "g1":
-    results.append(run_g1_for_letter(...))
-elif args.gate == "g2":
-    results.append(run_g2_for_letter(...))
+GATE_METADATA = {
+    "g1": {"function": gate_g1, "needs_mask": True,
+           "title": "asymmetry-profile drift from reference"},
+    "g2": {"function": gate_g2, "needs_mask": False,
+           "title": "turn-angle-profile drift from reference"},
+}
+
+# Main loop:
+meta = GATE_METADATA[args.gate]
+# Per letter: rasterize → bbox → (mask if needs_mask) → call meta["function"]
 ```
 
-`run_g2_for_letter` is a near-clone of `run_g1_for_letter` — same source
-resolution, same bbox computation, just calls `gate_g2` instead of
-`gate_g1` and doesn't compute a mask. ~30 LoC.
+Mask building lifts out of the per-gate branch into a conditional based
+on `needs_mask`. Adding G3 (`needs_mask=True`) or G4 (`needs_mask=False`)
+becomes a single-entry table addition. ~20 LoC refactor of existing
+`run_g1_for_letter`; ~30 LoC for the `run_g2_for_letter`-equivalent
+(but factored into the umbrella).
 
 **`scripts/calibrate_g2_threshold.py`** — new file, near-clone of G1's:
 
@@ -214,12 +251,25 @@ resolution, same bbox computation, just calls `gate_g2` instead of
 #   round-1 = earliest session pre_polyline
 #   round-2 = HEAD strokes.json
 #   per stroke: gate_g2_per_stroke(round1[i], round2[i], bbox, threshold=1.0)
-# Print per-stroke table to stderr (Pearson + cand_std + ref_std + edits)
+# Print per-stroke table to stderr:
+#   Pearson + cand_std + ref_std + max(|turn_angle|) + edit_count
+# Print per-reason vacuous breakdown (per David's calibration-script addition):
+#   vacuous: N total
+#     low_variance_turn_angle:        X
+#     not_applicable_too_short:       Y
+#     insufficient_measured_points:   Z
 # Print clean threshold = min(real Pearson) to stdout
 ```
 
-~120 LoC (very similar to `calibrate_g1_threshold.py`, factoring out is
+~130 LoC (very similar to `calibrate_g1_threshold.py`, factoring out is
 deferred until G3+ patterns clarify what's worth sharing).
+
+**Also update `scripts/calibrate_g1_threshold.py`** to produce the
+same per-reason vacuous breakdown (mechanical change, ~10 LoC). Both
+gates' calibration scripts then produce comparable diagnostic output —
+useful for comparing which vacuous-pass case dominates per gate (signals
+whether the two gates measure orthogonal aspects of polish drift, as
+predicted, or accidentally overlap).
 
 **Unit tests** — add to `scripts/tests/test_gate_g1.py` (rename file or
 add `test_gate_g2.py` — David's call; I'd vote add `test_gate_g2.py`):
@@ -288,29 +338,47 @@ and needs raising. If W's Pearson is < 0.5, the polish was substantial
 enough to push G2 floor lower than predicted — interesting but expected
 within the empirical spread.
 
+**A's edge case (per David's Q5 flag).** Arc-length-uniform resampling
+can introduce small angular bends along an otherwise-straight polyline
+when the original cps weren't evenly spaced. If A's diagonals come back
+with std in the **0.005–0.015 rad range** (borderline — above pure
+sub-pixel noise, below real curvature), the cutoff choice becomes
+load-bearing: a cutoff at 0.005 admits A's resample-artifact bends as
+"real signal"; a cutoff at 0.015 excludes them.
+
+If A's strokes land in this range, surface it specifically in the
+calibration report and hold for David's call on the cutoff before
+proceeding.
+
 ---
 
-## Decisions summary
+## Decisions summary (post-redline)
 
 | Section | Decision | Alternative |
 |---|---|---|
-| **G2.1** | Signed angle between successive segments | Unsigned magnitude; curvature (proportional under resample); cumulative |
-| **G2.2** | N=100, mirror G1 | Higher N if calibration reveals quantization artifacts |
-| **G2.3** | `G2_ENDPOINT_SKIP = 3`, mirror G1 | Smaller skip; separate constant for tunability |
-| **G2.4** | Yes, add `low_variance_turn_angle` filter; cutoff empirical | No filter (l contaminates threshold); calibration-time exclusion |
-| **G2.5** | No mask needed; lighter gate signature | Carry mask for consistency with G1 (rejected — needless coupling) |
-| **G2.6** | New code in same `audit_invariants.py`; new `scripts/calibrate_g2_threshold.py`; new `scripts/tests/test_gate_g2.py` | Single-file gate; reuse G1 test file |
+| **G2.1** | Signed angle between successive segments (atan2(cross, dot)) + defensive sign-convention comment at call site | Unsigned magnitude; curvature; cumulative |
+| **G2.2** | N=100, mirror G1; `max(|turn_angle|)` reported in calibration as resample-validation diagnostic | Higher N pre-emptively |
+| **G2.3** | `G2_ENDPOINT_SKIP = 3`, mirror G1; separate constant name | Smaller skip; reuse G1's constant |
+| **G2.4** | Yes, add `low_variance_turn_angle` filter; cutoff empirical (units: radians); narrow-gap (<0.005 rad) escalates | No filter; calibration-time exclusion |
+| **G2.5** | No mask needed; lighter gate signature | Carry mask for consistency |
+| **G2.6** | New code in same `audit_invariants.py`; new `scripts/calibrate_g2_threshold.py` (with max-angle + per-reason vacuous breakdown); new `scripts/tests/test_gate_g2.py`; `run_gates.py` refactor to `GATE_METADATA` table | Per-gate file; reuse G1 test file; scattered branching |
 | **G2.7** | Same procedure as G1: tests → self-comparison → calibration → BAKE_INVARIANTS update | — |
 
 ---
 
-## Hold
+## Approved
 
-Awaiting David's approval / redlines. No code, no commits until then.
+All five Y/N questions approved (2026-05-23) with five clarifying
+additions:
+1. Defensive sign-convention comment at atan2 call site (Q1).
+2. `max(|turn_angle|)` resample-validation diagnostic in calibration
+   script (Q2).
+3. Narrow-gap (<0.005 rad) escalation path mirrors G1's std=0.05
+   derivation (Q4).
+4. A's-strokes edge case (std 0.005–0.015 rad range) gets explicit
+   flag in the calibration report if it occurs (Q5).
+5. `GATE_METADATA` table refactor in `run_gates.py` so G3/G4/G5 are
+   mechanical additions; per-reason vacuous breakdown in both G1 and
+   G2 calibration scripts for cross-gate diagnostic comparison (Q6).
 
-Open questions for explicit yes/no:
-1. **G2.1** Signed angle (not curvature, not cumulative)? **Y/N**
-2. **G2.3** Endpoint skip = 3, mirror G1? **Y/N**
-3. **G2.4** Add `low_variance_turn_angle` filter? Cutoff empirical post-calibration? **Y/N**
-4. **G2.6** New `test_gate_g2.py` file (vs adding to existing `test_gate_g1.py`)? **Y/N**
-5. **Empirical predictions (G2.1–G2.4 in the predictions section)** — anything to flag before calibration runs?
+Implementation lands next.
