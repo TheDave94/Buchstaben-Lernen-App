@@ -238,27 +238,53 @@ gated on either more calibration data or a distribution-shift framing.
 
 ### Threshold 3 — Stroke type purity (Rule 3)
 
-*Straight strokes.* 95th-percentile perpendicular deviation
-between the analytical line and the stem-ink medial axis,
-measured across **pure-stem rows only**, ≤ 1.5 px.
+Rule 3 has two parts. The straight-strokes portion ships as G3; the
+curved-strokes portion is unimplemented.
 
-Pure-stem rows are rows (or columns, for primarily horizontal /
-diagonal strokes) where the stroke is the only one passing
-through — operationally: medial-axis pixels at that row span
-≤ 1.5 × stem_width AND that row is not within stem_width of any
-other stroke's analytical path. Y-branched rows and junction-
-adjacent rows are excluded.
+**G3 — straight portion (enforced via gate_g3).** 95th-percentile
+perpendicular deviation between the candidate's polyline cps (post
+arc-length resample to N=100, post endpoint-skip of 3) and the
+best-fit straight line through those cps **≤ 2.05 px** (on the 1024²
+rasterization mask).
 
-The exclusion makes Threshold 3 robust to Y-junctions (bowl-stem,
-leg-stem) and vertex meetings (V/W/M/N apex corners), where the
-stem ink's medial axis branches into neighbouring strokes'
-centerlines.
+G3 applies only to strokes classified STRAIGHT via a combined
+geometric criterion on the reference's per-segment turn-angle
+sequence: `max(|angle|) < π/12` AND `p95(|angle|) < 0.1` rad. Non-
+straight strokes (smooth curves, sharp corners, continuous-walk
+letters) vacuous-pass with reason `not_applicable_not_straight` and
+are gated by Threshold 4 (junctions, pending Phase 2b) or by visual
+review.
 
-*Curved strokes.* No straight runs ≥ 5 consecutive points with
-cumulative turn-sum < 5°. Each stroke is flagged `'straight'` or
-`'curved'` in the `LETTERS` spec.
+**Threshold calibration.** Derived 2026-05-23 against the 2026-05-22
+session-pair corpus (13 letters, 23 stroke pairs, 8 STRAIGHT-class)
+at HEAD `3c890380`. Polish-preservation verified pairwise: 7 of 8
+STRAIGHT strokes had deviation preserved or improved by polish; the
+one exception (A s0) increased by 0.07 px (within rasterization sub-
+pixel noise). Threshold = max(per-stroke max(round1, round2)) + 1 px
+safety margin = 1.05 + 1.0 = 2.05 px.
 
-**Enforced by**: not currently enforced. Pending Phase 2b.
+The safety margin (1 px) differs from G1's no-margin approach: G3's
+measurement noise floor is rasterization jitter on the 1024² mask,
+not algorithmic determinism, so a small margin is warranted. See
+`research_data/phase2b_gates/g3_design.md` G3.7 step 5 for the
+rationale and `research_data/phase2b_gates/g3_calibration_run.md`
+for the full per-stroke table and borderline-classification notes
+(Ä s1 / Ä s2 sit just outside the STRAIGHT class due to composite-
+umlaut-bake artifacts; pure A equivalents are well clear of the
+boundaries).
+
+**Enforced by**: `scripts/audit_invariants.py::gate_g3` (CLI:
+`scripts/run_gates.py --gate g3`). Available for local use and PR
+review; full CI enforcement pending Phase 2b Track B / G5.
+
+**Curved portion (not yet enforced).** No straight runs ≥ 5
+consecutive points with cumulative turn-sum < 5°. Each stroke is
+flagged `'straight'` or `'curved'` in the `LETTERS` spec.
+
+This curved-stroke check is not yet implemented; it would be a
+separate gate from G3, which addresses only the straight-strokes
+portion of Rule 3. Pending future Phase 2b work or methodology-
+chapter discussion.
 
 ### Threshold 4 — End-to-end junction (Rule 4)
 
@@ -466,7 +492,8 @@ gameplay, keep this distinction in mind:
 | Rule 4 — junction (tangent alignment) | **Not enforced** — pending Phase 2b |
 | Threshold 1 — asymmetry-profile Pearson vs reference | **Not enforced** — pending Phase 2b / G1 |
 | Threshold 2 — turn-angle-profile Pearson vs reference | **Not enforced** — pending Phase 2b / G2 |
-| Threshold 3 — straight ≤ 1.5 px | **Not enforced** — pending Phase 2b |
+| Threshold 3 — straight ≤ 2.05 px (post-G3 calibration 2026-05-23) | **Available via gate_g3**; CI wiring pending G5 |
+| Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — pending future Phase 2b |
 | Threshold 4 — end-to-end tangent ≤ 10° | **Not enforced** — pending Phase 2b |
 | Threshold 5 — Y-junction gap = 0 px | Construction (T-junction pre-compute) |
 | Threshold 6 — determinism + b firewall + byte-identity vs HEAD | Automated (`scripts/verify_bake.sh`, manual / pre-commit) |
