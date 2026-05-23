@@ -362,7 +362,7 @@ proceeding.
 | **G2.4** | Yes, add `low_variance_turn_angle` filter; cutoff empirical (units: radians); narrow-gap (<0.005 rad) escalates | No filter; calibration-time exclusion |
 | **G2.5** | No mask needed; lighter gate signature | Carry mask for consistency |
 | **G2.6** | New code in same `audit_invariants.py`; new `scripts/calibrate_g2_threshold.py` (with max-angle + per-reason vacuous breakdown); new `scripts/tests/test_gate_g2.py`; `run_gates.py` refactor to `GATE_METADATA` table | Per-gate file; reuse G1 test file; scattered branching |
-| **G2.7** | Same procedure as G1: tests → self-comparison → calibration → BAKE_INVARIANTS update | — |
+| **G2.7** | Calibration ran; outcome not viable as freeze gate on current corpus (see Calibration outcome section + g2_calibration_run.md) | — |
 
 ---
 
@@ -382,3 +382,51 @@ additions:
    G2 calibration scripts for cross-gate diagnostic comparison (Q6).
 
 Implementation lands next.
+
+---
+
+## Calibration outcome (2026-05-23)
+
+Calibration ran against the 13-letter / 21-stroke 2026-05-22 session-pair
+corpus. **Outcome: not viable as a freeze gate.** Implementation is
+preserved; no threshold derived.
+
+Summary of the finding:
+
+- **Resample N=100 was confirmed adequate.** The G2.2 diagnostic
+  (`max(|turn_angle|) > π/4 = undersampling`) was too coarse — it
+  conflated real corner geometry with resample artifact. Direct
+  measurement on raw HEAD cps confirmed W/m/N have legitimate
+  ~100-125° vertices. N=200 sanity check showed finer resampling does
+  not improve Pearson; it exposes more polish-induced decorrelation.
+
+- **Three-class partition (STRAIGHT/SMOOTH/CORNER) does not discriminate.**
+  SMOOTH class is degenerate (1 member). STRAIGHT class is heterogeneous
+  (Pearson -0.04 to 1.0). CORNER class straddles both tight and
+  polish-spread clusters.
+
+- **Pearson distribution is bimodal:** 9 strokes at exactly 1.0
+  (untouched-in-this-round, no signal), 12 strokes spread essentially
+  uniformly from -0.04 to 0.99 with no internal cluster structure.
+
+- **Structural reason:** G2 measures *where the curve bends along its
+  length*. Polish edits actively redistribute where curves bend — David
+  smooths sharp bends, moves inflection points, tightens/relaxes
+  segments. The metric is intrinsically mismatched to the freeze-gate
+  purpose. No threshold choice can resolve this.
+
+**Decision: keep gate_g2 implementation; document the finding; do not
+enforce.** Full data and analysis in
+`research_data/phase2b_gates/g2_calibration_run.md`.
+
+Future revisits could use either a much larger calibration corpus
+(per-class thresholds) or a distribution-shift framing (Option IV);
+neither is in scope for this round of Phase 2b Track B.
+
+Concrete revisit triggers: (a) calibration corpus grows to 50+ session
+pairs across more letters and stroke classes — at which point the
+three-class partition could be re-attempted with adequate sample sizes;
+(b) a separate gate proposal motivates distribution-shift detection
+(Option IV) and G2's data becomes one component of that framework;
+(c) a future polish pattern produces a noticeably different Pearson
+distribution from this one, justifying re-measurement.

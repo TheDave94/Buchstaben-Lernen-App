@@ -209,14 +209,32 @@ the threshold pre-merge.
 
 Pearson correlation of the candidate's turn-angle profile (signed
 angle between consecutive segments, arc-length resampled to 100
-points) against the reference's turn-angle profile ≥ TBD.
+points) against the reference's turn-angle profile.
 
-**Threshold calibration.** Same procedure as T1, applied to G2's
-turn-angle measurement. `min(self-Pearson)` minus a 0.02 safety
-margin, derived from corpus measurement at G2-ship time.
+**Threshold calibration.** **Investigated 2026-05-23; no threshold
+derivable from current corpus.** The 2026-05-22 session-pair corpus
+revealed that turn-angle Pearson is intrinsically polish-sensitive:
+maintainer-approved polish edits actively redistribute where curves
+bend along their length, producing Pearson values spread essentially
+uniformly from -0.04 to 0.99 across 12 polished strokes — no usable
+cluster structure to anchor a threshold.
 
-**Enforced by**: not currently enforced. Pending Phase 2b Track
-B / G2.
+The implementation is available at `scripts/audit_invariants.py::gate_g2`
+and routed in `scripts/run_gates.py --gate g2`; it is **not currently
+enforced**. Full calibration findings, including the three-class
+partition attempt and resample-validation diagnostics, are documented
+in `research_data/phase2b_gates/g2_calibration_run.md`.
+
+**Future paths:**
+- Larger calibration corpus (50+ session pairs across more letters)
+  may admit per-stroke-class thresholds.
+- Distribution-shift detection (Option IV — compare PR's Pearson
+  distribution against corpus baseline rather than per-stroke threshold)
+  reframes the gate away from per-stroke pass/fail. Out of scope for
+  the current Phase 2b round.
+
+**Enforced by**: not currently enforced; investigation complete; revisit
+gated on either more calibration data or a distribution-shift framing.
 
 ### Threshold 3 — Stroke type purity (Rule 3)
 
