@@ -16,6 +16,7 @@ the newly-shipped "+ Punkt" feature.
 | Calibrator-feature commit | (`+ Strich` only) | **`b0d26ab6`** added `+ Punkt` |
 | Bundle SHA at session start | `cc2a8ff3` | `b17ab215` |
 | Bundle SHA after import | `b17ab215` (commit) | `<this commit>` |
+| Bundle snapshot (raw iPad export) | `bundles/bundle_2026-05-22_batch-1.json` | `bundles/bundle_2026-05-22_batch-2.json` |
 | Pairs captured | 22 | 16 |
 | Tool tally | 13 ANKER + 9 SKELETT | 6 ANKER + 10 SKELETT |
 | Edit operations summed | 128 | 55 |
@@ -109,3 +110,6 @@ eye at iPad render scale against the live letter ink.
 - `README.txt` (in this directory) — the bootstrap-time README that
   the app writes on first launch; preserved verbatim for iPad-side
   context
+- `bundles/` — original iPad-export bundle snapshots (the source
+  artifacts behind the per-letter strokes.json imports at
+  `b17ab215` and `4a3fd5b4`); see `bundles/README.md`
