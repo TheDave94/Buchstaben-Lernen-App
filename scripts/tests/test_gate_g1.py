@@ -81,6 +81,23 @@ class TestVacuousPass(unittest.TestCase):
         self.assertTrue(result["pass"])
         self.assertEqual(result["reason"], "insufficient_measured_points")
 
+    def test_low_variance_asymmetry_vacuous_pass(self):
+        """Strokes with asymmetry std below G1_MIN_ASYMMETRY_STD should
+        vacuous-pass with reason='low_variance_asymmetry' — the
+        sub-pixel-noise-floor case (uniform-width stems like l, I)."""
+        # Tall narrow rectangle: 6-pixel-wide ink stripe, centerline
+        # polyline running down the middle. Asymmetry is ~zero
+        # everywhere with only sub-pixel rounding jitter.
+        mask = np.zeros((100, 50), dtype=bool)
+        mask[10:90, 22:28] = True
+        bbox = (22, 10, 28, 90)
+        poly = [(0.5, t) for t in np.linspace(0, 1, 30)]
+        result = ai.gate_g1_per_stroke(poly, poly, mask, bbox,
+                                        threshold=0.98)
+        self.assertTrue(result["pass"])
+        self.assertEqual(result["reason"], "low_variance_asymmetry")
+        self.assertIsNone(result["pearson"])
+
 
 class TestRealPearson(unittest.TestCase):
     """Identical candidate=reference on a non-trivial mask should
@@ -117,7 +134,8 @@ class TestRealPearson(unittest.TestCase):
         else:
             self.assertIn(result["reason"],
                           ("constant_asymmetry_sequence",
-                           "insufficient_measured_points"))
+                           "insufficient_measured_points",
+                           "low_variance_asymmetry"))
 
     def test_letter_pass_aggregates_strokes(self):
         # Two-stroke "letter" — both strokes identical candidate=reference.

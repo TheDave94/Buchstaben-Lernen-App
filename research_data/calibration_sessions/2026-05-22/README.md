@@ -28,17 +28,21 @@ David toggled to SKELETT to verify body strokes between dot
 placements; the underlying dot edit itself was an ANKER `.punkt`
 action.
 
-**Note — bake-controlled vs static letter subset.**
-The corpus mixes both. Of the 10 letters touched in batch 1:
-bake-controlled (entries in `generate_strokes_auto.py::LETTERS`)
-are **A D N W l v** (6); static artifacts (hand-tuned, not bake-
-regenerable) are **U b m p** (4). Batch 2's umlauts (Ä Ö Ü) are
-all bake-controlled. Downstream calibration measurements (e.g.,
-Phase 2b G1 self-Pearson floor) can only run on the bake-
-controlled subset — static letters have no fresh-bake to compare
-against. See `research_data/phase2b_gates/g1_design.md`
-"Corpus context" section for the full 37-bake-controlled /
-22-static enumeration across the shipped 59 letters.
+**Note — all 59 letters ship as hand-calibrated static artifacts.**
+Per commit `6a85811c` (2026-05-15, "Druckschrift Regular complete
+— all 59 letters as static artifacts"), the bake pipeline is
+retired for Regular. HEAD's `strokes.json` files are the canonical
+reference. This corpus's session pairs ARE the G1 freeze-gate
+calibration data: per-(letter, stroke) Pearson between round-1
+`pre_polyline` and HEAD `strokes.json` measures the magnitude of
+David's hand-approved polish edits, and `min(real Pearson)` is the
+production threshold (see
+`research_data/phase2b_gates/g1_calibration_run.md` for the
+derivation and the per-stroke table).
+
+Earlier framing of this corpus as a "downstream consumer" of a
+bake-controlled-vs-static split was wrong; this corpus is itself
+the upstream calibration source.
 
 ## Letters touched (13)
 

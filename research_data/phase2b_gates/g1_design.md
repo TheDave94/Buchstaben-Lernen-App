@@ -8,31 +8,26 @@ post-salvage (`c0711aab`): `_walk_to_boundary`, `_asymmetry_per_point`,
 
 ---
 
-## Corpus context (load-bearing constraint, surfaced before Section 1)
+## Corpus context (freeze-gate framing)
 
-`PrimaeNative/Resources/Letters/Regular/` ships **59 letters**. Of those, **37 are
-bake-controlled** (entries in `generate_strokes_auto.py::LETTERS`):
+All 59 letters of Druckschrift Regular ship as hand-calibrated static
+artifacts (commit `6a85811c`, 2026-05-15: "Druckschrift Regular complete — all
+59 letters as static artifacts"). The bake pipeline at
+`scripts/generate_strokes_auto.py` is permanently retired for Regular; it
+lives on as the algorithmic baseline for Light template-warping and future
+fonts. `LETTERS` dict and primitives remain in place as scaffolding but
+produce no Regular output.
 
-```
-A D E F H I K L M N P R T V W X Y Z          (18 uppercase)
-f i j k l r t v w x y z                       (12 lowercase)
-Ä Ö Ü ß                                       (4 diacritic uppercase)
-ä ö ü                                         (3 diacritic lowercase)
-```
+**G1 is therefore a FREEZE GATE.** HEAD's `strokes.json` files are the
+canonical reference. A future PR producing drift larger than David's
+previously-approved polish edits gets flagged for manual review.
 
-The remaining **22 letters are static artifacts** (no `LETTERS` spec; their
-`strokes.json` was hand-tuned or carried over from prior bakes):
-
-```
-B C G J O Q S U                               (8 uppercase)
-a b c d e g h m n o p q s u                   (14 lowercase)
-```
-
-**Why this matters for Section 3:** the calibration procedure ("fresh bake of
-that letter → shipped reference") can only run on the 37 bake-controlled
-letters. The 22 static letters can't be re-baked, so they don't contribute to
-the self-Pearson floor. They DO get gated by G1 at PR time, just not at
-calibration time.
+The original design draft framed G1 as a "fresh-bake-vs-shipped self-Pearson
+floor" measurement, distinguishing 37 bake-controlled vs 22 static letters.
+That framing is obsolete: with all 59 letters static, there is no fresh bake
+to compare against. Calibration now measures the magnitude of David's
+hand-approved polish edits from the 2026-05-22 session-pair corpus and uses
+that as the floor (see Section 3).
 
 ---
 
@@ -121,6 +116,31 @@ from 80 → 3. Surfaces a real problem but the wrong layer. T1 is about drift
 from reference, not about whether the asymmetry signal exists at all. Let
 T1 vacuously pass; the `n_measured` count is in the output for inspection.
 
+**Sibling case — low-variance asymmetry sequence.**
+
+A separate vacuous-pass condition gates strokes whose asymmetry sequence
+std falls below `G1_MIN_ASYMMETRY_STD = 0.05`. Rationale: uniform-width
+strokes (l, I — vertical stems through uniform-width ink bands) produce
+asymmetry sequences with magnitude near the perpendicular-walk's sub-pixel
+rounding noise floor. Pearson on two such low-magnitude noisy sequences is
+meaningless — the correlation is dominated by sub-pixel artifacts, not by
+genuine geometric drift.
+
+Empirically derived against the 2026-05-22 session-pair corpus: `l`'s
+asymmetry std came in at 0.0438 with Pearson 0.1528 despite `edit_count=0`
+(no actual edit operations recorded — likely an anchor-rebuild side effect).
+`D s1` came in at 0.0521 with Pearson 0.4903, representing legitimate
+closed-bowl polish (`edit_count=3`). Cutoff at 0.05 sits in the 0.008-wide
+gap between the two — filters l (and the structurally similar tight-pair
+cases D s0 std 0.0273, Ö s0 std 0.0420 which had Pearson 1.0 anyway) while
+preserving D s1 as a real polish signal.
+
+Strokes that hit this case return `reason="low_variance_asymmetry"`. They
+don't count toward the threshold floor derivation in Section 3.
+
+The existing 1e-12 constant-asymmetry-sequence check is a strict subcase
+of the same idea but is kept for the more specific debug reason.
+
 ---
 
 ## Section 2 — Reference lookup
@@ -197,75 +217,61 @@ JSON (for CI artifact):
 
 ---
 
-## Section 3 — Threshold calibration procedure
+## Section 3 — Threshold calibration procedure (freeze-gate framing)
 
-### 3a — Where does "a fresh bake" come from? — *the question David flagged*
+### 3a — Calibration source: the 2026-05-22 session-pair corpus
 
-**Recommendation: take the spec literally. Run the actual fresh-bake-vs-shipped
-measurement. If `min(self-Pearson) == 1.0` (byte-identical bakes per
-Threshold 6), the production threshold is `1.0 − 0.02 = 0.98`.**
+**Procedure.** For each letter in
+`research_data/calibration_sessions/2026-05-22/` (13 letters with session
+pairs captured):
 
-Justification:
+1. Load `pre_polyline` of the earliest session JSON for that letter — this
+   is "round-1", David's loaded state before any 2026-05-22 edits.
+2. Load HEAD `strokes.json` for the same letter — this is "round-2", the
+   state David approved.
+3. Per stroke index up to `min(len(round1), len(round2))`, call
+   `gate_g1_per_stroke(round1[i], round2[i], stroke_mask, bbox,
+   threshold=1.0)` — threshold=1.0 so the result reports actual Pearson
+   rather than pass/fail.
+4. Collect `(letter, stroke, pearson)` tuples. Exclude vacuous-pass cases
+   (`reason="not_applicable_too_short"` for 1-cp dots; `reason="low_variance_asymmetry"`
+   for sub-pixel-noise-floor strokes like uniform stems).
 
-The bake is byte-deterministic on macOS per Threshold 6 (`verify_bake.sh` 3-trial
-check). So fresh-bake-vs-shipped on the same platform will produce identical
-checkpoints, identical asymmetry sequences, and **Pearson = exactly 1.0** for
-every (letter, stroke). The "min" across the corpus is therefore 1.0, and the
-threshold is 0.98.
+**Threshold = `min(per-(letter, stroke) real Pearson)`** across the
+non-vacuous strokes in the corpus.
 
-This *is* the intended behavior under the literal spec. T1's job is to catch
-**geometry regressions** — if a future bake algorithm change degrades a letter,
-the candidate's asymmetry profile will diverge from the reference noticeably
-(Pearson drops well below 0.98). The 0.02 safety margin absorbs whatever
-floating-point noise might creep in on cross-platform comparisons but doesn't
-admit meaningful geometric drift.
+**No safety margin.** There is no algorithmic noise floor to subtract
+against — the reference is static (hand-calibrated, committed), not
+regenerated by an algorithm with floating-point noise. The threshold sits
+exactly at David's smallest approved polish edit.
 
-**Alternatives I considered and rejected:**
+**Why session-pair calibration is the right call here.** With the bake
+pipeline retired for Regular (commit `6a85811c`), there is no "fresh-bake-
+vs-shipped" measurement to anchor the threshold against. The session pairs
+are the only empirically-grounded data the corpus provides about
+"acceptable drift." A PR proposing edits smaller than David's smallest
+previously-approved polish (Pearson ≥ threshold) passes silently; a PR
+proposing edits *larger* (Pearson < threshold) gets flagged for manual
+review.
 
-| Alternative | Rejected because |
-|---|---|
-| Inject ε-noise into candidate to "simulate" non-determinism | Manufactures a number that doesn't exist in the actual pipeline; calibration becomes "what we chose ε to be" not "what the corpus does". |
-| Calibrate against the round-1 → round-2 calibrator session pairs | Session pairs are human corrections of algorithmic errors, not algorithmic drift; their Pearson floor would set a permissive threshold that admits the *same kind of error* the human just corrected. |
-| Skip calibration; pick threshold by hand | Defeats the "derived from corpus measurement, not chosen by guess" principle in the spec. |
-
-**Mandatory sanity-check (per David's Redline 2).** After running the
-byte-deterministic fresh-bake-vs-shipped calibration, *also* run a sanity-
-check: `gate_g1_per_stroke` with round-1 calibrator output as candidate,
-round-2 calibrator output as reference, for 3 letters where round-1 vs round-2
-differs substantially (recommend: **A, W, m** per the existing 2026-05-22
-session-pair data).
-
-**Source data:**
-- Round-1 polyline = `pre_polyline` of the earliest captured session JSON for
-  that letter under `research_data/calibration_sessions/2026-05-22/<letter>/`
-  (earliest by ISO timestamp; that's round-1's loaded state at session start).
-- Round-2 polyline = current `HEAD` `strokes.json` for that letter.
-
-**Expected range:** 0.6–0.95 per stroke.
-
-**Decision rule:**
-- If the spot-check returns Pearson **≥ 0.99** for all three letters, the
-  metric isn't sensitive enough to distinguish real human-eye corrections
-  from numerical noise. **HOLD and surface — don't ship a gate that's blind to
-  the differences it's supposed to gate.** Iterate on metric design before
-  shipping.
-- If the spot-check returns Pearson **in the 0.6–0.95 range**, proceed with
-  `threshold = min(self-Pearson) − 0.02` as planned.
-
-**Reporting in the calibration commit message:** include all three numbers —
-the self-Pearson floor (across the 37 bake-controlled letters), the
-sanity-check per-letter Pearson (A, W, m), and the difference between the
-floor and the sanity-check median.
+The original draft of this section flagged session-pair calibration as
+"calibrating against human corrections of algorithmic errors" — which
+would be the wrong calibration target IF the bake were still producing
+shipped output. Post-`6a85811c`, that concern is inverted: David's hand
+calibrations ARE the shipping path, not corrections of it. The session
+pairs document the magnitude of polish David approved, which is exactly
+what the freeze gate needs to know.
 
 ### 3b — Threshold per-stroke or per-letter?
 
-**Recommendation: per-(letter, stroke) pair.** The threshold floor is
+**Per-(letter, stroke) pair.** The threshold floor is
 `min(per_stroke_pearson)` across all (letter, stroke) pairs in the
-bake-controlled subset. Finer-grained, catches the worst stroke.
+corpus. Finer-grained, catches the worst stroke.
 
-If the floor turns out to be 1.0 across the board, this is moot. But surfacing
-the finer-grained floor in the calibration output lets us spot any (letter,
-stroke) pair where bake noise *isn't* zero, even if the corpus min is 1.0.
+**Calibration result (2026-05-23):** see
+`research_data/phase2b_gates/g1_calibration_run.md` for the full per-stroke
+table and derived threshold value. Threshold of record is recorded in
+`docs/BAKE_INVARIANTS.md` §2 Threshold 1.
 
 ---
 
@@ -297,33 +303,19 @@ For each letter or family, expected G1 behavior:
 | **Ä Ö Ü ä ö ü** | base + 2× 1-cp dots | Base normal; 2 dots vacuous (1c) | Three strokes per letter; the two dot strokes each return vacuous pass. |
 | **ß** | 1 single complex stroke | Normal | Bake-controlled; no junctions. |
 | **R, b_l, d_l, p_l, q_l** | bowl + stem | Both normal; flag bowl-stem joint for monitoring | Investigation 3 noted visual oddities at the bowl-stem junction. Both candidate and reference share the same oddity → Pearson stays high. The `T1_ENDPOINT_SKIP = 3` exclusion in `_asymmetry_per_point` skips the 3 cps adjacent to each endpoint, which removes the junction-adjacent region from the asymmetry sequence entirely. |
-| **B (uppercase)** | 3 strokes (stem + 2 bowls) | Normal; **static (not bake-controlled)** | Excluded from Section-3 calibration but still gated at PR time. |
+| **B (uppercase)** | 3 strokes (stem + 2 bowls) | Normal | All 59 letters share the same freeze-gate treatment. |
 | **M W V Z (continuous-walk)** | 1 stroke with multiple peaks/valleys | Normal | The `T1_ENDPOINT_SKIP=3` exclusion handles the interior peaks correctly (they're not endpoints, so they stay in the sequence). |
 | **K, k_l, X, x_l, Y, y_l** | stem + diagonal(s); junction | Normal; junction-adjacent cps excluded by `T1_ENDPOINT_SKIP=3` | The diagonal endpoint that meets the stem is an endpoint of its own stroke, so the 3 cps at that end are excluded — junction noise doesn't enter the sequence. |
 | **f_l, t_l** | stem + crossbar | Normal | Crossbar is a separate stroke. |
-| **a_l, e_l, g_l, s_l, S** | closed-loop or S-curve | Normal; **static (not bake-controlled)** | Excluded from Section-3 calibration. |
+| **a_l, e_l, g_l, s_l, S** | closed-loop or S-curve | Normal | Same freeze-gate treatment. |
 | **y_l, q_l, j_l (descenders)** | stem + descender hook | Normal | Hook is a separate stroke segment. |
+| **l, I (uniform-width stems)** | 1 stroke through uniform ink band | Vacuous-pass via `low_variance_asymmetry` (1d) | Asymmetry signal below sub-pixel noise floor. T1 doesn't apply; other thresholds may. |
 
-**Additional edge case not in David's list:**
-
-- **`q_l` is static (not bake-controlled).** It was in the reverted bowl-batch
-  (`9247adb1`) but post-revert it's not in `LETTERS`. So the calibration won't
-  see it. Same for `b_l`, `p_l` — all in the reverted bowl batch. The static
-  side of the corpus is heavier than just "uppercase boring letters".
-
-**Static-letter calibration caveat (per David's Redline 3).** When updating
-`BAKE_INVARIANTS.md` Threshold 1 with the derived threshold, add this note
-verbatim:
-
-> "Threshold calibration measured against the 37 bake-controlled letters. The
-> remaining 22 static letters (B C G J O Q S U, a b c d e g h m n o p q s u)
-> have no bake to compare against; they are gated by G1 only at PR time when a
-> contributor modifies their `strokes.json` directly. The shipped reference
-> for static letters is the de-facto canonical reference; modifications must
-> demonstrate Pearson ≥ threshold against the pre-modification version."
-
-This protects against future confusion about why a 22-letter subset wasn't
-part of the calibration measurement.
+All 59 letters get the same freeze-gate treatment under T1: any PR modifying
+a `strokes.json` must demonstrate Pearson ≥ threshold against the
+pre-modification version (the canonical hand-calibrated reference at HEAD).
+The old bake-controlled-vs-static distinction is obsolete (all 59 are static
+post-`6a85811c`).
 
 ---
 
@@ -419,51 +411,38 @@ candidate** (i.e., no diff). Every (letter, stroke) should return Pearson
 = 1.0. **Any non-1.0 result means the resampling or asymmetry computation
 is non-deterministic — flag and investigate before shipping G1.**
 
-### Spot-check — round-1 vs round-2 calibrator pairs (MANDATORY ship gate)
+### Calibration run (replaces the original spot-check)
 
-Per Section 3a (Redline 2), this is **not optional**. Run on A, W, m using
-round-1 = earliest session-JSON `pre_polyline`, round-2 = HEAD strokes.json.
-
-**Decision rule (verbatim from Section 3a):**
-- If Pearson **≥ 0.99** for all three letters → HOLD; metric not sensitive
-  enough to distinguish real human-eye corrections from noise. Iterate on
-  metric design before shipping G1.
-- If Pearson **in 0.6–0.95** range → proceed with `threshold = min(self-
-  Pearson) − 0.02`.
-
-The spot-check tells us "G1's Pearson responds meaningfully to real polyline
-edits." Whether those edits would *pass* the production threshold (0.98 by
-default) is a separate, expected outcome: hand calibration *produces* sub-
-threshold Pearson — that's why we ran the calibration in the first place.
+Under the freeze-gate framing in Section 3a, the session-pair measurement
+IS the calibration, not a spot-check on top of a self-Pearson run. See
+`g1_calibration_run.md` for the actual numbers, decision-rule outcome
+(metric sensitivity confirmed: real polish edits land in the 0.2–0.95
+range; noise-floor strokes correctly vacuous-pass via the
+`low_variance_asymmetry` filter), and derived threshold.
 
 ### Pass criteria for G1 ship
 
 - All unit tests pass.
 - Self-comparison integration test: every letter/stroke = 1.0.
-- Spot-check returns plausible sub-1.0 values for known-different pairs.
-- Calibration script produces a defensible threshold (likely 0.98, surfaced
-  to David for one-line approval before recording in BAKE_INVARIANTS.md).
+- Calibration run produces a defensible threshold via the session-pair
+  procedure (Section 3a), surfaced to David for ship-it before being
+  recorded in `BAKE_INVARIANTS.md`.
 - CI green on the implementation commit.
 
 ---
 
-## Decisions summary (for David's redline pass)
+## Decisions summary (post-reframing)
 
-| Section | Recommendation | Alternative considered |
+| Section | Decision | Alternatives considered |
 |---|---|---|
 | **1a** | Option A — per-stroke Pearson; letter pass = all strokes pass | B (concatenate), C (min aggregation) |
 | **1b** | Arc-length resample both to N=100 before asymmetry computation | Hard-fail on mismatch; resample candidate to reference's length |
 | **1c** | Vacuous pass for 1-cp strokes | Exclude; hard-fail |
 | **1d** | Vacuous pass when `n_measured < 10`; surface count in output | Hard-fail |
+| **1d (sibling)** | Vacuous pass when `max(cand_std, ref_std) < 0.05` (`low_variance_asymmetry`) — filters sub-pixel-noise-floor strokes like uniform-stem l, I | Skip filter (l contaminates threshold floor with noise); calibration-time exclusion (less methodologically clean than gate-time) |
 | **2a** | Reference = `git show HEAD:PATH` (or `origin/main`) for CI; working tree for local | — |
 | **2b** | Umbrella `scripts/run_gates.py --gate g1`; logic in `audit_invariants.py::gate_g1` | Per-gate script; subcommand of `audit_invariants.py` |
 | **2c** | Stdout human-readable by default; `--json` flag for CI | One-or-the-other |
-| **3a** | Take the spec literally; expect threshold ≈ 0.98 from byte-identical bake floor | ε-noise injection; session-pair calibration; hand-pick |
+| **3a** | Freeze-gate framing: calibrate against 2026-05-22 session-pair corpus; threshold = `min(real Pearson)`; no safety margin | Original draft: fresh-bake-vs-shipped self-Pearson floor (obsolete post-`6a85811c`); ε-noise; hand-pick |
 | **3b** | `min` over all (letter, stroke) pairs | `min` over letters' worst-stroke |
-| **4** | Surface 22-letter static subset as edge case excluded from calibration | — |
-
----
-
-## Hold
-
-Awaiting David's approval / redlines. No code, no commits until then.
+| **4** | All 59 letters get the same freeze-gate treatment; bake-controlled-vs-static distinction is obsolete | Original draft maintained a 37/22 split (now factually wrong) |

@@ -169,33 +169,41 @@ doesn't measure today are reviewed by the visual-sweep workflow
 ### Threshold 1 — Asymmetry-profile drift from reference (Rule 1)
 
 Per-point asymmetry computed via the perpendicular cross-section
-method (`scripts/audit_invariants.py::audit_threshold_1`). The
-metric itself is unchanged from the medial-axis era; only the
-comparison object changed:
+method (`scripts/audit_invariants.py::gate_g1`):
 
 Pearson correlation of the candidate's per-point asymmetry
 sequence against the reference's per-point asymmetry sequence
-≥ TBD.
+**≥ 0.2005** (post-calibration 2026-05-23 at corpus state
+`d90a5cd8`).
 
-**Threshold calibration.** To be calibrated against the shipped
-corpus when G1 lands. Procedure:
+**Threshold derivation (freeze-gate framing).** All 59 letters
+of Druckschrift Regular ship as hand-calibrated static artifacts
+(commit `6a85811c`). HEAD's `strokes.json` files are the canonical
+reference. T1 functions as a freeze gate: any PR producing drift
+larger than David's smallest previously-approved polish edit gets
+flagged for manual review.
 
-1. Run G1 against the 59-letter corpus, with each letter compared
-   against itself (a fresh bake of that letter → the shipped
-   reference at HEAD) under bake-determinism noise.
-2. Report `min(self-Pearson)` across the 59 letters — this is
-   the natural floor: the lowest correlation any letter achieves
-   against itself given numerical noise in the pipeline.
-3. Production threshold = `min(self-Pearson) − 0.02` (small
-   safety margin).
+Calibration procedure: run `gate_g1_per_stroke(round1, round2,
+mask, bbox, threshold=1.0)` for each (letter, stroke) pair in the
+13-letter 2026-05-22 session-pair corpus, where round-1 =
+`pre_polyline` of the earliest session JSON and round-2 = HEAD
+`strokes.json`. Threshold = `min(real Pearson)` across non-vacuous
+strokes. No safety margin (the reference is static; there is no
+algorithmic noise floor to subtract against).
 
-The threshold is therefore **derived** from corpus measurement,
-not chosen by guess. Recorded here after G1 ships, with the
-corpus state SHA cited.
+Vacuous-pass cases excluded from the min: `not_applicable_too_short`
+(1-cp dot strokes), `insufficient_measured_points` (n_measured < 10),
+`low_variance_asymmetry` (asymmetry std < `G1_MIN_ASYMMETRY_STD =
+0.05` — sub-pixel-noise-floor strokes like uniform-stem l, I).
 
-**Enforced by**: not currently enforced. Pending Phase 2b Track
-B / G1. After G1 lands, every PR's bake output must satisfy this
-against the reference at HEAD before merge.
+Derived: `min = 0.2005` at letter `b` stroke 0 (closed-bowl polish).
+Full per-letter table + interpretation in
+`research_data/phase2b_gates/g1_calibration_run.md`.
+
+**Enforced by**: pending Phase 2b Track B / G5 — `scripts/run_gates.py
+--gate g1` is the gate logic; once G5 wires the umbrella into CI,
+every PR modifying `strokes.json` will be auto-checked against
+the threshold pre-merge.
 
 ### Threshold 2 — Turn-angle-profile drift from reference (Rule 2)
 

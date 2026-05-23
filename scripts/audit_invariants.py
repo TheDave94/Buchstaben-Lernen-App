@@ -161,6 +161,16 @@ G1_RESAMPLE_N = 100
 # short return vacuous pass with reason="insufficient_measured_points".
 G1_MIN_MEASURED = 10
 
+# Strokes whose asymmetry sequence std is below this floor are dominated
+# by sub-pixel rounding noise (typical of uniform-width stems like l, I).
+# Pearson on such sequences is meaningless. Vacuous-pass with
+# reason="low_variance_asymmetry".
+# Empirically derived against the 2026-05-22 session corpus: cutoff sits
+# in the gap between l's 0.0438 (uniform stem, edit_count=0, Pearson
+# noise) and D s1's 0.0521 (legitimate closed-bowl polish, Pearson 0.49).
+# See research_data/phase2b_gates/g1_calibration_run.md.
+G1_MIN_ASYMMETRY_STD = 0.05
+
 
 def _arc_length_resample(poly: list[tuple[float, float]],
                           n: int) -> list[tuple[float, float]]:
@@ -238,8 +248,23 @@ def gate_g1_per_stroke(candidate_poly_rel: list[tuple[float, float]],
             "reason": "insufficient_measured_points",
         }
     arr = np.array(paired, dtype=float)
-    if arr[:, 0].std() < 1e-12 or arr[:, 1].std() < 1e-12:
+    cand_std = float(arr[:, 0].std())
+    ref_std = float(arr[:, 1].std())
+    if max(cand_std, ref_std) < G1_MIN_ASYMMETRY_STD:
+        # Asymmetry signal is dominated by sub-pixel rounding noise;
+        # Pearson is meaningless (e.g., l, I — uniform-width stems).
+        return {
+            "pearson": None,
+            "n_measured": len(paired),
+            "n_cp_candidate": n_cp_c,
+            "n_cp_reference": n_cp_r,
+            "pass": True,
+            "reason": "low_variance_asymmetry",
+        }
+    if cand_std < 1e-12 or ref_std < 1e-12:
         # corrcoef of a constant sequence is NaN; no signal to compare.
+        # (Strict subcase of low_variance_asymmetry, but the more
+        # specific reason aids debugging.)
         return {
             "pearson": None,
             "n_measured": len(paired),
