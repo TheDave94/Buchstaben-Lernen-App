@@ -16,6 +16,11 @@ citeable.
   SPEC-VISUAL-APPROVAL choice for `docs/BAKE_INVARIANTS.md`. Contains
   the three Phase-2b investigations' findings condensed for thesis-
   ready citation.
+- `phase2b_gates/` — design documents and calibration run results
+  for the Phase 2b drift-from-reference gates G1-G5 per
+  `docs/BAKE_INVARIANTS.md` §0 (SPEC-VISUAL-APPROVAL). Each gate
+  has a design doc and, once calibrated, a calibration result doc.
+  See the directory's own `README.md` for the full layout.
 
 ## Audience
 
