@@ -28,3 +28,25 @@ Append-only. Each calibration session creates a new dated subfolder;
 existing folders never edited after the round commits. Per-pair
 files never edited (they're immutable evidence of what was saved on
 which timestamp by which tool).
+
+## What lives here vs. what doesn't
+
+research_data/ contains:
+- Captured EVENT data that prose can't replace (session pairs,
+  per-checkpoint edit traces)
+- Decision documents and design rationale (spec_decision/,
+  phase2b_gates/)
+- Calibration run results when they're produced
+
+research_data/ does NOT contain:
+- Raw iPad export bundles (the per-letter derivatives in
+  Letters/Regular/ are the canonical state; bundles are stale
+  snapshots once their per-letter contents are extracted)
+- Intermediate analysis files (one-shot scripts, temp diff
+  dumps) — these get superseded by surfaced markdown reports
+- Working-tree scratch (anything that lived in /tmp during
+  a session)
+
+Rule of thumb: if it documents an EVENT or DECISION, it belongs
+here. If it's just a snapshot of state that's now reflected
+elsewhere in the repo, it doesn't.

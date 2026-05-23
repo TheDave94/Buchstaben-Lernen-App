@@ -28,6 +28,18 @@ David toggled to SKELETT to verify body strokes between dot
 placements; the underlying dot edit itself was an ANKER `.punkt`
 action.
 
+**Note — bake-controlled vs static letter subset.**
+The corpus mixes both. Of the 10 letters touched in batch 1:
+bake-controlled (entries in `generate_strokes_auto.py::LETTERS`)
+are **A D N W l v** (6); static artifacts (hand-tuned, not bake-
+regenerable) are **U b m p** (4). Batch 2's umlauts (Ä Ö Ü) are
+all bake-controlled. Downstream calibration measurements (e.g.,
+Phase 2b G1 self-Pearson floor) can only run on the bake-
+controlled subset — static letters have no fresh-bake to compare
+against. See `research_data/phase2b_gates/g1_design.md`
+"Corpus context" section for the full 37-bake-controlled /
+22-static enumeration across the shipped 59 letters.
+
 ## Letters touched (13)
 
 | Letter | Pairs in batch 1 | Pairs in batch 2 | File diff vs prior bundle? |
@@ -57,7 +69,9 @@ as a potential NFC/NFD mismatch in the on-iPad session directory
 naming OR a David-side workflow detail. The Ü-only / ü-zero
 asymmetry rules out "David didn't touch the lowercase set" since
 Ü was already correctly dotted; Ü's 3 pairs were dot-position
-refinements.
+refinements. Resolved at `0bd51bfb` (NFC normalization at logger
+entry); future captures should produce session JSONs for
+lowercase letters correctly.
 
 ## Nature of edits
 
