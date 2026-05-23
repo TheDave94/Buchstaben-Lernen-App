@@ -24,7 +24,7 @@ This is a thesis project: David is the primary author, Claude Code is reviewer +
 1. Scope grew past the agreed spec.
 2. Two valid paths exist and the choice changes the artefact materially.
 3. Evidence contradicts the spec (e.g. doc says X, code does Y).
-4. A change touches a load-bearing doc (CLAUDE.md, BAKE_INVARIANTS.md, LESSONS.md Part B, claims in APP_DOCUMENTATION.md §11, research_data/spec_decision/framing.md).
+4. A change touches a load-bearing doc (CLAUDE.md, BAKE_INVARIANTS.md, LESSONS.md Part B, claims in APP_DOCUMENTATION.md §11, research_data/spec_decision/framing.md, research_data/phase2b_gates/*.md).
 5. A change touches **thesis-substance prose** (METHODOLOGY.md decision sections, examiner-facing claims, supervisor sign-off lines). Always switch to review-only.
 
 ## Two-repo working setup
