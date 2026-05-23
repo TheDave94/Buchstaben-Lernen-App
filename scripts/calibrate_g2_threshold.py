@@ -1,31 +1,19 @@
-"""G1 threshold calibration against the 2026-05-22 session-pair corpus.
+"""G2 threshold calibration against the 2026-05-22 session-pair corpus.
 
-Framing (per David's confirmation 2026-05-23): G1 is a FREEZE GATE
-against the hand-calibrated Regular corpus. The bake pipeline is
-retired for Regular (6a85811c); HEAD strokes.json is the canonical
-reference. A future PR producing drift larger than David's previously-
-approved polish edits should fail G1 and require manual review.
-
-The 13-letter session-pair corpus from 2026-05-22 supplies the
-calibration data. For each letter:
-
-  round-1 polyline = pre_polyline of earliest session JSON
-                     (what David started from)
-  round-2 polyline = HEAD strokes.json
-                     (what David approved)
-  per-stroke Pearson via gate_g1_per_stroke(round1, round2, ...)
-
-Threshold = min(real per-(letter, stroke) Pearson) across the corpus.
-No noise margin — there's no algorithmic noise floor to subtract
-against because the reference is static, not regenerated.
+Mirrors `calibrate_g1_threshold.py`, but measures turn-angle drift
+instead of asymmetry drift. Reports `max(|turn_angle|)` per stroke as a
+resample-validation diagnostic (per `g2_design.md` G2.2 redline):
+N=100 is validated if max stays below ~π/4 throughout; values near
+π/2 or π signal that the resample is undersampling sharp peaks.
 
 Stdout: clean threshold value (for piping).
-Stderr: full per-pair table + summary stats.
+Stderr: full per-pair table + per-reason vacuous breakdown + summary stats.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import statistics
 import sys
 import unicodedata
@@ -45,8 +33,6 @@ LETTERS_DIR = REPO_ROOT / "PrimaeNative" / "Resources" / "Letters" / "Regular"
 
 
 def earliest_session(letter_dir: Path) -> tuple[Path, dict] | None:
-    """Return (path, record) for the earliest-timestamped session JSON
-    in `letter_dir`, or None if the directory has no JSONs."""
     jsons = sorted(letter_dir.glob("*.json"))
     if not jsons:
         return None
@@ -106,39 +92,38 @@ def calibrate() -> int:
         font_path = g.FONTS["regular"]
         mask = g.rasterize(letter, font_path)
         bbox = g.bbox_from_mask(mask)
-        stroke_masks = ai.build_per_stroke_masks(round2, mask, bbox)
-
         edit_count = record.get("edit_count_in_session", -1)
         x_min, y_min, x_max, y_max = bbox
         bw = max(1, x_max - x_min)
         bh = max(1, y_max - y_min)
+
         n_pairs = min(len(round1), len(round2))
         for i in range(n_pairs):
-            result = ai.gate_g1_per_stroke(round1[i], round2[i],
-                                            stroke_masks[i], bbox,
-                                            threshold=1.0)
-            # Recompute std side-channel for the surfacing table.
-            # Mirrors gate_g1_per_stroke's internal resample+asymmetry
-            # path so the std values reflect what the gate actually
-            # sees (not the raw cp asymmetry).
-            cand_std = ref_std = None
+            result = ai.gate_g2_per_stroke(round1[i], round2[i],
+                                            bbox, threshold=1.0,
+                                            min_turn_angle_std=0.0)
+            # Side-channel: max(|angle|) for resample-validation diagnostic.
+            # Mirrors gate_g2_per_stroke's internal resample+angle path.
+            cand_std = ref_std = max_abs_cand = max_abs_ref = None
             if len(round1[i]) >= 2 and len(round2[i]) >= 2:
                 cand_rs = ai._arc_length_resample(round1[i],
-                                                    ai.G1_RESAMPLE_N)
+                                                    ai.G2_RESAMPLE_N)
                 ref_rs = ai._arc_length_resample(round2[i],
-                                                   ai.G1_RESAMPLE_N)
+                                                   ai.G2_RESAMPLE_N)
                 cand_px = [(x_min + rx * bw, y_min + ry * bh)
                            for rx, ry in cand_rs]
                 ref_px = [(x_min + rx * bw, y_min + ry * bh)
                           for rx, ry in ref_rs]
-                cand_a = ai._asymmetry_per_point(stroke_masks[i], cand_px)
-                ref_a = ai._asymmetry_per_point(stroke_masks[i], ref_px)
+                cand_a = ai._turn_angle_per_point(cand_px)
+                ref_a = ai._turn_angle_per_point(ref_px)
                 paired = [(a, b) for (a, ok_a), (b, ok_b)
                           in zip(cand_a, ref_a) if ok_a and ok_b]
-                if len(paired) >= ai.G1_MIN_MEASURED:
+                if len(paired) >= ai.G2_MIN_MEASURED:
                     arr = np.array(paired)
                     cand_std = float(arr[:, 0].std())
                     ref_std = float(arr[:, 1].std())
+                    max_abs_cand = float(np.max(np.abs(arr[:, 0])))
+                    max_abs_ref = float(np.max(np.abs(arr[:, 1])))
             rows.append({
                 "letter": letter,
                 "stroke": i,
@@ -149,10 +134,11 @@ def calibrate() -> int:
                 "n_cp_round2": result["n_cp_reference"],
                 "cand_std": cand_std,
                 "ref_std": ref_std,
+                "max_abs_cand": max_abs_cand,
+                "max_abs_ref": max_abs_ref,
                 "edit_count": edit_count,
                 "session_path": session_path.name,
             })
-        # Surface stroke-count delta so adds (Ä Ö Ü dots) are visible.
         if len(round1) != len(round2):
             print(f"  note: {letter} stroke count "
                   f"r1={len(round1)} r2={len(round2)} "
@@ -160,14 +146,13 @@ def calibrate() -> int:
                   file=sys.stderr)
 
     # Per-pair table.
-    print(f"\nCalibration corpus: {len(letter_dirs)} letters\n",
+    print(f"\nG2 calibration corpus: {len(letter_dirs)} letters\n",
           file=sys.stderr)
     print(f"{'Letter':6s} {'Str':>3s} {'Pearson':>8s} "
           f"{'cand_std':>9s} {'ref_std':>9s} "
-          f"{'n_meas':>7s} {'edits':>6s}  {'Class':<12s} Note",
-          file=sys.stderr)
-    print("-" * 90, file=sys.stderr)
-    real_pearsons: list[float] = []
+          f"{'max|c|':>7s} {'max|r|':>7s} "
+          f"{'edits':>6s}  {'Class':<12s} Note", file=sys.stderr)
+    print("-" * 100, file=sys.stderr)
     real_pearsons_with_id: list[tuple[float, str, int]] = []
     vacuous_by_reason: Counter[str] = Counter()
     for r in rows:
@@ -177,15 +162,18 @@ def calibrate() -> int:
                         else "—")
         ref_std_str = (f"{r['ref_std']:.4f}" if r["ref_std"] is not None
                        else "—")
+        max_c_str = (f"{r['max_abs_cand']:.3f}" if r["max_abs_cand"] is not None
+                     else "—")
+        max_r_str = (f"{r['max_abs_ref']:.3f}" if r["max_abs_ref"] is not None
+                     else "—")
         cls = classify(r["pearson"])
         reason = r["reason"] or ""
         print(f"{r['letter']:6s} {r['stroke']:>3d} {pearson_str:>8s} "
               f"{cand_std_str:>9s} {ref_std_str:>9s} "
-              f"{r['n_measured']:>7d} {r['edit_count']:>6d}  "
-              f"{cls:<12s} {reason}",
+              f"{max_c_str:>7s} {max_r_str:>7s} "
+              f"{r['edit_count']:>6d}  {cls:<12s} {reason}",
               file=sys.stderr)
         if r["pearson"] is not None:
-            real_pearsons.append(r["pearson"])
             real_pearsons_with_id.append(
                 (r["pearson"], r["letter"], r["stroke"]))
         else:
@@ -194,6 +182,13 @@ def calibrate() -> int:
         print(file=sys.stderr)
         for letter, reason in skipped:
             print(f"skipped {letter}: {reason}", file=sys.stderr)
+
+    real_pearsons = sorted(p for p, _, _ in real_pearsons_with_id)
+    vacuous_total = sum(vacuous_by_reason.values())
+    print(f"\nReal Pearson values: {len(real_pearsons)} "
+          f"(vacuous: {vacuous_total} total)", file=sys.stderr)
+    for reason, count in sorted(vacuous_by_reason.items()):
+        print(f"  {reason}: {count}", file=sys.stderr)
 
     if not real_pearsons:
         print("\nNo real Pearson values; cannot derive threshold.",
@@ -208,29 +203,34 @@ def calibrate() -> int:
     max_label = (f"{real_pearsons_with_id[-1][1]} stroke "
                  f"{real_pearsons_with_id[-1][2]}")
     median_v = statistics.median(real_pearsons)
-    perfect_1 = sum(1 for p in real_pearsons if abs(p - 1.0) < 1e-9)
-    near_1 = sum(1 for p in real_pearsons if p >= 0.99)
-    tight = sum(1 for p in real_pearsons if p >= 0.99)
-    moderate = sum(1 for p in real_pearsons if 0.95 <= p < 0.99)
-    substantial = sum(1 for p in real_pearsons if p < 0.95)
 
-    vacuous_total = sum(vacuous_by_reason.values())
-    print(f"\nReal Pearson values: {len(real_pearsons)} "
-          f"(vacuous: {vacuous_total} total)", file=sys.stderr)
-    for reason, count in sorted(vacuous_by_reason.items()):
-        print(f"  {reason}: {count}", file=sys.stderr)
+    # Resample-validation diagnostic.
+    max_angles_all = [r["max_abs_cand"] for r in rows
+                      if r["max_abs_cand"] is not None] + \
+                     [r["max_abs_ref"] for r in rows
+                      if r["max_abs_ref"] is not None]
+    if max_angles_all:
+        max_max_angle = max(max_angles_all)
+        print(f"\nResample-validation diagnostic:", file=sys.stderr)
+        print(f"  max(|turn_angle|) across all strokes: "
+              f"{max_max_angle:.3f} rad ({math.degrees(max_max_angle):.1f}°)",
+              file=sys.stderr)
+        if max_max_angle < math.pi / 4:
+            print(f"  ✓ Below π/4 (45°) → N={ai.G2_RESAMPLE_N} validated",
+                  file=sys.stderr)
+        elif max_max_angle < math.pi / 2:
+            print(f"  ⚠ Above π/4 but below π/2 → N may be marginal",
+                  file=sys.stderr)
+        else:
+            print(f"  ✗ Near π/2 or above → N={ai.G2_RESAMPLE_N} "
+                  f"likely undersampling; investigate", file=sys.stderr)
+
+    print(f"\nReal Pearson summary:", file=sys.stderr)
     print(f"  min:    {min_v:.4f}  ({min_label})", file=sys.stderr)
     print(f"  median: {median_v:.4f}", file=sys.stderr)
     print(f"  max:    {max_v:.4f}  ({max_label})", file=sys.stderr)
-    print(f"  count Pearson == 1.0:  {perfect_1}", file=sys.stderr)
-    print(f"  count Pearson >= 0.99: {near_1}", file=sys.stderr)
-    print(f"\nDistribution:", file=sys.stderr)
-    print(f"  tight       (>= 0.99): {tight}", file=sys.stderr)
-    print(f"  moderate    (0.95-0.99): {moderate}", file=sys.stderr)
-    print(f"  substantial (< 0.95):   {substantial}", file=sys.stderr)
     print(f"\nDerived threshold (= min): {min_v:.4f}", file=sys.stderr)
 
-    # Stdout: clean threshold for piping.
     print(f"{min_v:.4f}")
     return 0
 

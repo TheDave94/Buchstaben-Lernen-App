@@ -104,11 +104,37 @@ def enumerate_letters(weight: str,
     return letters
 
 
-def run_g1_for_letter(letter: str, weight: str,
-                       candidate_ref: str, reference_ref: str,
-                       threshold: float,
-                       letters_dir: Path = LETTERS_DIR_DEFAULT
-                       ) -> dict:
+# Per-gate metadata. Adding G3/G4/G5 is a single-row table entry.
+# `needs_mask`: G1 (asymmetry) and the future G3 (stem-width / perpendicular
+# deviation) need the ink-mask raster; G2 (turn-angle) and the future G4
+# (junction-tangent) are pure polyline computations.
+GATE_METADATA: dict[str, dict] = {
+    "g1": {
+        "function_with_mask": ai.gate_g1,
+        "function_without_mask": None,
+        "needs_mask": True,
+        "title": "asymmetry-profile drift from reference",
+    },
+    "g2": {
+        "function_with_mask": None,
+        "function_without_mask": ai.gate_g2,
+        "needs_mask": False,
+        "title": "turn-angle-profile drift from reference",
+    },
+}
+
+
+def run_gate_for_letter(letter: str, gate: str, weight: str,
+                         candidate_ref: str, reference_ref: str,
+                         threshold: float,
+                         letters_dir: Path = LETTERS_DIR_DEFAULT
+                         ) -> dict:
+    """Dispatch to the gate function for `gate` against a single letter.
+
+    The gate function comes from GATE_METADATA; mask is built only when
+    the gate needs it.
+    """
+    meta = GATE_METADATA[gate]
     candidate = load_strokes(letter, weight, candidate_ref, letters_dir)
     reference = load_strokes(letter, weight, reference_ref, letters_dir)
     if candidate is None or reference is None:
@@ -126,7 +152,12 @@ def run_g1_for_letter(letter: str, weight: str,
     bbox = g.bbox_from_mask(mask)
     cand_polys = strokes_to_polylines(candidate)
     ref_polys = strokes_to_polylines(reference)
-    result = ai.gate_g1(cand_polys, ref_polys, mask, bbox, threshold)
+    if meta["needs_mask"]:
+        result = meta["function_with_mask"](cand_polys, ref_polys,
+                                              mask, bbox, threshold)
+    else:
+        result = meta["function_without_mask"](cand_polys, ref_polys,
+                                                 bbox, threshold)
     result["letter"] = letter
     return result
 
@@ -151,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("letters", nargs="*",
                         help="Letters to audit (default: all on disk)")
-    parser.add_argument("--gate", required=True, choices=["g1"],
+    parser.add_argument("--gate", required=True,
+                        choices=list(GATE_METADATA.keys()),
                         help="Gate to run (more gates land in later Phase 2b commits)")
     parser.add_argument("--candidate-ref", default=WORKTREE_SENTINEL,
                         help="Git ref for candidate strokes.json "
@@ -180,11 +212,10 @@ def main(argv: list[str] | None = None) -> int:
 
     results: list[dict] = []
     for letter in letters:
-        if args.gate == "g1":
-            results.append(run_g1_for_letter(
-                letter, args.weight,
-                args.candidate_ref, args.reference_ref,
-                args.threshold, args.letters_dir))
+        results.append(run_gate_for_letter(
+            letter, args.gate, args.weight,
+            args.candidate_ref, args.reference_ref,
+            args.threshold, args.letters_dir))
 
     n_pass = sum(1 for r in results if r.get("pass"))
     n_fail = len(results) - n_pass
@@ -202,8 +233,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(out, indent=2, ensure_ascii=False))
     else:
-        header = (f"{args.gate.upper()} — asymmetry-profile drift from reference "
-                  f"(threshold ≥ {args.threshold})") if args.gate == "g1" else args.gate
+        title = GATE_METADATA[args.gate]["title"]
+        header = f"{args.gate.upper()} — {title} (threshold ≥ {args.threshold})"
         print(header)
         print()
         for r in results:
