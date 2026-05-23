@@ -114,12 +114,23 @@ GATE_METADATA: dict[str, dict] = {
         "function_without_mask": None,
         "needs_mask": True,
         "title": "asymmetry-profile drift from reference",
+        # Drift gate: pass iff metric ≥ threshold.
+        "comparison": "≥",
     },
     "g2": {
         "function_with_mask": None,
         "function_without_mask": ai.gate_g2,
         "needs_mask": False,
         "title": "turn-angle-profile drift from reference",
+        "comparison": "≥",
+    },
+    "g3": {
+        "function_with_mask": None,
+        "function_without_mask": ai.gate_g3,
+        "needs_mask": False,
+        "title": "perpendicular deviation on straight strokes",
+        # Conformance gate: pass iff metric ≤ threshold.
+        "comparison": "≤",
     },
 }
 
@@ -173,8 +184,16 @@ def format_letter_human(result: dict) -> str:
             parts.append(f"s{idx}: vacuous ({s['reason']})")
         else:
             mark = "✓" if s["pass"] else "✗"
-            parts.append(f"s{idx}: {mark} pearson={s['pearson']:.4f}"
-                         f" n={s['n_measured']}")
+            # Drift gates report 'pearson'; conformance gates report
+            # 'deviation_px'. Format whichever the gate produced.
+            if "pearson" in s:
+                parts.append(f"s{idx}: {mark} pearson={s['pearson']:.4f}"
+                             f" n={s['n_measured']}")
+            elif "deviation_px" in s:
+                parts.append(f"s{idx}: {mark} dev={s['deviation_px']:.2f}px"
+                             f" n={s['n_measured']}")
+            else:
+                parts.append(f"s{idx}: {mark} (unknown metric shape)")
     return "  " + "  ".join(parts)
 
 
@@ -233,8 +252,11 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(out, indent=2, ensure_ascii=False))
     else:
-        title = GATE_METADATA[args.gate]["title"]
-        header = f"{args.gate.upper()} — {title} (threshold ≥ {args.threshold})"
+        meta = GATE_METADATA[args.gate]
+        title = meta["title"]
+        comparison = meta.get("comparison", "≥")
+        header = (f"{args.gate.upper()} — {title} "
+                  f"(threshold {comparison} {args.threshold})")
         print(header)
         print()
         for r in results:

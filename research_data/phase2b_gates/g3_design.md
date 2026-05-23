@@ -149,6 +149,132 @@ If any stroke's classification looks wrong, the
 `G3_STRAIGHTNESS_MAX_ANGLE` threshold can be tuned post-hoc before the
 calibration commit lands.
 
+### Caveat caught during implementation
+
+The original max-only criterion above was found inadequate during
+implementation. This subsection documents what was discovered and the
+working criterion that replaced it. Preserved as a record of the
+empirical derivation; the original G3.1 text above stands as the
+design hypothesis that needed correction.
+
+**Problem 1 — max-only admits smooth curves.** At N=100 resample,
+per-segment turn-angles on smoothly-curved arcs are around 0.03–0.14
+rad — below π/12 (0.262 rad). The original criterion classified
+D s1 (bowl, max 0.143), U s0 (max 0.186), b s0 (max 0.209), and
+similar bowls as STRAIGHT. A perfect half-circle resampled to N=100
+has per-segment angles of ~0.032 rad, also admitted.
+
+**Problem 2 — cumulative-sum was tried and rejected (Option A).**
+Raster noise on a resampled polyline accumulates linearly with N.
+Genuinely straight strokes (A diagonals, D vertical, p stem) showed
+cumulative `sum|angle|` of 0.4–1.3 rad just from sub-pixel jitter.
+`l` (which turned out to be L-shaped in Primae) had cumulative 5.5
+rad, with most of it being noise rather than the foot's structural
+curvature. Cumulative conflates real curvature with raster noise and
+scales with N; rejected.
+
+**Problem 3 — signed cumulative (|Σa|) admits localized corners.**
+Letters like N and m have continuous-walk strokes where successive
+turns cancel (the net direction change end-to-end is near zero).
+Signed cumulative classifies these as straight, which is wrong.
+
+**Working criterion (combined max AND p95).**
+
+```
+is_straight = (max(|per-segment angle|) < G3_STRAIGHTNESS_MAX_ANGLE)
+              AND (p95(|per-segment angle|) < G3_STRAIGHTNESS_P95_ANGLE)
+```
+
+with:
+- `G3_STRAIGHTNESS_MAX_ANGLE = π/12 ≈ 0.262 rad ≈ 15°` (catches sharp
+  corners)
+- `G3_STRAIGHTNESS_P95_ANGLE = 0.1 rad ≈ 5.7°` (catches sustained
+  curvature)
+
+Empirically derived against the 2026-05-22 corpus. Eight strokes
+cleanly admitted (A 0/1/2, D 0, U 1, p 0, Ü 1, Ä 0); thirteen cleanly
+rejected (curves: D 1, U 0, b 0, p 1, Ö 0, Ü 0, Ä 1; corners: N 0,
+W 0, m 0, v 0; mixed: l 0 — see foot finding below; sharp-crossbar
+artifact: Ä 2).
+
+The p95 threshold (0.1 rad) sits in the **0.014-wide empirical gap**
+between A s2's p95=0.087 (admitted) and D s1's p95=0.101 (rejected).
+Honest acknowledgment: p95=0.1 is empirically derived, not first-
+principles. Future corpus additions could land in this gap and force
+re-derivation. Documented as a maintenance hazard, not a design flaw —
+empirical calibration is what G3's classifier required.
+
+**Four-outcome decision matrix:**
+
+| max criterion | p95 criterion | Classification |
+|---|---|---|
+| max < π/12 | p95 < 0.1 | STRAIGHT (G3 applies) |
+| max < π/12 | p95 ≥ 0.1 | SMOOTH-CURVED (vacuous: bowls) |
+| max ≥ π/12 | p95 < 0.1 | SHARP-CORNER (vacuous: v with one corner but mostly low p95) |
+| max ≥ π/12 | p95 ≥ 0.1 | CORNERED (vacuous: W, m, N) |
+
+The strict-AND interpretation (any failure → vacuous) is correct.
+A V-shape with one sharp corner and otherwise low p95 should not be
+gated by G3 — if finer-grained straightness checking on V's straight
+segments is wanted, define them as separate strokes.
+
+**N-coupling note.** Both thresholds depend on `G3_RESAMPLE_N=100`.
+p95 scales with N more weakly than cumulative (it's a quantile of
+magnitudes, not a sum), but if anyone ever changes `G3_RESAMPLE_N`,
+both straightness thresholds and the deviation threshold must be
+re-derived. Code-site comments at the constants flag this.
+
+**Empirical data preserved for the derivation record.** Sorted by p95
+(critical separator between admitted and rejected):
+
+| Letter | Stroke | max\|a\| | sum\|a\| | p95\|a\| | Classification | Intuition |
+|---|---:|---:|---:|---:|---|---|
+| A | 1 | 0.023 | 0.395 | 0.010 | straight | right diag |
+| p | 0 | 0.024 | 0.718 | 0.021 | straight | stem |
+| D | 0 | 0.028 | 0.682 | 0.024 | straight | left vert |
+| U | 1 | 0.030 | 0.456 | 0.024 | straight | right vert |
+| A | 0 | 0.039 | 0.936 | 0.030 | straight | left diag |
+| N | 0 | 1.531 | 6.152 | 0.044 | **vacuous (max)** | corner — diag→vert |
+| Ü | 1 | 0.075 | 1.330 | 0.063 | straight | right vert |
+| Ä | 0 | 0.100 | 2.943 | 0.067 | straight | Ä A left diag |
+| v | 0 | 1.222 | 3.723 | 0.072 | **vacuous (max)** | corner — V vertex |
+| A | 2 | 0.102 | 1.285 | 0.087 | straight | crossbar |
+| D | 1 | 0.143 | 3.498 | 0.101 | **vacuous (p95)** | bowl |
+| Ä | 1 | 0.105 | 4.733 | 0.103 | **vacuous (p95)** | Ä A right diag |
+| Ü | 0 | 0.187 | 3.619 | 0.119 | **vacuous (p95)** | U base s0 |
+| p | 1 | 0.200 | 4.532 | 0.134 | **vacuous (p95)** | bowl |
+| Ö | 0 | 0.174 | 5.692 | 0.135 | **vacuous (p95)** | O base |
+| U | 0 | 0.186 | 3.249 | 0.147 | **vacuous (p95)** | left arc |
+| b | 0 | 0.209 | 5.968 | 0.176 | **vacuous (p95)** | bowl + stem |
+| l | 0 | 0.254 | 5.488 | 0.231 | **vacuous (p95)** | L-shape with foot |
+| Ä | 2 | 0.290 | 0.580 | 0.000 | **vacuous (max)** | Ä A crossbar (slight max overshoot) |
+| W | 0 | 2.272 | 8.829 | 0.374 | **vacuous (both)** | continuous walk |
+| m | 0 | 2.394 | 12.389 | 0.433 | **vacuous (both)** | continuous walk |
+
+### Finding — Primae's lowercase l has a foot/serif
+
+During G3 classifier verification, the lowercase l stroke in Primae was
+found to be **L-shaped** (vertical stem with a foot/serif at the
+bottom), not a uniform straight stem. Concretely: the polyline starts
+at (0.39, 0.05), descends to (0.20, 0.79), then turns right to end at
+(0.84, 0.93). l correctly classifies as non-straight under G3 and
+vacuous-passes (max=0.254, p95=0.231 — both fail).
+
+Separately, this finding clarifies G1's calibration result for l
+(Pearson -0.04 with edit_count=0): that value reflects
+perpendicular-walk asymmetry behavior on an L-shape, not noise on a
+uniform stem. G1's threshold (0.2005) stands; only the framing
+narrative for l in `g1_calibration_run.md` would benefit from a minor
+adjustment.
+
+**Open question flagged for David:** is l's foot/serif intentional in
+Primae's lowercase l design? If intentional, the corpus is correctly
+representing the font. If unintentional, there may be a separate
+investigation needed in the bake or calibrator (l should have been
+imported as a uniform vertical stroke from the calibrator; the L-shape
+may indicate a stroke-decomposition error or an import error).
+Surfacing for visual confirmation; not blocking G3 either way.
+
 ### G3.2 — Perpendicular deviation: what's the reference line?
 
 **Recommendation: least-squares best-fit line through the

@@ -487,3 +487,201 @@ def gate_g2(candidate_strokes_rel: list[list[tuple[float, float]]],
         "n_strokes_reference": len(reference_strokes_rel),
         "pass": overall_pass,
     }
+
+
+# -----------------------------------------------------------------------------
+# G3 — Threshold 3 (perpendicular-deviation conformance gate for straight strokes)
+# Design: research_data/phase2b_gates/g3_design.md
+# -----------------------------------------------------------------------------
+
+import math as _math  # local alias; module-level math is in _turn_angle_per_point
+
+G3_RESAMPLE_N = 100
+G3_MIN_MEASURED = 10
+G3_ENDPOINT_SKIP = 3
+# A stroke is "straight" for G3 purposes iff its reference polyline
+# passes a combined criterion: max(|per-segment angle|) below the
+# sharp-corner cutoff AND p95(|per-segment angle|) below the
+# sustained-curvature cutoff. The original design used max-only
+# (mirroring G2's STRAIGHT-class boundary), but implementation
+# revealed that smooth curves like D's bowl pass max-only (per-segment
+# angles on a smoothly-curved arc at N=100 resample to ~0.03-0.14 rad,
+# below the π/12 max threshold). Cumulative-sum was tried and rejected
+# (noise accumulates linearly with N). The combined criterion was
+# empirically derived against the 2026-05-22 corpus; see
+# research_data/phase2b_gates/g3_design.md G3.1 "Caveat caught
+# during implementation" for the full diagnostic.
+G3_STRAIGHTNESS_MAX_ANGLE = _math.pi / 12  # ≈15°, 0.262 rad
+# Sits in the 0.014-wide empirical gap between A s2's p95=0.087 and
+# D s1's p95=0.101 in the 2026-05-22 corpus. If G3_RESAMPLE_N changes
+# from 100, this threshold must be re-derived.
+G3_STRAIGHTNESS_P95_ANGLE = 0.1  # ≈5.7°
+# Percentile of per-cp perpendicular deviations reported as the
+# stroke's deviation. Spec-aligned (BAKE_INVARIANTS.md §2 Threshold 3).
+G3_PERCENTILE = 95
+# Placeholder threshold pending empirical derivation from calibration.
+# Recorded in BAKE_INVARIANTS.md §2 Threshold 3 once the calibration
+# commit lands.
+G3_DEFAULT_THRESHOLD = 0.0
+
+
+def _perpendicular_deviation(poly_px: list[tuple[float, float]],
+                              percentile: float = G3_PERCENTILE
+                              ) -> tuple[float, int]:
+    """Fit a least-squares line to `poly_px` and return the
+    `percentile`-th percentile of per-cp perpendicular distances to
+    that line, plus the number of cps actually measured.
+
+    Caller is responsible for endpoint-skip — pass the post-skip cps.
+    Returns (deviation_px, n_measured). Returns (0.0, 0) if input
+    has fewer than 2 points (degenerate; no line to fit)."""
+    if len(poly_px) < 2:
+        return 0.0, 0
+    arr = np.asarray(poly_px, dtype=float)
+    # Best-fit line via PCA — first principal component is the line
+    # direction; deviations are the residuals in the perpendicular
+    # direction. Works for any line orientation (vertical, horizontal,
+    # diagonal) without picking x or y as the independent variable.
+    centroid = arr.mean(axis=0)
+    centered = arr - centroid
+    # SVD on the centered points; principal axis is the right-singular
+    # vector with the largest singular value.
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    direction = vh[0]
+    # Perpendicular unit vector (2D rotation by 90°).
+    perp = np.array([-direction[1], direction[0]])
+    deviations = np.abs(centered @ perp)
+    return float(np.percentile(deviations, percentile)), len(poly_px)
+
+
+def _stroke_angle_stats(poly_px: list[tuple[float, float]],
+                          endpoint_skip: int = G3_ENDPOINT_SKIP
+                          ) -> tuple[float, float]:
+    """Return (max, p95) of |per-segment turn-angle| across the
+    polyline, with endpoint skip applied. Used by G3's combined
+    straightness classifier. Returns (0.0, 0.0) for polylines too
+    short to compute any angle."""
+    angles = _turn_angle_per_point(poly_px, endpoint_skip=endpoint_skip)
+    real = [abs(a) for a, ok in angles if ok]
+    if not real:
+        return 0.0, 0.0
+    max_a = max(real)
+    p95_a = float(np.percentile(real, 95))
+    return max_a, p95_a
+
+
+def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
+                        reference_poly_rel: list[tuple[float, float]],
+                        bbox: tuple[int, int, int, int],
+                        threshold: float,
+                        n_resample: int = G3_RESAMPLE_N,
+                        n_min_measured: int = G3_MIN_MEASURED,
+                        straightness_max: float = G3_STRAIGHTNESS_MAX_ANGLE,
+                        straightness_p95: float = G3_STRAIGHTNESS_P95_ANGLE,
+                        endpoint_skip: int = G3_ENDPOINT_SKIP,
+                        percentile: float = G3_PERCENTILE
+                        ) -> dict:
+    """Run G3 (perpendicular-deviation conformance gate) on a single
+    stroke pair.
+
+    Returns a per-stroke result dict. Vacuous-pass reasons:
+    not_applicable_too_short (1-cp), not_applicable_not_straight
+    (reference fails the combined max+p95 straightness criterion),
+    insufficient_measured_points (post-skip cp count below
+    n_min_measured).
+    """
+    n_cp_c = len(candidate_poly_rel)
+    n_cp_r = len(reference_poly_rel)
+    if n_cp_c < 2 or n_cp_r < 2:
+        return {
+            "deviation_px": None,
+            "max_ref_angle": None,
+            "p95_ref_angle": None,
+            "n_measured": 0,
+            "n_cp_candidate": n_cp_c,
+            "n_cp_reference": n_cp_r,
+            "pass": True,
+            "reason": "not_applicable_too_short",
+        }
+
+    # Resample both polylines (mirrors G1/G2 invariant: resample then
+    # measure on the resampled polyline, not the other way around).
+    x_min, y_min, x_max, y_max = bbox
+    bw = max(1, x_max - x_min)
+    bh = max(1, y_max - y_min)
+    cand_rs = _arc_length_resample(candidate_poly_rel, n_resample)
+    ref_rs = _arc_length_resample(reference_poly_rel, n_resample)
+    cand_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in cand_rs]
+    ref_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in ref_rs]
+
+    # Combined straightness check on the reference: pass straightness
+    # iff (max < straightness_max) AND (p95 < straightness_p95). The
+    # max check catches sharp corners; the p95 check catches sustained
+    # smooth curvature. Either failure → non-straight → G3 vacuous-pass.
+    max_ref_angle, p95_ref_angle = _stroke_angle_stats(ref_px, endpoint_skip)
+    if max_ref_angle >= straightness_max or p95_ref_angle >= straightness_p95:
+        return {
+            "deviation_px": None,
+            "max_ref_angle": max_ref_angle,
+            "p95_ref_angle": p95_ref_angle,
+            "n_measured": 0,
+            "n_cp_candidate": n_cp_c,
+            "n_cp_reference": n_cp_r,
+            "pass": True,
+            "reason": "not_applicable_not_straight",
+        }
+
+    # Endpoint-skip on the candidate before LSQ fit, so junction-
+    # adjacent cps don't drag the line.
+    skip = endpoint_skip
+    cand_measured = cand_px[skip:len(cand_px) - skip]
+    if len(cand_measured) < n_min_measured:
+        return {
+            "deviation_px": None,
+            "max_ref_angle": max_ref_angle,
+            "p95_ref_angle": p95_ref_angle,
+            "n_measured": len(cand_measured),
+            "n_cp_candidate": n_cp_c,
+            "n_cp_reference": n_cp_r,
+            "pass": True,
+            "reason": "insufficient_measured_points",
+        }
+
+    deviation_px, n_measured = _perpendicular_deviation(
+        cand_measured, percentile)
+    return {
+        "deviation_px": deviation_px,
+        "max_ref_angle": max_ref_angle,
+        "p95_ref_angle": p95_ref_angle,
+        "n_measured": n_measured,
+        "n_cp_candidate": n_cp_c,
+        "n_cp_reference": n_cp_r,
+        "pass": deviation_px <= threshold,
+    }
+
+
+def gate_g3(candidate_strokes_rel: list[list[tuple[float, float]]],
+             reference_strokes_rel: list[list[tuple[float, float]]],
+             bbox: tuple[int, int, int, int],
+             threshold: float) -> dict:
+    """Run G3 on a candidate-vs-reference letter pair. Mask-free
+    (perpendicular deviation is a pure polyline property)."""
+    per_stroke: list[dict] = []
+    n_pairs = min(len(candidate_strokes_rel), len(reference_strokes_rel))
+    for i in range(n_pairs):
+        result = gate_g3_per_stroke(candidate_strokes_rel[i],
+                                     reference_strokes_rel[i],
+                                     bbox, threshold)
+        result["stroke"] = i
+        per_stroke.append(result)
+    overall_pass = bool(per_stroke) and all(s["pass"] for s in per_stroke)
+    real_devs = [s["deviation_px"] for s in per_stroke
+                 if s["deviation_px"] is not None]
+    letter_score = max(real_devs) if real_devs else None
+    return {
+        "per_stroke": per_stroke,
+        "letter_score": letter_score,
+        "n_strokes_candidate": len(candidate_strokes_rel),
+        "n_strokes_reference": len(reference_strokes_rel),
+        "pass": overall_pass,
+    }
