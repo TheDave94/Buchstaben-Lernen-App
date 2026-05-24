@@ -247,6 +247,31 @@ Strokes too short for tangent computation (fewer than
 `G4_ENDPOINT_SKIP + G4_TANGENT_WINDOW = 8` cps after resample) are
 filtered before pairing — primarily 1-cp diacritic dots.
 
+### G4'.1b — Junction detection mismatch between rounds
+
+The drift metric `kink_drift_deg = |kink_cand − kink_ref|` requires
+that the junction exist in BOTH rounds. Polish could plausibly move
+an endpoint enough that detection status differs between round-1 and
+round-2.
+
+**For drift calibration:** a junction must register in BOTH rounds
+(round-1 min endpoint distance < ε AND round-2 min endpoint distance
+< ε) for kink_drift to be computed. If one round detects and the
+other doesn't, the pair vacuous-passes with reason
+`junction_detection_mismatch_between_rounds`. The calibration script
+surfaces these cases as a separate count in the per-reason vacuous
+breakdown — that count is itself diagnostic data. A high mismatch
+count would indicate either ε is poorly chosen or polish
+substantially moves endpoints; surface for review.
+
+**For gate-time (PR-vs-HEAD comparison):** same principle. Junction
+detection runs on both candidate and reference. If they disagree on
+whether a junction exists at a given consecutive stroke pair, the
+pair vacuous-passes with the same reason. The gate doesn't fail on
+detection disagreement (a PR adding or removing a junction is a
+topology change, not a kink drift); whether topology-change PRs
+should be flagged is a separate gate's job.
+
 ### G4'.2 — Per-junction kink
 
 Same primitives as the original design:
@@ -333,13 +358,31 @@ Per-junction vacuous-pass:
   the pair isn't a junction; G4 doesn't apply.
 - **Insufficient measured points** (post-skip cp count < window): the
   stroke is too short for a reliable tangent fit; vacuous.
+- **Junction detection mismatch between rounds** (per G4'.1b — only
+  applicable at calibration time and gate time when comparing two
+  polyline sets): vacuous with reason
+  `junction_detection_mismatch_between_rounds`.
 
-Per-letter vacuous-pass:
-- **Single-stroke letters** (b, l, W, m, N, v in the current corpus):
-  no stroke pairs to check; letter as a whole passes G4 with zero
-  per-junction rows reported.
-- **No detected junctions** (multi-stroke letter but all pairs
-  exceed epsilon): same effect; letter passes with zero rows.
+Letter-level vacuous-pass cases — **both valid, but reported
+differently in calibration output:**
+
+  (a) **Single-stroke letters** (b, l, W, m, N, v in the current
+  corpus): no stroke pairs to check; letter has no junctions by
+  construction. Calibration reports these as `no_pairs` (expected,
+  not anomalous).
+
+  (b) **Multi-stroke letters with zero detected junctions**
+  (multi-stroke decomposition but all consecutive pairs exceed ε):
+  the bake's stroke decomposition implies structural junctions exist,
+  but the detector didn't find them at the chosen ε. Calibration
+  reports these as `no_junctions_detected` (potentially anomalous;
+  surface as a flag for review).
+
+The case-(b) flag is diagnostic data, not a gate failure. If the
+current corpus shows ANY case-(b) at ε=15 px, surface that
+prominently in calibration output — it would indicate ε is
+mis-tuned, or that one of the multi-stroke letters has a non-junction
+stroke decomposition we didn't expect.
 
 ### G4'.7 — Carry-overs from original design
 
