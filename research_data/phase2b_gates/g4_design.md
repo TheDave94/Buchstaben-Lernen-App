@@ -11,6 +11,133 @@ verification procedure; safety margin).
 This doc covers ONLY the G4-specific design questions. Anything
 inherited from G1/G2/G3 is referenced rather than restated.
 
+**Design pivot 2026-05-23 (per David's Option A approval):** the
+original conformance-on-smooth-junctions design (sections G4.1–G4.12
+below) was empirically falsified by a pre-implementation diagnostic.
+The shipped corpus contains zero junctions with kink near 0° (no
+smooth pen-continuation pattern). The design was reframed as a
+drift-gate-on-all-junctions (sections G4'.1–G4'.7 below). The
+original sections are preserved as the design-hypothesis-that-needed-
+correction; the drift-gate sections supersede them.
+
+---
+
+## Diagnostic finding — conformance shape was empirically inapplicable; redesigned as drift gate
+
+A pre-implementation diagnostic enumerated every consecutive
+stroke-pair junction across HEAD's `strokes.json` corpus
+(letters with `len(strokes) ≥ 2`). For each detected pair, the
+diagnostic computed:
+- min endpoint distance across the four endpoint pairings
+  (first/first, first/last, last/first, last/last)
+- the per-junction kink (LSQ tangent direction on 5 cps post-skip-3
+  from each endpoint, oriented outward; kink_deg = |180° − angle
+  between outgoing tangents|)
+
+### Distance distribution
+
+| Min distance | Count |
+|---|---|
+| < 2 px | 11 (clearly end-to-end; D, G, L, R, U, h, k, u, Ü, F, B, q) |
+| < 5 px | 20 |
+| < 10 px | 26 |
+| < 20 px | 28 |
+| < 50 px | 29 |
+| ≥ 50 px | 1 (R 1-2 at 31.95 px — clearly not a junction) |
+
+**Natural gap: 10.85 → 31.95 px.** Setting `G4_JUNCTION_EPSILON_PX
+= 15 px` lands in this gap, catching all 28 plausible junctions and
+rejecting R 1-2 cleanly.
+
+### Kink distribution — design-falsifying
+
+The corpus's kink values cluster in three regimes, **with no
+cluster near 0°**:
+
+| Cluster | Kink range | Letters (consecutive-pair junctions) |
+|---|---|---|
+| **Corner** | 79.95° – 100° | B 0-1, P 0-1, K 1-2, R 0-1, E 0-1, F 0-1, D 0-1, L 0-1, J 0-1, G 1-2, k 1-2, G 0-1 |
+| **Wide corner / V** | 100° – 150° | G 0-1 (100°), z 0-1, z 1-2, R 1-2, A 0-1, Ä 0-1 |
+| **Point-meeting** | 167° – 180° | U, h, u, Ü, B 1-2, q, ä, Y, g, d, ü, a |
+
+**The smooth pen-continuation cluster (kink < 30° per G4.2's
+`G4_SMOOTH_JUNCTION_MAX`) is empty.** The classifier as designed
+would vacuous-pass every junction in the corpus — G4 would have no
+admit-set.
+
+### Why the design was wrong
+
+I had the kink-semantics backwards in the original design. Restated
+for the doc record:
+
+For point-meeting letters (U, u, h, g, d, q, etc.) where two strokes
+*terminate* at the meeting point:
+- Stroke A's outgoing tangent (toward A's interior) points UP-LEFT
+  (back toward A's start)
+- Stroke B's outgoing tangent (toward B's interior) points UP-RIGHT
+  (back toward B's start)
+- These two outgoing tangents are nearly PARALLEL → outgoing-outgoing
+  angle ≈ 0° → kink = |180° − 0°| = 180°
+
+This is geometrically *smooth* (the polyline-through-the-junction is
+one continuous curve, like the bottom of U), but the outgoing-outgoing
+convention makes kink ≈ 180° rather than 0°.
+
+A kink ≈ 0° would require one stroke ENDING at the junction and the
+other STARTING at the junction, with pen-flow continuing through.
+Primae's authored stroke decomposition doesn't have this pattern —
+pen-lifts are placed at structural intersections, and junctions are
+either corner T-junctions (kink ~90°) or point-meetings (kink ~180°).
+
+### Design pivot
+
+The conformance-gate-on-smooth-junctions shape (G4.1–G4.12) had no
+admit-set. The clean re-design:
+
+**G4 becomes a DRIFT gate** (per-junction property, candidate vs
+reference). Threshold: `|kink_candidate − kink_reference| ≤ margin`.
+Gate applies to ALL detected junctions regardless of geometric
+class. Polish-preservation prediction now reads as "junction kink is
+polish-stable" (the *value* is preserved, regardless of whether the
+junction is corner or point-meeting).
+
+This adds a third metric shape to the freeze-gate family:
+
+| Gate | Shape | Per | Comparison |
+|---|---|---|---|
+| G1 | Drift | per-stroke | Pearson ≥ threshold |
+| G2 | (Drift, not viable) | per-stroke | — |
+| G3 | Conformance | per-stroke | deviation ≤ threshold |
+| **G4 (revised)** | **Drift** | **per-junction** | **\|kink drift\| ≤ threshold** |
+
+### Methodology-chapter throughline
+
+This is the third instance of "design prediction empirically
+falsified or refined by data" in Phase 2b Track B:
+
+- **G2**: predicted turn-angle would be polish-stable; calibration
+  falsified the prediction; soft-V outcome documented.
+- **G3**: predicted max-only straightness classifier was adequate;
+  implementation falsified this; redesigned with combined max+p95
+  criterion; shipped.
+- **G4**: predicted a smooth pen-continuation junction class existed
+  in the corpus; pre-implementation diagnostic falsified this;
+  redesigned as drift gate (pending calibration).
+
+The pattern is: **design predictions are falsifiable claims tested
+against data**. Predictions are stated explicitly before
+implementation; data verifies or falsifies them; the design adapts.
+This is a thesis-chapter throughline; preserve in the methodology
+narrative.
+
+The G4 redesign also illustrates a process improvement: the
+pre-implementation diagnostic (a 50-line one-off Python script
+enumerating corpus junctions before any gate code) caught the
+falsification at design time rather than at calibration time, saving
+the cost of an implementation cycle. Worth establishing as a default
+for future gates: predict the data shape, verify with a diagnostic
+*before* design commitment.
+
 ---
 
 ## Corpus context (inherited)
@@ -93,6 +220,154 @@ falsifies the prediction. Calibration is set up to verify pairwise
 before threshold derivation (mirroring G3's procedure).
 
 ---
+
+## Drift-gate redesign (Option A — the operative design)
+
+The sections below (G4'.1–G4'.7) supersede the original G4.1–G4.12
+sections. The original sections are preserved verbatim further down
+as the design-hypothesis-that-needed-correction (mirrors G3 doc
+structure).
+
+### G4'.1 — Junction detection
+
+**`G4_JUNCTION_EPSILON_PX = 15`** (raster pixels on 1024² mask).
+Derived empirically from the diagnostic's distance distribution —
+sits in the natural gap between the corpus's actual junctions (max
+10.85 px) and the only obvious non-junction (R 1-2 at 31.95 px).
+May tune post-calibration if a future corpus addition lands in the
+gap, but the current corpus has clear separation.
+
+Junction detection iterates over every consecutive stroke pair
+(i, i+1) and checks the four endpoint pairings (first/first,
+first/last, last/first, last/last). The pairing with the minimum
+endpoint distance below the epsilon registers as the junction; that
+pairing's endpoints are used for the tangent computation in G4'.2.
+
+Strokes too short for tangent computation (fewer than
+`G4_ENDPOINT_SKIP + G4_TANGENT_WINDOW = 8` cps after resample) are
+filtered before pairing — primarily 1-cp diacritic dots.
+
+### G4'.2 — Per-junction kink
+
+Same primitives as the original design:
+- LSQ best-fit line through `G4_TANGENT_WINDOW = 5` cps after
+  `G4_ENDPOINT_SKIP = 3`, on each stroke at its junction endpoint
+- Tangent direction = LSQ principal axis, oriented OUTWARD from the
+  junction toward the stroke's interior
+- `outgoing_outgoing_angle` = angle between the two outgoing
+  tangents
+- **`kink_deg = |180° − outgoing_outgoing_angle|`**
+
+Semantics:
+- **0° = pen-continuation** (rare/absent in Primae; one stroke ends
+  at junction, the other starts; pen flows through)
+- **~90° = T-corner** (one stroke ends/starts, the other passes
+  through perpendicular)
+- **~120° = wide corner / V-shape** (apex-like meetings; A's apex
+  cluster)
+- **~180° = point-meeting** (two strokes terminate at the same point;
+  bottom-of-U pattern)
+
+Note: G4'.2's kink_deg is reported as a geometric descriptor (what
+KIND of junction the corpus has), not as the freeze-gate metric
+directly. The gate metric is the per-junction drift between rounds
+(G4'.3).
+
+### G4'.3 — Drift metric
+
+```
+kink_drift_deg = |kink_candidate − kink_reference|
+```
+
+Absolute value. Code-site comment notes that signed drift
+(`kink_candidate − kink_reference`) could be added later if
+calibration reveals asymmetric polish behavior (e.g., polish
+systematically flattens or sharpens junctions). For now, absolute
+drift captures "did the junction kink stay close to the reference?"
+without prejudging direction.
+
+Pass condition: `kink_drift_deg ≤ G4_KINK_DRIFT_THRESHOLD_DEG`.
+
+The threshold is derived empirically from polish-preservation
+calibration (G4'.5).
+
+### G4'.4 — Polish-preservation prediction
+
+**Prediction:** junction kink is polish-stable across rounds.
+
+**Why:** junctions are designed structural features. David's polish
+refines stroke geometry surrounding the junction — endpoint
+positions, smoothness of the curve approaching the junction — but
+doesn't intentionally rotate the junction itself. A 90°-corner stays
+90°; a point-meeting stays a point-meeting.
+
+**Empirical pattern predicted on the corpus:**
+- Per-junction `kink_drift_deg` values should be small (≤ a few
+  degrees) across all junctions in the corpus
+- If anything, round-2 kinks should be CLOSER to "intended"
+  geometric values than round-1 kinks (polish tightening junctions)
+
+**Soft-V trigger:** polish systematically changes kink substantially
+(e.g., `kink_drift_deg` > 10° on multiple junctions). That would
+falsify the prediction and trigger a soft-V outcome like G2.
+
+### G4'.5 — Threshold derivation
+
+If polish-preservation holds:
+```
+threshold = max(per-junction kink_drift_deg) + G4_SAFETY_MARGIN_DEG
+```
+
+Safety margin TBD post-calibration. Predict 1–3° range based on
+LSQ-tangent and arc-length-resample noise floor; verify empirically
+during calibration with the gap-finding pattern from G3.
+
+If polish-preservation fails (worsened ≥ preserved across the
+corpus): soft-V outcome. Document the finding; preserve
+implementation; do not derive threshold.
+
+### G4'.6 — Vacuous-pass conditions
+
+Per-junction vacuous-pass:
+- **No junction in the stroke pair** (endpoint distance > epsilon):
+  the pair isn't a junction; G4 doesn't apply.
+- **Insufficient measured points** (post-skip cp count < window): the
+  stroke is too short for a reliable tangent fit; vacuous.
+
+Per-letter vacuous-pass:
+- **Single-stroke letters** (b, l, W, m, N, v in the current corpus):
+  no stroke pairs to check; letter as a whole passes G4 with zero
+  per-junction rows reported.
+- **No detected junctions** (multi-stroke letter but all pairs
+  exceed epsilon): same effect; letter passes with zero rows.
+
+### G4'.7 — Carry-overs from original design
+
+Provisional answers to Q3-Q7 from the original Hold section all
+stand under the drift-gate reframe:
+
+- Q3 (LSQ tangent on 5 cps post-skip-3): unchanged
+- Q4 (outgoing-vs-outgoing convention, `kink_deg = |180° − angle|`):
+  unchanged; kink_deg semantics rewritten here to match data
+- Q5 (degrees external, radians internal): unchanged
+- Q6 (safety margin in degrees): unchanged in structure; value TBD
+  post-calibration
+- Q7 (per-junction iteration internal to `gate_g4`): unchanged
+
+The G4'.2 tangent-computation invariant ("compute LSQ tangent on the
+RESAMPLED polyline; do not refactor to fit on raw cps without
+re-deriving the threshold") gets a code-site comment mirroring the
+G1/G2/G3 resample-then-walk invariants.
+
+---
+
+## Original design hypothesis (preserved as design-hypothesis-that-needed-correction)
+
+The sections below (G4.1–G4.12) reflect the original conformance-on-
+smooth-junctions design that the pre-implementation diagnostic
+falsified. Preserved verbatim for the design-process record, per the
+G3 doc structure. The drift-gate redesign (G4'.1–G4'.7 above) is the
+operative design.
 
 ## G4-specific design
 
@@ -441,57 +716,42 @@ tune to admit known junctions.
 
 ---
 
-## Decisions summary
+## Decisions summary (post-pivot)
 
-| Section | Decision | Alternative |
+The operative design is the drift-gate redesign (G4'.1–G4'.7). The
+original conformance design (G4.1–G4.12) is preserved as a record
+of the design hypothesis that needed correction.
+
+| Section | Decision (post-pivot) | Notes |
 |---|---|---|
-| **G4.1** | Geometric junction detection via endpoint-distance ≤ G4_JUNCTION_EPSILON_PX (=2.0 px, may tune) | Manual per-letter config (brittle, spec retired) |
-| **G4.2** | Reference-based smooth/corner classifier; corner junctions vacuous via `not_applicable_corner_junction` (smooth_max = 30°) | No classifier (G4 forced on every junction; meaningless on corners) |
-| **G4.3** | LSQ best-fit line through K=5 junction-adjacent cps post endpoint-skip | First/last-segment-only direction (vulnerable to noise) |
-| **G4.4** | Outgoing-vs-outgoing angle; `tangent_delta = |180° - angle|` so smaller = smoother | Polyline-bend angle (equivalent but inverted; less spec-aligned) |
-| **G4.5** | Degrees | Radians |
-| **G4.6** | Vacuous: no-junction, corner-junction, insufficient-cps, 1-cp dots filtered before pairing | — |
-| **G4.7** | No mask (pure polyline) | — |
-| **G4.8** | Same shape as G3's calibration; pairwise round1/round2 deltas; max(round1, round2) + safety margin | — |
-| **G4.9** | `G4_SAFETY_MARGIN_DEG = 2.0°` (LSQ + resample noise floor) | 1° (too tight); empirical via calibration if needed |
-| **G4.10** | New code in `audit_invariants.py`; new `scripts/calibrate_g4_threshold.py`; new `scripts/tests/test_gate_g4.py`; per-junction iteration internal to `gate_g4`; minor `format_letter_human` extension for `per_junction` key | Per-junction iteration in `run_gates.py` (couples gate logic to driver) |
-| **G4.11** | Polish-preservation predicted; verified empirically; soft-V trigger if smooth junctions missing or polish increases delta | — |
-| **Structural** | Second **conformance gate** (sibling of G3); reuses drift/conformance taxonomy from `g3_design.md`; G4 is the first **per-junction** gate (vs G1/G2/G3 per-stroke) | — |
+| **G4'.1** | Junction detection via endpoint distance ≤ 15 px (empirically derived from diagnostic; sits in 10.85→31.95 px gap) | Replaces G4.1's `= 2.0 px`; tunable post-calibration if corpus changes |
+| **G4'.2** | Per-junction kink via LSQ on 5 cps post-skip-3, outgoing-vs-outgoing, `kink_deg = |180° − angle|` | Semantics re-stated: 0° = pen-continuation, ~90° = corner, ~180° = point-meeting |
+| **G4'.3** | Drift metric: `kink_drift_deg = |kink_cand − kink_ref|`; pass iff `kink_drift_deg ≤ threshold` | Replaces the G4.2/G4.4 conformance metric. Code-site comment notes signed-drift alternative for future |
+| **G4'.4** | Polish-preservation predicted (kink is a designed feature; polish refines surrounding geometry, not the junction itself) | Verified pairwise during calibration |
+| **G4'.5** | Threshold = max(per-junction kink_drift_deg) + safety margin (TBD post-calibration, predict 1–3°) | Replaces G4.8/G4.9 |
+| **G4'.6** | Vacuous: no-junction (epsilon), insufficient-cps, 1-cp dots filtered, single-stroke letters | Replaces G4.6 (drops `not_applicable_corner_junction` — all junctions gated) |
+| **G4'.7** | Carry-overs from G4.3, G4.5, G4.7 (mask-free), G4.10 (per-junction iteration internal to gate_g4) | Unchanged from original |
+| **Structural** | Third metric shape in the family: **drift gate on per-junction property**. Distinct from G1/G2 (drift, per-stroke) and G3 (conformance, per-stroke) | Documented in G3's drift/conformance taxonomy table, extended with G4 row |
 
 ---
 
-## Hold
+## Approved (post-pivot)
 
-Awaiting David's approval / redlines. No code, no commits beyond
-this docs commit until then.
+All eight Y/N questions approved 2026-05-23 with the Option A pivot
+to drift-gate-on-all-junctions:
 
-Open questions for explicit yes/no:
+- Q1 (junction detection): ε = 15 px per diagnostic
+- Q2 (smooth/corner classifier): **dropped** under Option A — all
+  detected junctions are gated by drift; no admit-set filter needed
+- Q3 (LSQ tangent on 5 cps post-skip-3): unchanged
+- Q4 (outgoing-vs-outgoing, `kink_deg = |180° − angle|`): unchanged
+  in math; semantics re-stated in G4'.2 to match data
+- Q5 (degrees external, radians internal): unchanged
+- Q6 (safety margin): structure unchanged; value TBD post-calibration
+- Q7 (per-junction iteration internal to gate_g4): unchanged
+- Q8 (smooth-junction-availability risk): **resolved by pre-
+  implementation diagnostic** that revealed the corpus has zero
+  smooth pen-continuation junctions. Design pivoted to drift gate
+  before any implementation cost.
 
-1. **G4.1** Geometric junction detection via endpoint distance ≤ 2 px
-   (tunable post-calibration)? **Y/N**
-2. **G4.2** Reference-based smooth-vs-corner classifier at 30°
-   boundary (tunable post-calibration); corner junctions vacuous?
-   **Y/N**
-3. **G4.3** LSQ best-fit line on K=5 junction-adjacent cps for
-   tangent? **Y/N**
-4. **G4.4** Outgoing-vs-outgoing angle, with
-   `tangent_delta = |180° - angle|` so smaller = smoother (matches
-   spec's "≤ 10°" semantics)? **Y/N**
-5. **G4.5** Degrees as threshold unit? **Y/N**
-6. **G4.9** `G4_SAFETY_MARGIN_DEG = 2.0°` (empirical via calibration
-   if noise floor differs)? **Y/N**
-7. **G4.10** Per-junction iteration internal to `gate_g4` (no
-   `GATE_METADATA` change beyond the new entry); minor
-   `format_letter_human` extension for `per_junction` key vs the
-   existing `per_stroke` key? **Y/N**
-8. **G4.11 / G4.12** Anything to flag before calibration runs?
-   Specifically: **is the smooth-junction-availability concern (Q1)
-   a stop-and-surface trigger before implementation, or proceed and
-   let calibration verify empirically?**
-
-The Q1 concern in G4.12 is the load-bearing risk: if the 2026-05-22
-corpus has zero smooth end-to-end junctions, G4 has no calibration
-data and the gate ships as future scaffolding only (G2-like
-outcome). Surface during calibration unless you'd prefer a
-pre-implementation diagnostic to verify smooth junctions exist
-before sinking implementation time.
+Implementation lands next.
