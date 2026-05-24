@@ -245,12 +245,18 @@ arc-length resample to N=100, post endpoint-skip of 3) and the
 best-fit straight line through those cps **≤ 2.05 px** (on the 1024²
 rasterization mask).
 
-G3 applies only to strokes classified STRAIGHT via a combined
+G3 applies only to strokes classified STRAIGHT via a three-part
 geometric criterion on the reference's per-segment turn-angle
-sequence: `max(|angle|) < π/12` AND `p95(|angle|) < 0.1` rad. Non-
-straight strokes (smooth curves, sharp corners, continuous-walk
-letters) vacuous-pass with reason `not_applicable_not_straight` and
-are gated by Threshold 4 (junctions, via G4) or by visual review.
+sequence: `max(|angle|) < π/12` AND `p95(|angle|) < 0.1` rad AND
+`|signed cumulative angle| < π/12` (the third criterion added
+2026-05-24 during G5 verification — catches smooth long curves
+that max+p95 admits because per-segment angles stay small at N=100
+resample but net direction change accumulates; see
+`g3_design.md` G3.1 "Refinement caught during G5 verification"
+subsection). Non-straight strokes (smooth curves, sharp corners,
+continuous-walk letters, smooth long curves) vacuous-pass with
+reason `not_applicable_not_straight` and are gated by Threshold 4
+(junctions, via G4) or by visual review.
 
 **Threshold calibration.** Derived 2026-05-23 against the 2026-05-22
 session-pair corpus (13 letters, 23 stroke pairs, 8 STRAIGHT-class)

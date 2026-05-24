@@ -251,6 +251,108 @@ re-derived. Code-site comments at the constants flag this.
 | W | 0 | 2.272 | 8.829 | 0.374 | **vacuous (both)** | continuous walk |
 | m | 0 | 2.394 | 12.389 | 0.433 | **vacuous (both)** | continuous walk |
 
+### Refinement caught during G5 verification (2026-05-24)
+
+The combined max+p95 criterion above was sufficient against the
+2026-05-22 calibration corpus (13 letters, 21 strokes). G5
+verification — which runs G3 across **all 59 letters** in the
+shipped corpus, not just the 13-letter calibration set — surfaced
+a deeper classifier hole: smooth long curves whose per-segment
+angles stay small but whose net direction change accumulates
+substantially.
+
+**Diagnostic finding (full-corpus signed-cumulative sweep,
+2026-05-24):**
+
+Three strokes wrongly admitted as STRAIGHT under max+p95:
+
+| Letter | Stroke | max\|a\| | p95\|a\| | \|signed_cum\| | Verdict (old) | dev_px | Actual shape |
+|---|---:|---:|---:|---:|---|---:|---|
+| Y | 0 | 0.119 | 0.081 | 0.528 (30.2°) | STRAIGHT ✗ | 24.05 | L-curve top-left → V vertex → stem bottom |
+| Y | 1 | 0.134 | 0.097 | 0.482 (27.6°) | STRAIGHT ✗ | 25.57 | L-curve top-right → V vertex → stem bottom |
+| g | 1 | 0.155 | 0.090 | 2.025 (116°) | STRAIGHT ✗ | 69.59 | Bowl + descender as one continuous swirl |
+
+Visual rendering of Y and g confirmed these are **correctly-
+drawn smooth-curve polylines** (not bake artifacts) that just
+happen to have continuous curvature exceeding what max+p95 can
+detect. At N=100 resample, smooth curves have per-segment angles
+of ~0.03–0.15 rad (below max threshold) and p95 ~0.08–0.10
+(below or at p95 threshold), but accumulate substantial net
+direction change.
+
+**Working criterion (three-part AND):**
+
+```
+is_straight = (max(|angle|) < G3_STRAIGHTNESS_MAX_ANGLE = π/12)
+              AND (p95(|angle|) < G3_STRAIGHTNESS_P95_ANGLE = 0.1)
+              AND (|signed_cum_angle| < G3_STRAIGHTNESS_SIGNED_CUM_RAD = π/12)
+```
+
+**Why signed (not unsigned) cumulative.** Signed cumulative
+measures *net direction change*; the polyline's start direction
+versus its end direction. For zero-mean noise (sub-pixel cp
+jitter on a truly straight polyline), signed angles cancel and
+the sum stays near zero. For sustained curvature (smooth arc),
+signed angles all have the same sign and accumulate.
+
+This property makes the criterion **N-invariant**: the signal
+(net direction change) doesn't depend on how finely we resample;
+only the cancellation property of zero-mean noise does. Unlike
+`G3_STRAIGHTNESS_P95_ANGLE` (which would re-scale if N changes
+because per-segment angle magnitudes scale with arc-length per
+segment), `G3_STRAIGHTNESS_SIGNED_CUM_RAD` does NOT need
+re-derivation if `G3_RESAMPLE_N` changes.
+
+**Empirical derivation of the threshold:**
+
+Full-corpus diagnostic (59 letters, 105 strokes total, 55
+STRAIGHT-classified under old criterion) showed:
+
+```
+... 51 strokes with |signed_cum| ≤ 0.045 rad (2.6°) ...
+ä s1:  |signed_cum| = 0.082 rad (4.7°)  STRAIGHT  dev=0.60 px  ✓
+──────────────────────────────────────────────────────────────
+[gap: 0.082 → 0.482 rad = 4.7° → 27.6°, 22.9° wide]
+──────────────────────────────────────────────────────────────
+Y s1:  |signed_cum| = 0.482 rad (27.6°)  ✗ (offending)
+Y s0:  |signed_cum| = 0.528 rad (30.2°)  ✗ (offending)
+g s1:  |signed_cum| = 2.025 rad (116°)   ✗ (offending)
+```
+
+The 22.9°-wide empirical gap places the cutoff. **Picked π/12 (15°)**:
+sits cleanly in the middle of the gap, matches the existing
+`G3_STRAIGHTNESS_MAX_ANGLE` constant value for codebase symmetry
+(the limit becomes "the stroke stays within 15° of straight,
+both locally per-segment AND cumulatively"), and any choice in
+the [0.082, 0.482] rad range filters exactly the same three
+offenders.
+
+**Calibration corpus check.** All 8 STRAIGHT-classified strokes
+in the 2026-05-22 calibration corpus have `|signed_cum| ≤ 0.023
+rad` (1.3°) — comfortably under π/12. The threshold of record
+(2.05 px) is unchanged: Y/g were previously wrongly admitted;
+they're now correctly vacuous as not-straight. No recalibration
+needed.
+
+**Eight-corner classification matrix** (each criterion is binary;
+the working corner is the all-pass case):
+
+| max < π/12 | p95 < 0.1 | \|signed_cum\| < π/12 | Outcome |
+|---|---|---|---|
+| ✓ | ✓ | ✓ | **STRAIGHT** (G3 applies) |
+| ✓ | ✓ | ✗ | Vacuous — smooth long curve (NEW; Y, g pattern) |
+| ✓ | ✗ | ✓ | Vacuous — sustained curvature (D 1 / bowl pattern) |
+| ✓ | ✗ | ✗ | Vacuous — sustained curvature AND smooth long |
+| ✗ | ✓ | ✓ | Vacuous — sharp local turn (v / Ä 2 pattern) |
+| ✗ | ✓ | ✗ | Vacuous — sharp turn AND smooth long |
+| ✗ | ✗ | ✓ | Vacuous — sharp turn AND sustained |
+| ✗ | ✗ | ✗ | Vacuous — fully cornered (W / m pattern) |
+
+All eight cases route through the same `not_applicable_not_straight`
+vacuous-pass reason; the result dict's `max_ref_angle`,
+`p95_ref_angle`, and `signed_cum_ref` fields preserve which
+criterion(ia) fired for diagnostic transparency.
+
 ### Finding — Primae's lowercase l has a foot/serif
 
 During G3 classifier verification, the lowercase l stroke in Primae was

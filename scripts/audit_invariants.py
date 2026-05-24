@@ -520,6 +520,14 @@ G3_STRAIGHTNESS_MAX_ANGLE = _math.pi / 12  # ≈15°, 0.262 rad
 # D s1's p95=0.101 in the 2026-05-22 corpus. If G3_RESAMPLE_N changes
 # from 100, this threshold must be re-derived.
 G3_STRAIGHTNESS_P95_ANGLE = 0.1  # ≈5.7°
+# Empirically derived 2026-05-24 against the full 59-letter corpus
+# during G5 verification. Sits in the 22.9°-wide gap between the last
+# well-behaved STRAIGHT stroke (ä s1 at 4.7°) and the first offender
+# (Y s1 at 27.6°). This criterion is N-invariant for the signal:
+# noise has zero mean (cancels at any N); smooth curvature accumulates
+# net direction change regardless of N. Unlike G3_STRAIGHTNESS_P95_ANGLE,
+# this constant does NOT require re-derivation if G3_RESAMPLE_N changes.
+G3_STRAIGHTNESS_SIGNED_CUM_RAD = _math.pi / 12  # ≈15°, 0.262 rad
 # Percentile of per-cp perpendicular deviations reported as the
 # stroke's deviation. Spec-aligned (BAKE_INVARIANTS.md §2 Threshold 3).
 G3_PERCENTILE = 95
@@ -563,18 +571,28 @@ def _perpendicular_deviation(poly_px: list[tuple[float, float]],
 
 def _stroke_angle_stats(poly_px: list[tuple[float, float]],
                           endpoint_skip: int = G3_ENDPOINT_SKIP
-                          ) -> tuple[float, float]:
-    """Return (max, p95) of |per-segment turn-angle| across the
-    polyline, with endpoint skip applied. Used by G3's combined
-    straightness classifier. Returns (0.0, 0.0) for polylines too
-    short to compute any angle."""
+                          ) -> tuple[float, float, float]:
+    """Return (max, p95, signed_cumulative) of per-segment turn-angles
+    across the polyline, with endpoint skip applied. Used by G3's
+    three-part straightness classifier. Returns (0.0, 0.0, 0.0) for
+    polylines too short to compute any angle.
+
+    - max, p95 are computed on |angle| (catch local sharp turns and
+      sustained per-segment curvature)
+    - signed_cumulative is the sum of signed angles (catches smooth
+      long curves where per-segment angles stay small but net
+      direction change accumulates — added 2026-05-24 during G5
+      verification)
+    """
     angles = _turn_angle_per_point(poly_px, endpoint_skip=endpoint_skip)
-    real = [abs(a) for a, ok in angles if ok]
-    if not real:
-        return 0.0, 0.0
-    max_a = max(real)
-    p95_a = float(np.percentile(real, 95))
-    return max_a, p95_a
+    real_signed = [a for a, ok in angles if ok]
+    if not real_signed:
+        return 0.0, 0.0, 0.0
+    real_abs = [abs(a) for a in real_signed]
+    max_a = max(real_abs)
+    p95_a = float(np.percentile(real_abs, 95))
+    signed_cum = float(sum(real_signed))
+    return max_a, p95_a, signed_cum
 
 
 def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
@@ -585,6 +603,7 @@ def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
                         n_min_measured: int = G3_MIN_MEASURED,
                         straightness_max: float = G3_STRAIGHTNESS_MAX_ANGLE,
                         straightness_p95: float = G3_STRAIGHTNESS_P95_ANGLE,
+                        straightness_signed_cum: float = G3_STRAIGHTNESS_SIGNED_CUM_RAD,
                         endpoint_skip: int = G3_ENDPOINT_SKIP,
                         percentile: float = G3_PERCENTILE
                         ) -> dict:
@@ -593,8 +612,8 @@ def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
 
     Returns a per-stroke result dict. Vacuous-pass reasons:
     not_applicable_too_short (1-cp), not_applicable_not_straight
-    (reference fails the combined max+p95 straightness criterion),
-    insufficient_measured_points (post-skip cp count below
+    (reference fails the combined max+p95+|signed_cum| straightness
+    criterion), insufficient_measured_points (post-skip cp count below
     n_min_measured).
     """
     n_cp_c = len(candidate_poly_rel)
@@ -604,6 +623,7 @@ def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
             "deviation_px": None,
             "max_ref_angle": None,
             "p95_ref_angle": None,
+            "signed_cum_ref": None,
             "n_measured": 0,
             "n_cp_candidate": n_cp_c,
             "n_cp_reference": n_cp_r,
@@ -621,16 +641,29 @@ def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
     cand_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in cand_rs]
     ref_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in ref_rs]
 
-    # Combined straightness check on the reference: pass straightness
-    # iff (max < straightness_max) AND (p95 < straightness_p95). The
-    # max check catches sharp corners; the p95 check catches sustained
-    # smooth curvature. Either failure → non-straight → G3 vacuous-pass.
-    max_ref_angle, p95_ref_angle = _stroke_angle_stats(ref_px, endpoint_skip)
-    if max_ref_angle >= straightness_max or p95_ref_angle >= straightness_p95:
+    # Three-part straightness check on the reference: pass iff all of:
+    #   (max < straightness_max)                — catches sharp corners
+    #   (p95 < straightness_p95)                — catches sustained
+    #                                             per-segment curvature
+    #   (|signed_cum| < straightness_signed_cum) — catches smooth long
+    #                                             curves whose net
+    #                                             direction change
+    #                                             accumulates (added
+    #                                             2026-05-24 during G5
+    #                                             verification)
+    # Any single failure → non-straight → G3 vacuous-pass. See
+    # g3_design.md G3.1 "Caveat caught during implementation" +
+    # "Refinement caught during G5 verification" subsections.
+    max_ref_angle, p95_ref_angle, signed_cum_ref = _stroke_angle_stats(
+        ref_px, endpoint_skip)
+    if (max_ref_angle >= straightness_max
+            or p95_ref_angle >= straightness_p95
+            or abs(signed_cum_ref) >= straightness_signed_cum):
         return {
             "deviation_px": None,
             "max_ref_angle": max_ref_angle,
             "p95_ref_angle": p95_ref_angle,
+            "signed_cum_ref": signed_cum_ref,
             "n_measured": 0,
             "n_cp_candidate": n_cp_c,
             "n_cp_reference": n_cp_r,
@@ -647,6 +680,7 @@ def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
             "deviation_px": None,
             "max_ref_angle": max_ref_angle,
             "p95_ref_angle": p95_ref_angle,
+            "signed_cum_ref": signed_cum_ref,
             "n_measured": len(cand_measured),
             "n_cp_candidate": n_cp_c,
             "n_cp_reference": n_cp_r,
@@ -660,6 +694,7 @@ def gate_g3_per_stroke(candidate_poly_rel: list[tuple[float, float]],
         "deviation_px": deviation_px,
         "max_ref_angle": max_ref_angle,
         "p95_ref_angle": p95_ref_angle,
+        "signed_cum_ref": signed_cum_ref,
         "n_measured": n_measured,
         "n_cp_candidate": n_cp_c,
         "n_cp_reference": n_cp_r,

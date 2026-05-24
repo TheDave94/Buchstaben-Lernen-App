@@ -225,3 +225,60 @@ the criterion.
 - Design: `research_data/phase2b_gates/g3_design.md`
 - Spec: `docs/BAKE_INVARIANTS.md` §2 Threshold 3 (updated in this
   commit with the derived threshold)
+
+---
+
+## Post-deployment refinement (2026-05-24)
+
+G5 verification (PR #1) deployed G3 to run against all 59 letters
+on every PR, not just the 13-letter calibration corpus. The
+verification PR's deliberate A violation was caught correctly, but
+the run also flagged three previously-unmeasured pre-existing
+strokes in the shipped corpus:
+
+- Y s0 (deviation 24.05 px) — left-arm-through-vertex L-curve
+- Y s1 (deviation 25.57 px) — right-arm-through-vertex L-curve
+- g s1 (deviation 69.59 px) — bowl + descender as one continuous stroke
+
+Visual rendering confirmed these are correctly-drawn smooth-curve
+polylines, not bake artifacts. The G3 max+p95 straightness
+classifier was admitting them as STRAIGHT because their per-
+segment angles fall under both thresholds (smooth curves at
+N=100 resample have small per-segment angles), but their
+cumulative net direction change is substantial.
+
+**Classifier refinement (see `g3_design.md` G3.1 "Refinement
+caught during G5 verification" subsection):** added a third
+criterion to the straightness check:
+
+```
+|signed_cumulative_angle| < G3_STRAIGHTNESS_SIGNED_CUM_RAD = π/12
+```
+
+Empirically derived from a full-corpus signed-cumulative sweep on
+2026-05-24. The 22.9°-wide gap between the last well-behaved
+STRAIGHT stroke (ä s1 at 4.7°) and the first offender (Y s1 at
+27.6°) places the cutoff unambiguously; π/12 sits in the middle
+of the gap. After the refinement: Y s0, Y s1, g s1 correctly
+vacuous as not-straight; G3 doesn't apply to them.
+
+**Calibration corpus check post-refinement.** All 8 STRAIGHT-
+classified strokes in the 2026-05-22 calibration corpus have
+`|signed_cum| ≤ 0.023 rad` (1.3°) — well under the new π/12
+threshold. They remain STRAIGHT after the refinement; no
+re-measurement of their deviations needed.
+
+**Threshold of record stays at 2.05 px.** Y/g were previously
+wrongly admitted; they're now correctly out-of-scope. The
+deviation threshold derived from the calibration corpus is
+unaffected.
+
+**Methodology continuity.** This is the fifth instance of
+design-prediction-meets-data in Phase 2b Track B (after G2's
+calibration falsification, G3's max-only-classifier
+falsification, G4's design pivot, and G4's mid-stroke-attachment
+scope discovery). Predicted max+p95 was adequate for the full
+corpus; G5 deployment-to-all-letters falsified the prediction;
+refined criterion derived from data. The
+"predict explicitly, verify empirically, refine when data
+falsifies" methodology now has five trail markers.

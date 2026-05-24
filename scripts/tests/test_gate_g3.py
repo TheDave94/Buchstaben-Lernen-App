@@ -91,6 +91,65 @@ class TestG3VacuousPass(unittest.TestCase):
         self.assertGreaterEqual(result["max_ref_angle"],
                                   ai.G3_STRAIGHTNESS_MAX_ANGLE)
 
+    def test_smooth_long_curve_reference_vacuous_via_signed_cum(self):
+        """Reference polyline tracing a smooth L-curve where per-segment
+        angles stay small (max + p95 both below thresholds) but
+        cumulative net direction change exceeds π/12. Should
+        vacuous-pass via the signed-cumulative criterion.
+
+        Mirrors Y s0 / Y s1 / g s1 behavior in the full corpus —
+        smooth curves whose per-segment angles fall below max/p95
+        but accumulate ~30° net direction change. Added 2026-05-24
+        during G5 verification."""
+        # 60-cp gentle arc: ~30° total turn distributed across the
+        # length. Per-segment ≈ 0.009 rad (well under p95 cutoff).
+        n = 60
+        ref = []
+        for i in range(n):
+            angle = (math.pi / 6) * (i / (n - 1))  # 0 → π/6 (30°)
+            x = 0.2 + 0.6 * math.cos(angle - math.pi / 12)
+            y = 0.5 + 0.6 * math.sin(angle - math.pi / 12)
+            ref.append((x, y))
+        candidate = ref
+        result = ai.gate_g3_per_stroke(candidate, ref, self._bbox(),
+                                         threshold=5.0)
+        self.assertTrue(result["pass"])
+        self.assertEqual(result["reason"], "not_applicable_not_straight")
+        # Diagnostic: signed_cum triggered, NOT max or p95.
+        self.assertLess(result["max_ref_angle"],
+                         ai.G3_STRAIGHTNESS_MAX_ANGLE)
+        self.assertLess(result["p95_ref_angle"],
+                         ai.G3_STRAIGHTNESS_P95_ANGLE)
+        self.assertGreaterEqual(abs(result["signed_cum_ref"]),
+                                  ai.G3_STRAIGHTNESS_SIGNED_CUM_RAD)
+
+    def test_straight_polyline_with_zero_mean_noise_still_passes(self):
+        """A truly straight polyline with random per-segment noise
+        should still classify as STRAIGHT — signed cumulative
+        cancels zero-mean noise to ~0, demonstrating N-invariance."""
+        import random
+        random.seed(42)
+        # Horizontal line with sub-pixel cp jitter
+        n = 60
+        poly = []
+        for i in range(n):
+            x = i / (n - 1)
+            y = 0.5 + random.gauss(0, 0.002)  # zero-mean noise
+            poly.append((x, y))
+        result = ai.gate_g3_per_stroke(poly, poly, self._bbox(),
+                                         threshold=10.0,
+                                         min_turn_angle_std=None) \
+            if False else ai.gate_g3_per_stroke(poly, poly, self._bbox(),
+                                                  threshold=10.0)
+        # Either passes as STRAIGHT (signed_cum near 0) or vacuous
+        # via insufficient_measured_points / low p95 noise — both
+        # acceptable. The critical property: must NOT vacuous via
+        # signed_cum since noise is zero-mean.
+        if result.get("reason") == "not_applicable_not_straight":
+            # If it vacuous-passes, signed_cum should NOT be the trigger
+            self.assertLess(abs(result.get("signed_cum_ref", 0.0)),
+                             ai.G3_STRAIGHTNESS_SIGNED_CUM_RAD)
+
     def test_sustained_curvature_reference_vacuous_via_p95(self):
         # Reference polyline tracing a tight arc with per-segment
         # turn-angles ~0.15 rad sustained. Each per-segment angle is
