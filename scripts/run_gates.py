@@ -132,6 +132,14 @@ GATE_METADATA: dict[str, dict] = {
         # Conformance gate: pass iff metric ≤ threshold.
         "comparison": "≤",
     },
+    "g4": {
+        "function_with_mask": None,
+        "function_without_mask": ai.gate_g4,
+        "needs_mask": False,
+        "title": "junction-tangent-kink drift from reference",
+        # Drift gate on per-junction property: pass iff drift ≤ threshold.
+        "comparison": "≤",
+    },
 }
 
 
@@ -178,6 +186,22 @@ def format_letter_human(result: dict) -> str:
     if "error" in result:
         return f"{letter:6s} ERROR: {result['error']}"
     parts = [f"{'✓' if result['pass'] else '✗'} {letter:4s}"]
+    # Drift-per-stroke (G1/G2) and conformance-per-stroke (G3) gates
+    # produce a `per_stroke` key. Drift-per-junction (G4) gates produce
+    # `per_junction` instead.
+    if "per_junction" in result:
+        if result.get("letter_reason"):
+            parts.append(f"({result['letter_reason']})")
+        for j in result["per_junction"]:
+            idx = f"s{j['stroke_i']}-s{j['stroke_j']}"
+            if j.get("reason"):
+                parts.append(f"{idx}: vacuous ({j['reason']})")
+            else:
+                mark = "✓" if j["pass"] else "✗"
+                parts.append(f"{idx}: {mark} drift={j['kink_drift_deg']:.2f}°"
+                             f" (ref={j['kink_ref_deg']:.1f}°"
+                             f" cand={j['kink_cand_deg']:.1f}°)")
+        return "  " + "  ".join(parts)
     for s in result["per_stroke"]:
         idx = s["stroke"]
         if s.get("reason"):

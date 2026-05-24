@@ -685,3 +685,299 @@ def gate_g3(candidate_strokes_rel: list[list[tuple[float, float]]],
         "n_strokes_reference": len(reference_strokes_rel),
         "pass": overall_pass,
     }
+
+
+# -----------------------------------------------------------------------------
+# G4 — Threshold 4 (junction-tangent-delta drift gate)
+# Design: research_data/phase2b_gates/g4_design.md (operative design is the
+# drift-gate redesign G4'.1–G4'.7; the original conformance design G4.1–G4.12
+# is preserved in the doc as the design-hypothesis-that-needed-correction).
+# -----------------------------------------------------------------------------
+
+G4_RESAMPLE_N = 100             # mirrors G1/G2/G3
+G4_ENDPOINT_SKIP = 3            # cps to skip from each endpoint
+G4_TANGENT_WINDOW = 5           # cps used for LSQ tangent fit
+# Junction-detection endpoint-distance threshold (raster px on 1024² mask).
+# Derived empirically from a pre-implementation diagnostic 2026-05-23: the
+# corpus's actual junctions all sit ≤ 10.85 px apart; the only obvious
+# non-junction (R 1-2) is at 31.95 px. 15 px sits in this gap. If
+# G4_RESAMPLE_N or the rendering scale changes, this must be re-derived.
+G4_JUNCTION_EPSILON_PX = 15.0
+# Placeholder threshold (degrees) for the kink_drift metric, pending
+# empirical derivation from calibration. Recorded in BAKE_INVARIANTS.md §2
+# Threshold 4 once the calibration commit lands.
+G4_DEFAULT_THRESHOLD_DEG = 0.0
+
+
+def _stroke_tangent_at_endpoint(poly_px: list[tuple[float, float]],
+                                  at_first: bool,
+                                  endpoint_skip: int = G4_ENDPOINT_SKIP,
+                                  window: int = G4_TANGENT_WINDOW
+                                  ) -> tuple[float, float] | None:
+    """Return a unit vector pointing OUTWARD from the named endpoint
+    toward the stroke interior, fit on `window` cps after
+    `endpoint_skip` from that end. Returns None if too few cps for a
+    reliable fit."""
+    n = len(poly_px)
+    if at_first:
+        start, end = endpoint_skip, endpoint_skip + window
+        endpoint_cp = poly_px[0]
+    else:
+        start, end = n - endpoint_skip - window, n - endpoint_skip
+        endpoint_cp = poly_px[-1]
+    if start < 0 or end > n or end - start < 2:
+        return None
+    window_cps = np.array(poly_px[start:end], dtype=float)
+    centroid = window_cps.mean(axis=0)
+    centered = window_cps - centroid
+    if np.allclose(centered, 0):
+        return None
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    direction = vh[0]
+    # Orient outward from endpoint toward window centroid.
+    outward = centroid - np.array(endpoint_cp, dtype=float)
+    if float(np.dot(direction, outward)) < 0:
+        direction = -direction
+    norm = float(np.linalg.norm(direction))
+    if norm < 1e-9:
+        return None
+    return (float(direction[0] / norm), float(direction[1] / norm))
+
+
+def _kink_deg(tangent_a: tuple[float, float] | None,
+                tangent_b: tuple[float, float] | None) -> float | None:
+    """Outgoing-vs-outgoing angle (in degrees), reported as
+    |180° − angle|. Semantics (see g4_design.md G4'.2):
+        0°   = pen-continuation (anti-parallel outgoing tangents)
+        ~90° = T-corner
+        ~180° = point-meeting (parallel outgoing tangents)
+    Returns None if either tangent is missing.
+    """
+    if tangent_a is None or tangent_b is None:
+        return None
+    import math
+    cosv = float(np.clip(tangent_a[0] * tangent_b[0]
+                           + tangent_a[1] * tangent_b[1], -1.0, 1.0))
+    angle_deg = math.degrees(math.acos(cosv))
+    return abs(180.0 - angle_deg)
+
+
+def _detect_junctions(strokes_rel: list[list[tuple[float, float]]],
+                       bbox: tuple[int, int, int, int],
+                       epsilon_px: float = G4_JUNCTION_EPSILON_PX,
+                       n_resample: int = G4_RESAMPLE_N,
+                       min_cps: int = G4_ENDPOINT_SKIP + G4_TANGENT_WINDOW
+                       ) -> list[dict]:
+    """Enumerate end-to-end junctions across consecutive stroke pairs
+    on the bbox-converted px-space polylines (post arc-length resample
+    to `n_resample`). For each consecutive pair (i, i+1), check the
+    four endpoint pairings; the minimum-distance pairing registers as
+    the junction if its distance is below `epsilon_px`.
+
+    Strokes with fewer than `min_cps` cps after resample are filtered
+    before pairing (filters 1-cp diacritic dots).
+
+    Returns a list of dicts: { i, j, pairing, dist_px, poly_a, poly_b,
+    a_first, b_first } where poly_a/poly_b are the resampled px-space
+    polylines and a_first/b_first are bool flags for which endpoint
+    of each stroke is at the junction.
+    """
+    import math
+    x_min, y_min, x_max, y_max = bbox
+    bw = max(1, x_max - x_min)
+    bh = max(1, y_max - y_min)
+    polylines_px: list[list[tuple[float, float]]] = []
+    for stroke in strokes_rel:
+        if len(stroke) < 2:
+            polylines_px.append([])
+            continue
+        rs = _arc_length_resample(stroke, n_resample)
+        polylines_px.append([(x_min + rx * bw, y_min + ry * bh)
+                              for rx, ry in rs])
+
+    junctions: list[dict] = []
+    for i in range(len(polylines_px) - 1):
+        a, b = polylines_px[i], polylines_px[i + 1]
+        if len(a) < min_cps or len(b) < min_cps:
+            continue
+        pairings = [
+            ("first", "first", a[0], b[0], True, True),
+            ("first", "last", a[0], b[-1], True, False),
+            ("last", "first", a[-1], b[0], False, True),
+            ("last", "last", a[-1], b[-1], False, False),
+        ]
+        best = min(pairings,
+                    key=lambda p: math.hypot(p[2][0] - p[3][0],
+                                              p[2][1] - p[3][1]))
+        la, lb, ea, eb, a_first, b_first = best
+        dist = math.hypot(ea[0] - eb[0], ea[1] - eb[1])
+        if dist > epsilon_px:
+            continue
+        junctions.append({
+            "i": i, "j": i + 1,
+            "pairing": f"{la}/{lb}",
+            "dist_px": dist,
+            "poly_a": a, "poly_b": b,
+            "a_first": a_first, "b_first": b_first,
+        })
+    return junctions
+
+
+def gate_g4_per_junction(cand_a_rel: list[tuple[float, float]],
+                          cand_b_rel: list[tuple[float, float]],
+                          ref_a_rel: list[tuple[float, float]],
+                          ref_b_rel: list[tuple[float, float]],
+                          bbox: tuple[int, int, int, int],
+                          threshold_deg: float,
+                          epsilon_px: float = G4_JUNCTION_EPSILON_PX,
+                          n_resample: int = G4_RESAMPLE_N,
+                          endpoint_skip: int = G4_ENDPOINT_SKIP,
+                          window: int = G4_TANGENT_WINDOW
+                          ) -> dict:
+    """Run G4 on a single (candidate, reference) stroke-pair junction.
+
+    Detects the junction on BOTH rounds; vacuous-passes if detection
+    status differs between them. Otherwise computes kink_deg on each
+    round and returns the absolute drift.
+
+    Returns a per-junction result dict with keys: kink_drift_deg,
+    kink_cand_deg, kink_ref_deg, pairing, dist_cand_px, dist_ref_px,
+    pass, reason?
+    """
+    import math
+    x_min, y_min, x_max, y_max = bbox
+    bw = max(1, x_max - x_min)
+    bh = max(1, y_max - y_min)
+    min_cps = endpoint_skip + window
+
+    def _detect_for_pair(a_rel, b_rel):
+        if len(a_rel) < 2 or len(b_rel) < 2:
+            return None
+        a_rs = _arc_length_resample(a_rel, n_resample)
+        b_rs = _arc_length_resample(b_rel, n_resample)
+        a_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in a_rs]
+        b_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in b_rs]
+        if len(a_px) < min_cps or len(b_px) < min_cps:
+            return None
+        pairings = [
+            ("first", "first", a_px[0], b_px[0], True, True),
+            ("first", "last", a_px[0], b_px[-1], True, False),
+            ("last", "first", a_px[-1], b_px[0], False, True),
+            ("last", "last", a_px[-1], b_px[-1], False, False),
+        ]
+        best = min(pairings,
+                    key=lambda p: math.hypot(p[2][0] - p[3][0],
+                                              p[2][1] - p[3][1]))
+        la, lb, ea, eb, a_first, b_first = best
+        dist = math.hypot(ea[0] - eb[0], ea[1] - eb[1])
+        if dist > epsilon_px:
+            return None
+        return {
+            "pairing": f"{la}/{lb}",
+            "dist_px": dist,
+            "a_px": a_px, "b_px": b_px,
+            "a_first": a_first, "b_first": b_first,
+        }
+
+    cand_det = _detect_for_pair(cand_a_rel, cand_b_rel)
+    ref_det = _detect_for_pair(ref_a_rel, ref_b_rel)
+    if cand_det is None and ref_det is None:
+        return {
+            "kink_drift_deg": None,
+            "kink_cand_deg": None, "kink_ref_deg": None,
+            "pairing": None,
+            "dist_cand_px": None, "dist_ref_px": None,
+            "pass": True,
+            "reason": "no_junction",
+        }
+    if cand_det is None or ref_det is None:
+        return {
+            "kink_drift_deg": None,
+            "kink_cand_deg": None, "kink_ref_deg": None,
+            "pairing": (ref_det or cand_det)["pairing"],
+            "dist_cand_px": cand_det["dist_px"] if cand_det else None,
+            "dist_ref_px": ref_det["dist_px"] if ref_det else None,
+            "pass": True,
+            "reason": "junction_detection_mismatch_between_rounds",
+        }
+
+    def _kink_for(det):
+        t_a = _stroke_tangent_at_endpoint(det["a_px"], det["a_first"])
+        t_b = _stroke_tangent_at_endpoint(det["b_px"], det["b_first"])
+        return _kink_deg(t_a, t_b)
+
+    kink_cand = _kink_for(cand_det)
+    kink_ref = _kink_for(ref_det)
+    if kink_cand is None or kink_ref is None:
+        return {
+            "kink_drift_deg": None,
+            "kink_cand_deg": kink_cand, "kink_ref_deg": kink_ref,
+            "pairing": ref_det["pairing"],
+            "dist_cand_px": cand_det["dist_px"],
+            "dist_ref_px": ref_det["dist_px"],
+            "pass": True,
+            "reason": "insufficient_measured_points",
+        }
+    # Drift metric: absolute. Signed-drift variant could distinguish
+    # polish that flattens vs sharpens junctions; not used here pending
+    # calibration evidence of asymmetric polish behavior.
+    drift = abs(kink_cand - kink_ref)
+    return {
+        "kink_drift_deg": drift,
+        "kink_cand_deg": kink_cand,
+        "kink_ref_deg": kink_ref,
+        "pairing": ref_det["pairing"],
+        "dist_cand_px": cand_det["dist_px"],
+        "dist_ref_px": ref_det["dist_px"],
+        "pass": drift <= threshold_deg,
+    }
+
+
+def gate_g4(candidate_strokes_rel: list[list[tuple[float, float]]],
+             reference_strokes_rel: list[list[tuple[float, float]]],
+             bbox: tuple[int, int, int, int],
+             threshold: float) -> dict:
+    """Run G4 on a candidate-vs-reference letter pair. Mask-free
+    (junction kink is a pure polyline property). Per-junction
+    iteration internal; iterates over consecutive stroke-pair
+    candidates and skips those that don't form a junction in EITHER
+    round (vs vacuous-passing each individually)."""
+    per_junction: list[dict] = []
+    n_pairs = min(len(candidate_strokes_rel), len(reference_strokes_rel))
+    for i in range(n_pairs - 1):
+        result = gate_g4_per_junction(
+            candidate_strokes_rel[i], candidate_strokes_rel[i + 1],
+            reference_strokes_rel[i], reference_strokes_rel[i + 1],
+            bbox, threshold)
+        # Skip "no_junction" cases entirely from per_junction output —
+        # they're not junctions, not vacuous-pass diagnostics worth
+        # reporting per-pair. (Surfaced at letter-level via
+        # n_pairs_checked vs len(per_junction).)
+        if result.get("reason") == "no_junction":
+            continue
+        result["stroke_i"] = i
+        result["stroke_j"] = i + 1
+        per_junction.append(result)
+    overall_pass = all(j["pass"] for j in per_junction)
+    real_drifts = [j["kink_drift_deg"] for j in per_junction
+                   if j["kink_drift_deg"] is not None]
+    letter_score = max(real_drifts) if real_drifts else None
+    # Letter-level classification per g4_design.md G4'.6:
+    # - no_pairs: single-stroke letter (< 2 strokes in reference)
+    # - no_junctions_detected: multi-stroke letter but zero detected
+    #   junctions (potentially anomalous; surface as flag)
+    if n_pairs < 2:
+        letter_reason = "no_pairs"
+    elif not per_junction:
+        letter_reason = "no_junctions_detected"
+    else:
+        letter_reason = None
+    return {
+        "per_junction": per_junction,
+        "letter_score": letter_score,
+        "n_strokes_candidate": len(candidate_strokes_rel),
+        "n_strokes_reference": len(reference_strokes_rel),
+        "n_pairs_checked": max(0, n_pairs - 1),
+        "letter_reason": letter_reason,
+        "pass": overall_pass,
+    }
