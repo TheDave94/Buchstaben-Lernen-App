@@ -41,7 +41,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install --quiet pillow numpy scipy fonttools
+        run: pip install --quiet pillow numpy scipy fonttools "scikit-image>=0.21"
 
       - name: G1 — asymmetry-profile drift from reference
         run: |
