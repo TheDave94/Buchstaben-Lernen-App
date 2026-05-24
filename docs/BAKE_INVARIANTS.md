@@ -153,9 +153,8 @@ meeting point.
   T-junction pre-compute (same commit). Both arms terminate on
   the same resolved pixel by construction. See APP_DOCUMENTATION.md
   §13.5.
-- *Not enforced (tangent alignment).* No tangent-delta computation
-  between connecting stroke pairs. Pending Phase 2b (Threshold 4
-  below).
+- *Tangent-kink drift enforced via G4* (post-calibration 2026-05-23).
+  See Threshold 4 below.
 
 ---
 
@@ -252,8 +251,7 @@ geometric criterion on the reference's per-segment turn-angle
 sequence: `max(|angle|) < π/12` AND `p95(|angle|) < 0.1` rad. Non-
 straight strokes (smooth curves, sharp corners, continuous-walk
 letters) vacuous-pass with reason `not_applicable_not_straight` and
-are gated by Threshold 4 (junctions, pending Phase 2b) or by visual
-review.
+are gated by Threshold 4 (junctions, via G4) or by visual review.
 
 **Threshold calibration.** Derived 2026-05-23 against the 2026-05-22
 session-pair corpus (13 letters, 23 stroke pairs, 8 STRAIGHT-class)
@@ -288,14 +286,64 @@ chapter discussion.
 
 ### Threshold 4 — End-to-end junction (Rule 4)
 
-For consecutive stroke pairs flagged end-to-end:
-- Endpoint pixel distance = 0
-- Tangent delta ≤ 10°
+Rule 4 has two parts. The endpoint-distance portion is enforced by
+construction; the tangent-kink-drift portion ships as G4.
 
-**Enforced by**
-- *Endpoint = 0*: construction (per-letter anchor cache, shared-apex
+**Endpoint pixel distance = 0** (enforced by construction). Per-
+letter anchor cache and shared-apex pre-compute ensure consecutive
+strokes flagged end-to-end share their meeting pixel exactly.
+
+**G4 — tangent-kink drift portion (enforced via gate_g4).** Drift
+of per-junction kink between candidate and reference **≤ 4.43°**.
+
+Per-junction kink is computed as the outgoing-vs-outgoing tangent
+angle (LSQ best-fit line through 5 junction-adjacent cps after
+endpoint-skip 3 on each stroke; oriented outward from the junction
+toward each stroke's interior), expressed as
+`kink_deg = |180° − outgoing_outgoing_angle|`. Semantics:
+- 0° = pen-continuation (rare/absent in Primae)
+- ~90° = T-corner
+- ~143° = apex / V-shape
+- ~178° = point-meeting
+
+Gate metric: `kink_drift_deg = |kink_candidate − kink_reference|`.
+Pass iff `kink_drift_deg ≤ 4.43°`.
+
+G4 applies to consecutive stroke pairs that form an end-to-end
+junction in BOTH candidate and reference, detected geometrically:
+the minimum-distance endpoint pairing across the four pairings
+(first/first, first/last, last/first, last/last) must be < 15 px on
+the 1024² mask.
+
+**Scope constraint discovered during calibration:** mid-stroke
+attachment junctions (where one stroke endpoint lies in another
+stroke's interior, e.g., lowercase p's bowl attaches mid-stem)
+classify as `no_junctions_detected` and are out of G4's scope. G4
+specifically gates end-to-end junctions per Rule 4. Mid-stroke
+attachment quality could be gated by a separate metric in future
+Phase 2c work; flagged for methodology-chapter discussion. See
+`research_data/phase2b_gates/g4_calibration_run.md` "Discovered
+scope constraint" section.
+
+**Threshold calibration.** Derived 2026-05-23 against the 2026-05-22
+session-pair corpus (13 letters; 5 detected end-to-end junctions —
+A, D, U, Ä, Ü) at HEAD `108c8d47`. Polish-preservation verified
+pairwise: all 5 junctions had kink drift ≤ 2.5° between rounds,
+with 2 junctions at exactly 0.00° and median 0.2°. Threshold =
+max(per-junction `kink_drift_deg`) + 2° safety margin = 2.43 + 2.0
+= 4.43°.
+
+The 2° safety margin accounts for LSQ-tangent fit uncertainty on
+5 cps + arc-length-resample noise. Self-comparison returns drift =
+0.00°, so the margin reflects gate-time PR-vs-HEAD measurement
+noise rather than corpus noise.
+
+**Enforced by:**
+- *Endpoint = 0*: construction (anchor cache, shared-apex
   pre-compute) — see Rule 4 above.
-- *Tangent ≤ 10°*: not currently enforced. Pending Phase 2b.
+- *Tangent-kink drift ≤ 4.43°*: `scripts/audit_invariants.py::gate_g4`
+  (CLI: `scripts/run_gates.py --gate g4`). Available for local use
+  and PR review; full CI enforcement pending Phase 2b Track B / G5.
 
 ### Threshold 5 — Y-junction continuity (Rule 4)
 
@@ -494,7 +542,7 @@ gameplay, keep this distinction in mind:
 | Threshold 2 — turn-angle-profile Pearson vs reference | **Not enforced** — pending Phase 2b / G2 |
 | Threshold 3 — straight ≤ 2.05 px (post-G3 calibration 2026-05-23) | **Available via gate_g3**; CI wiring pending G5 |
 | Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — pending future Phase 2b |
-| Threshold 4 — end-to-end tangent ≤ 10° | **Not enforced** — pending Phase 2b |
+| Threshold 4 — tangent-kink drift ≤ 4.43° (post-G4 calibration 2026-05-23) | **Available via gate_g4**; CI wiring pending G5 |
 | Threshold 5 — Y-junction gap = 0 px | Construction (T-junction pre-compute) |
 | Threshold 6 — determinism + b firewall + byte-identity vs HEAD | Automated (`scripts/verify_bake.sh`, manual / pre-commit) |
 
