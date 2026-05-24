@@ -39,7 +39,6 @@ import generate_strokes_auto as g  # noqa: E402
 REPO_ROOT = SCRIPT_DIR.parent
 LETTERS_DIR_DEFAULT = REPO_ROOT / "PrimaeNative" / "Resources" / "Letters"
 WORKTREE_SENTINEL = "WORKTREE"
-PRE_CALIBRATION_THRESHOLD = 0.98
 
 
 def folder_for(letter: str) -> str:
@@ -116,6 +115,7 @@ GATE_METADATA: dict[str, dict] = {
         "title": "asymmetry-profile drift from reference",
         # Drift gate: pass iff metric ≥ threshold.
         "comparison": "≥",
+        "default_threshold": ai.G1_DEFAULT_THRESHOLD,
     },
     "g2": {
         "function_with_mask": None,
@@ -123,6 +123,9 @@ GATE_METADATA: dict[str, dict] = {
         "needs_mask": False,
         "title": "turn-angle-profile drift from reference",
         "comparison": "≥",
+        # G2 is investigated-not-viable; not enforced. No default
+        # threshold; --threshold must be passed explicitly to run.
+        "default_threshold": None,
     },
     "g3": {
         "function_with_mask": None,
@@ -131,6 +134,7 @@ GATE_METADATA: dict[str, dict] = {
         "title": "perpendicular deviation on straight strokes",
         # Conformance gate: pass iff metric ≤ threshold.
         "comparison": "≤",
+        "default_threshold": ai.G3_DEFAULT_THRESHOLD,
     },
     "g4": {
         "function_with_mask": None,
@@ -139,6 +143,7 @@ GATE_METADATA: dict[str, dict] = {
         "title": "junction-tangent-kink drift from reference",
         # Drift gate on per-junction property: pass iff drift ≤ threshold.
         "comparison": "≤",
+        "default_threshold": ai.G4_DEFAULT_THRESHOLD_DEG,
     },
 }
 
@@ -235,16 +240,29 @@ def main(argv: list[str] | None = None) -> int:
                         help="Git ref for reference strokes.json (default: HEAD)")
     parser.add_argument("--weight", default="regular",
                         choices=list(g.FONTS.keys()))
-    parser.add_argument("--threshold", type=float,
-                        default=PRE_CALIBRATION_THRESHOLD,
-                        help=f"Pearson pass threshold "
-                             f"(default: {PRE_CALIBRATION_THRESHOLD} — "
-                             f"pre-calibration placeholder)")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="Pass threshold (overrides the gate's "
+                             "calibrated default). Each gate has a "
+                             "post-calibration default in "
+                             "GATE_METADATA; omit this flag to use it.")
     parser.add_argument("--letters-dir", type=Path,
                         default=LETTERS_DIR_DEFAULT)
     parser.add_argument("--json", action="store_true",
                         help="Emit machine-readable JSON instead of stdout report")
     args = parser.parse_args(argv)
+
+    # Resolve --threshold default from GATE_METADATA. If the gate
+    # has no calibrated default (G2: investigated-not-viable) and
+    # --threshold wasn't passed, fail loudly rather than running
+    # against a meaningless placeholder.
+    if args.threshold is None:
+        gate_default = GATE_METADATA[args.gate].get("default_threshold")
+        if gate_default is None:
+            print(f"Gate {args.gate} has no calibrated default threshold "
+                  f"(investigated-not-viable). Pass --threshold "
+                  f"explicitly to run it.", file=sys.stderr)
+            return 1
+        args.threshold = gate_default
 
     letters = args.letters or enumerate_letters(args.weight, args.letters_dir)
     if not letters:

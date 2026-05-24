@@ -199,10 +199,9 @@ Derived: `min = 0.2005` at letter `b` stroke 0 (closed-bowl polish).
 Full per-letter table + interpretation in
 `research_data/phase2b_gates/g1_calibration_run.md`.
 
-**Enforced by**: pending Phase 2b Track B / G5 — `scripts/run_gates.py
---gate g1` is the gate logic; once G5 wires the umbrella into CI,
-every PR modifying `strokes.json` will be auto-checked against
-the threshold pre-merge.
+**Enforced by**: `scripts/audit_invariants.py::gate_g1` (CLI:
+`scripts/run_gates.py --gate g1`), wired into CI as a PR merge-
+blocker via `.github/workflows/bake-gates.yml` (G5).
 
 ### Threshold 2 — Turn-angle-profile drift from reference (Rule 2)
 
@@ -272,8 +271,8 @@ umlaut-bake artifacts; pure A equivalents are well clear of the
 boundaries).
 
 **Enforced by**: `scripts/audit_invariants.py::gate_g3` (CLI:
-`scripts/run_gates.py --gate g3`). Available for local use and PR
-review; full CI enforcement pending Phase 2b Track B / G5.
+`scripts/run_gates.py --gate g3`), wired into CI as a PR merge-
+blocker via `.github/workflows/bake-gates.yml` (G5).
 
 **Curved portion (not yet enforced).** No straight runs ≥ 5
 consecutive points with cumulative turn-sum < 5°. Each stroke is
@@ -342,8 +341,8 @@ noise rather than corpus noise.
 - *Endpoint = 0*: construction (anchor cache, shared-apex
   pre-compute) — see Rule 4 above.
 - *Tangent-kink drift ≤ 4.43°*: `scripts/audit_invariants.py::gate_g4`
-  (CLI: `scripts/run_gates.py --gate g4`). Available for local use
-  and PR review; full CI enforcement pending Phase 2b Track B / G5.
+  (CLI: `scripts/run_gates.py --gate g4`), wired into CI as a PR
+  merge-blocker via `.github/workflows/bake-gates.yml` (G5).
 
 ### Threshold 5 — Y-junction continuity (Rule 4)
 
@@ -537,12 +536,12 @@ gameplay, keep this distinction in mind:
 | Rule 2 — shape matches reference | Visual review (§4) |
 | Rule 3 — stroke-type purity | Construction (`kind: line` vs `path` discriminator) |
 | Rule 4 — junction (endpoint sharing) | Construction (anchor cache, shared-apex / T-junction pre-compute) |
-| Rule 4 — junction (tangent alignment) | **Not enforced** — pending Phase 2b |
-| Threshold 1 — asymmetry-profile Pearson vs reference | **Not enforced** — pending Phase 2b / G1 |
-| Threshold 2 — turn-angle-profile Pearson vs reference | **Not enforced** — pending Phase 2b / G2 |
-| Threshold 3 — straight ≤ 2.05 px (post-G3 calibration 2026-05-23) | **Available via gate_g3**; CI wiring pending G5 |
+| Rule 4 — junction (tangent alignment) | Enforced via G4 (`bake-gates.yml`) |
+| Threshold 1 — asymmetry-profile Pearson vs reference ≥ 0.2005 (post-G1 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g1` |
+| Threshold 2 — turn-angle-profile Pearson vs reference | **Investigated 2026-05-23, not viable** as freeze-gate metric; implementation preserved (see `g2_calibration_run.md`) |
+| Threshold 3 — straight ≤ 2.05 px (post-G3 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g3` |
 | Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — pending future Phase 2b |
-| Threshold 4 — tangent-kink drift ≤ 4.43° (post-G4 calibration 2026-05-23) | **Available via gate_g4**; CI wiring pending G5 |
+| Threshold 4 — tangent-kink drift ≤ 4.43° (post-G4 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g4` |
 | Threshold 5 — Y-junction gap = 0 px | Construction (T-junction pre-compute) |
 | Threshold 6 — determinism + b firewall + byte-identity vs HEAD | Automated (`scripts/verify_bake.sh`, manual / pre-commit) |
 

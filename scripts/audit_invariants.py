@@ -161,6 +161,10 @@ G1_RESAMPLE_N = 100
 # short return vacuous pass with reason="insufficient_measured_points".
 G1_MIN_MEASURED = 10
 
+# Threshold of record, derived 2026-05-23 against the 2026-05-22 session-pair
+# corpus at HEAD d90a5cd8. See research_data/phase2b_gates/g1_calibration_run.md.
+G1_DEFAULT_THRESHOLD = 0.2005
+
 # Strokes whose asymmetry sequence std is below this floor are dominated
 # by sub-pixel rounding noise (typical of uniform-width stems like l, I).
 # Pearson on such sequences is meaningless. Vacuous-pass with
@@ -522,7 +526,10 @@ G3_PERCENTILE = 95
 # Placeholder threshold pending empirical derivation from calibration.
 # Recorded in BAKE_INVARIANTS.md §2 Threshold 3 once the calibration
 # commit lands.
-G3_DEFAULT_THRESHOLD = 0.0
+# Threshold of record (px on 1024² mask), derived 2026-05-23 against the
+# 2026-05-22 session-pair corpus at HEAD 3c890380. See
+# research_data/phase2b_gates/g3_calibration_run.md.
+G3_DEFAULT_THRESHOLD = 2.05
 
 
 def _perpendicular_deviation(poly_px: list[tuple[float, float]],
@@ -703,10 +710,10 @@ G4_TANGENT_WINDOW = 5           # cps used for LSQ tangent fit
 # non-junction (R 1-2) is at 31.95 px. 15 px sits in this gap. If
 # G4_RESAMPLE_N or the rendering scale changes, this must be re-derived.
 G4_JUNCTION_EPSILON_PX = 15.0
-# Placeholder threshold (degrees) for the kink_drift metric, pending
-# empirical derivation from calibration. Recorded in BAKE_INVARIANTS.md §2
-# Threshold 4 once the calibration commit lands.
-G4_DEFAULT_THRESHOLD_DEG = 0.0
+# Threshold of record (degrees), derived 2026-05-23 against the
+# 2026-05-22 session-pair corpus at HEAD 108c8d47. See
+# research_data/phase2b_gates/g4_calibration_run.md.
+G4_DEFAULT_THRESHOLD_DEG = 4.43
 
 
 def _stroke_tangent_at_endpoint(poly_px: list[tuple[float, float]],

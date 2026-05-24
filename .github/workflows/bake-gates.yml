@@ -1,0 +1,92 @@
+name: "Bake gates (G1/G3/G4)"
+
+# Phase 2b Track B operational closure (G5): runs the three calibrated
+# drift-from-reference gates as PR merge-blockers when strokes.json
+# files or gate code change. Design + rationale at
+# research_data/phase2b_gates/g5_design.md.
+#
+# G2 (turn-angle drift) is NOT invoked here — investigated 2026-05-23
+# and documented as not-viable; see g2_calibration_run.md.
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "PrimaeNative/Resources/Letters/Regular/**/strokes.json"
+      - "scripts/audit_invariants.py"
+      - "scripts/run_gates.py"
+      - ".github/workflows/bake-gates.yml"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  bake-gates:
+    name: "Bake gates (G1 / G3 / G4)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/main for reference comparison
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          git rev-parse origin/main
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install --quiet pillow numpy scipy fonttools
+
+      - name: G1 — asymmetry-profile drift from reference
+        run: |
+          python3 scripts/run_gates.py --gate g1 \
+            --reference-ref origin/main
+
+      - name: G1 — JSON output (artifact)
+        if: always()
+        run: |
+          python3 scripts/run_gates.py --gate g1 \
+            --reference-ref origin/main --json > g1.json \
+            || true  # JSON capture should not block on gate failure
+                     # (the gating step above already failed if needed)
+
+      - name: G3 — perpendicular deviation on straight strokes
+        run: |
+          python3 scripts/run_gates.py --gate g3 \
+            --reference-ref origin/main
+
+      - name: G3 — JSON output (artifact)
+        if: always()
+        run: |
+          python3 scripts/run_gates.py --gate g3 \
+            --reference-ref origin/main --json > g3.json \
+            || true
+
+      - name: G4 — junction-tangent-kink drift from reference
+        run: |
+          python3 scripts/run_gates.py --gate g4 \
+            --reference-ref origin/main
+
+      - name: G4 — JSON output (artifact)
+        if: always()
+        run: |
+          python3 scripts/run_gates.py --gate g4 \
+            --reference-ref origin/main --json > g4.json \
+            || true
+
+      - name: Upload gate JSON results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bake-gate-results
+          path: |
+            g1.json
+            g3.json
+            g4.json
+          if-no-files-found: warn
