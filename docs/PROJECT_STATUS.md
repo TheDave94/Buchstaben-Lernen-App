@@ -1,0 +1,365 @@
+# Project Status — Stocktake 2026-05-24
+
+Point-in-time audit of what's shipped, what's pending, and what's
+stale. Differs from `docs/ROADMAP.md` (forward planning, owner
+actions, effort estimates): this doc is the catch-up read after
+returning to the project with a fresh head. It reconciles
+committed documentation against today's reality, flags items
+that exist only in conversation memory, and lists the questions
+that can't be answered from docs alone.
+
+Run `git log --oneline` for the granular history; this is the
+narrative summary.
+
+---
+
+## 1. Shipped and operational
+
+### 1.1 App + infrastructure (already in `README.md`)
+
+- Full Primae rebrand (repo, Xcode project, bundle ID, every screen)
+- Dark-mode parity via Asset-Catalog colorsets (38 tokens; flip via
+  parent-area "Erscheinungsbild" picker)
+- VM God-object decomposition (D1a/b/c): VM down from 2350 → ~2030
+  lines
+- CoreML classifier-closure protocol seam (D3) with 7 pipeline tests
+- Spaced-retrieval scheduler (P1) + opt-in toggle
+- Phoneme audio infrastructure (P6) — toggle wired; recordings
+  pending (see 2.1)
+- Apple Pencil 2 squeeze wiring (U5) — code shipped; device
+  validation pending (see 2.2)
+- Two CI workflows: `ios-build.yml` (iPad sim + self-hosted MacBook)
+  and `bake-gates.yml` (new — see 1.3)
+
+### 1.2 Bake-pipeline lifecycle
+
+- **Druckschrift Regular = static artifacts** since commit `6a85811c`
+  (2026-05-15). All 59 letters in `Letters/Regular/` ship as
+  hand-calibrated `strokes.json` files. The bake pipeline at
+  `scripts/generate_strokes_auto.py` is retired for Regular —
+  preserved as scaffolding for Light template-warping and future
+  fonts. `LETTERS` dict + arm/joint primitives stay in place.
+- **Druckschrift Light** ships baked output for the 28 letters that
+  pass on Regular's tuning constants; failures silently fall back to
+  Regular polyline at runtime. Source: commit `dae2b3c0`.
+- **Skeleton + skeletonAdj baked into strokes.json** (Phase 1.5
+  per `STROKE_AUDIT.md`); Swift loader prefers baked.
+
+### 1.3 Phase 2b Track B — drift-from-reference gate set (COMPLETE)
+
+Operational closure of the bake-invariants gating story. All gate
+designs + calibration results live in
+`research_data/phase2b_gates/`.
+
+| Gate | Status | Commit | Threshold | Doc(s) |
+|---|---|---|---|---|
+| G1 (asymmetry-profile drift) | Enforced | `e00a0d8d` | Pearson ≥ 0.2005 | `g1_design.md`, `g1_calibration_run.md` |
+| G2 (turn-angle-profile drift) | Investigated, not viable | `a659b7f1` | n/a | `g2_design.md`, `g2_calibration_run.md` |
+| G3 (perpendicular deviation on straight strokes) | Enforced | `4f84afc7` + `c4c143b8` | deviation ≤ 2.05 px | `g3_design.md`, `g3_calibration_run.md` |
+| G4 (junction-tangent-kink drift) | Enforced | `cfc70a2d` | drift ≤ 4.43° | `g4_design.md`, `g4_calibration_run.md` |
+| G5 (CI wiring) | Operational | `e238ad63` | n/a | `g5_design.md`, `g5_verification.md` |
+
+The G5 verification PR (TheDave94/Primae#1, closed without merging
+2026-05-24) confirmed end-to-end operation. Two sidebar fixes
+landed during verification: scikit-image added to CI deps
+(`987b0bc5`), G3 classifier extended with a signed-cumulative
+criterion (`c4c143b8`) to filter smooth-long-curves that the
+max+p95-only classifier wrongly admitted.
+
+### 1.4 Calibration corpus
+
+`research_data/calibration_sessions/2026-05-22/` — 13 letters,
+38 (pre, post) polyline pairs across two batches. Drives all
+G1/G3/G4 thresholds. Versioning policy is append-only (per
+`research_data/README.md`); future sessions create new dated
+subfolders.
+
+---
+
+## 2. Active pending work
+
+All five items below are in `docs/ROADMAP.md` and accurately
+reflect actual state.
+
+### 2.1 P6 — Phoneme audio recordings (P1, thesis-blocking)
+
+- **What.** 90 recordings (30 letters × 3 takes) via ElevenLabs +
+  drop into `PrimaeNative/Resources/Letters/<base>/`.
+- **Why deferred.** Recording-time-bound (XL effort); needs
+  voice-direction work.
+- **Trigger to revisit.** Pure asset work, no device needed —
+  schedule whenever.
+
+### 2.2 U5 — Pencil 2 squeeze device validation (P3)
+
+- **What.** Real iPad with Pencil 2nd gen, confirm squeeze +
+  double-tap fire `replayAudio()`.
+- **Why deferred.** Code wired; needs physical hardware to
+  validate.
+- **Trigger to revisit.** Before any external thesis-reviewer
+  exposure.
+
+### 2.3 U10 — VoiceOver walkthrough (P3)
+
+- **What.** Real iPad with VoiceOver, walk every screen + Switch
+  Control + Dynamic Type stress.
+- **Why deferred.** Partial in-code audit shipped; device walkthrough
+  is the load-bearing part.
+- **Trigger to revisit.** Same as U5 — pre-external-review.
+
+### 2.4 D8 — Canvas redraw frequency profile (P3, post-thesis polish)
+
+- **What.** Instruments time-profile of a high-velocity guided
+  session.
+- **Why deferred.** No measured evidence of a problem.
+- **Trigger to revisit.** Real-classroom lag report or
+  device-test CI flagging a frame drop.
+
+### 2.5 F1–F10 — Post-thesis features
+
+Documented in `ROADMAP.md` §5. All gated on thesis ship.
+
+---
+
+## 3. Conversation-only items (NOT in committed docs)
+
+These exist only in this session's transcript or in
+`/root/.claude/projects/.../memory/`. They are the items most at
+risk of being lost when memory resets.
+
+### 3.1 "Track A" — never defined in any committed doc
+
+- **Where mentioned.** Earlier prompts this session referred to
+  "Track A (endpoint_trim bake fix)" as the work after Phase 2b
+  Track B. The user has since clarified (2026-05-24) that the
+  earlier prompt was a placeholder.
+- **What it is.** Undefined. The only "Track" letter in committed
+  docs is Track C (= corpus growth, per
+  `research_data/spec_decision/framing.md:176`).
+- **Why it matters.** I echoed the framing in my own summaries
+  ("Ready for the Track A prompt"). Future sessions could carry
+  the phantom framing forward. Either define Track A
+  substantively in a committed doc, or drop the term.
+
+### 3.2 "Phase 2c" — referenced once in g4_calibration_run.md
+
+- **Where.** `research_data/phase2b_gates/g4_calibration_run.md`
+  "Discovered scope constraint" section: "Mid-stroke attachment
+  quality could be gated by a separate metric in future Phase 2c
+  work."
+- **What it is.** A placeholder name for the next phase of
+  bake-invariant work, used to defer the mid-stroke attachment
+  junction case (lowercase p's bowl).
+- **Why it matters.** "Phase 2c" isn't defined anywhere — no
+  scope, owner, or trigger. If it's the right umbrella for
+  future post-Track-B work, it should get a brief scoping doc
+  next to `g{1..5}_design.md`. If not, the reference should be
+  rephrased ("future post-Phase-2b work" or specific issue
+  number).
+
+### 3.3 Lowercase `l` foot/serif — open design question
+
+- **Where.** `research_data/phase2b_gates/g3_design.md` G3.1
+  "Finding — Primae's lowercase l has a foot/serif" subsection.
+- **What it is.** During G3 implementation, lowercase l was
+  found to be L-shaped (vertical stem + foot/serif), not a
+  uniform straight stem. The doc flags an open question: "is
+  l's foot/serif intentional in Primae's lowercase l design?"
+  Surfaced for visual confirmation; not blocking.
+- **Why it matters.** If intentional, document it (so the next
+  contributor doesn't try to "fix" l). If unintentional,
+  separate investigation needed.
+- **Status.** Question never answered.
+
+### 3.4 Lowercase `g` stroke decomposition — confirmed-intentional
+
+- **Where.** `g3_calibration_run.md` "Post-deployment refinement"
+  and `g4_calibration_run.md` "Discovered scope constraint".
+- **What it is.** g s1 is the entire bowl + descender as one
+  continuous stroke; g s0 + s1 form a mid-stroke attachment
+  rather than an end-to-end junction.
+- **Status.** Visually confirmed correct during G5 verification
+  (2026-05-24). Documented as a "for David's eye" item; no
+  further action.
+
+### 3.5 Ä s1 / Ä s2 borderline G3 classifications
+
+- **Where.** `g3_calibration_run.md` "Borderline classifications"
+  section.
+- **What it is.** Ä's base diagonals classify just outside G3's
+  STRAIGHT class (Ä s1 p95=0.103 just over 0.100; Ä s2 max=0.290
+  just over π/12). Pure A's analogous strokes are well clear.
+  Indicates the composite-umlaut bake produces slightly different
+  geometry than pure A.
+- **Why it matters.** Flagged as "future-track-A composite-umlaut-
+  bake investigation" — but Track A is undefined. Either fold into
+  whatever Phase 2c becomes, or surface as a standalone issue.
+
+### 3.6 Memory-only / userMemories items
+
+`/root/.claude/projects/.../memory/MEMORY.md` carries 14 entries.
+Most are operational reflexes (CI-wait scope, commit-boundary
+hold, etc.) that don't translate to committed docs. The
+project-state entry (`project_phase2b_track_b_state.md`) is the
+only one carrying substantive project history; the contents of
+that entry are now reflected in this PROJECT_STATUS.md and in
+the per-gate calibration_run.md docs.
+
+---
+
+## 4. Stale documentation findings
+
+Fix these in a separate commit after David reviews this stocktake.
+
+### 4.1 `docs/ROADMAP.md` last-updated date
+
+- **What the doc says.** Header line 5: "Last updated 2026-05-14
+  against `main` (commit `6eb144d`). Only items still requiring
+  work appear here."
+- **What's actually true.** Last meaningful content update was
+  2026-05-14. Everything that's shipped since (Phase 2b Track B
+  G1-G5, dep fix, classifier refinement) is missing from the
+  "shipped this session" section.
+- **Fix.** Update the last-updated date and the "shipped this
+  session" bullet for the stroke geometry workstream to add
+  "Phase 2b Track B (G1/G3/G4 enforced, G2 investigated-not-
+  viable, G5 CI-wired)".
+
+### 4.2 `docs/ROADMAP.md` line 37 — curve workstream
+
+- **What the doc says.** "Open follow-up: Q-class topology (Q
+  a_l ä_l g_l q_l ü_l) and a curve workstream covering l (revisit)
+  + t f j r i + Y y ß."
+- **What's actually true.** Both items were superseded by SPEC-
+  VISUAL-APPROVAL adoption + bake retirement for Regular at
+  commit `6a85811c`. The bake pipeline no longer drives Regular
+  output; any "curve workstream" affecting Regular polylines
+  would happen through the calibrator, not the bake.
+- **Fix.** Either delete the line or replace with "Curve-workstream
+  bake improvements: applicable to future fonts (Light, Schreibschrift)
+  only; not part of Regular's shipping path post-`6a85811c`."
+
+### 4.3 `docs/BAKE_INVARIANTS.md` §6 header
+
+- **What the doc says.** "## 6. Enforcement tally — current state
+  (before Phase 2b)"
+- **What's actually true.** The body of the section reflects
+  post-Phase-2b-Track-B state (Thresholds 1/3/4 marked Enforced
+  via bake-gates.yml; Threshold 2 marked investigated-not-viable).
+  Header lags the body.
+- **Fix.** Rename header to "Enforcement tally — current state
+  (post-Phase 2b Track B, 2026-05-24)". Also update the closing
+  "Net." paragraph which still describes Phase 2b in future tense
+  ("Phase 2b ships Thresholds 1–4 as automated gates").
+
+### 4.4 `docs/STROKE_AUDIT.md` status note
+
+- **What the doc says.** "Still open / referenced from
+  `docs/ROADMAP.md`: Q-class topology... Curve workstream for
+  line-deferred letters."
+- **What's actually true.** Same as 4.2 — superseded by bake
+  retirement. The audit's open-items list is now moot.
+- **Fix.** Update the status header to note bake retirement
+  superseded the listed open items, OR delete the open-items
+  bullet.
+
+### 4.5 `docs/INVARIANTS.md`, `docs/STROKE_CALIBRATION.md`,
+       `docs/RENDERING.md` — status?
+
+- **What.** `BAKE_INVARIANTS.md` opening claims it "Replaces the
+  earlier split across `INVARIANTS.md`, `STROKE_CALIBRATION.md`,
+  and `RENDERING.md`. Those files remain in place until Phase 2b
+  ships the missing gates; this doc supersedes them once verified."
+- **What's actually true.** Phase 2b Track B has shipped. The
+  three older docs presumably should now be removed or marked
+  superseded.
+- **Fix.** Either delete the three files (commit history preserves
+  them) or add a "SUPERSEDED — see BAKE_INVARIANTS.md" header to
+  each. Verify the contents are fully captured in BAKE_INVARIANTS
+  before deleting.
+
+### 4.6 Phase 2b future-tense references throughout
+
+Several committed docs reference Phase 2b in future tense
+(BAKE_INVARIANTS.md §6 closing paragraph; `framing.md`
+mentions; some calibration-run docs mention "pending Phase 2b
+work" for the Threshold 3 curved-strokes portion). After Track B
+shipped, "future Phase 2b work" is ambiguous — is there a Track
+C of Phase 2b, or has Phase 2b ended? Worth picking one and
+sweeping references.
+
+---
+
+## 5. Open questions for David
+
+Items where status can't be determined from docs alone. Each
+needs your call before the project's "what's next" framing is
+solid.
+
+### 5.1 What's the post-Phase-2b-Track-B workstream?
+
+You've alluded to "Track A" (endpoint_trim bake fix) and "Track
+C" (corpus growth) in session, but the project's committed
+documentation doesn't define them. The ROADMAP's at-a-glance
+table after Phase 2b Track B's completion still lists P6 +
+U5 + U10 + D8 as "what's next" — which are accurate but mostly
+asset/device work, not engineering. Is the next engineering
+push:
+- (a) defined as Track A (endpoint_trim or other bake-pipeline
+  fix), with a scoping prompt forthcoming?
+- (b) thesis writing (the primae-thesis content/*.typ files are
+  KUG template stubs with placeholder italic prompts — no
+  actual prose yet)?
+- (c) corpus growth (Track C — collect more session pairs;
+  trigger conditions in framing.md §"Open question")?
+- (d) something else / TBD?
+
+### 5.2 Lowercase `l` foot/serif — intentional or not?
+
+Section 3.3 above. Cheap to resolve: a single yes/no answers it.
+Affects how future contributors handle l's geometry.
+
+### 5.3 "Phase 2c" — is that the right name?
+
+The g4_calibration_run.md uses "future Phase 2c work" as a
+placeholder for post-Track-B bake-invariant work. If yes, scope
+it briefly. If no, sweep the references.
+
+### 5.4 Are the three older bake docs (INVARIANTS, STROKE_CALIBRATION,
+       RENDERING) ready to delete?
+
+Section 4.5 above. Verify contents are captured in
+`BAKE_INVARIANTS.md`, then either delete or mark superseded.
+
+### 5.5 Calibration corpus growth — when?
+
+`framing.md` says ~50-100 session pairs would be needed before
+revisiting residual-model approaches. Current corpus has 38 pairs
+(13 letters). Growing the corpus is a multi-session activity
+that has to be slotted alongside thesis-blocking work. Worth
+deciding when to schedule the next iPad calibration session.
+
+---
+
+## 6. Files to read first when returning to this project
+
+In order, for a future-you (or successor contributor) returning
+cold:
+
+1. **`README.md`** — what the app does (10 min).
+2. **`CLAUDE.md`** — collaboration patterns + load-bearing docs +
+   architecture conventions (5 min).
+3. **This file (`docs/PROJECT_STATUS.md`)** — what shipped, what's
+   pending, what's stale.
+4. **`docs/ROADMAP.md`** — owner-action items, effort estimates,
+   citations per pending feature.
+5. **`docs/BAKE_INVARIANTS.md`** — the operative spec for the
+   shipped corpus and the gate set.
+6. **`research_data/phase2b_gates/README.md`** — gate set
+   navigation; jump to specific `g{N}_*.md` from there.
+7. **`docs/LESSONS.md`** — code-level invariants before touching
+   `AudioEngine.swift` / `StrokeTracker.swift` / `load(letter:)`.
+
+The thesis repo at `/opt/repos/primae-thesis/` is currently a
+KUG template with placeholder content; no thesis prose has
+started.
