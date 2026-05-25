@@ -202,19 +202,13 @@ the per-gate calibration_run.md docs.
 
 Fix these in a separate commit after David reviews this stocktake.
 
-### 4.1 `docs/ROADMAP.md` last-updated date
+### 4.1 `docs/ROADMAP.md` last-updated date — RESOLVED 2026-05-25
 
-- **What the doc says.** Header line 5: "Last updated 2026-05-14
-  against `main` (commit `6eb144d`). Only items still requiring
-  work appear here."
-- **What's actually true.** Last meaningful content update was
-  2026-05-14. Everything that's shipped since (Phase 2b Track B
-  G1-G5, dep fix, classifier refinement) is missing from the
-  "shipped this session" section.
-- **Fix.** Update the last-updated date and the "shipped this
-  session" bullet for the stroke geometry workstream to add
-  "Phase 2b Track B (G1/G3/G4 enforced, G2 investigated-not-
-  viable, G5 CI-wired)".
+Header date bumped to 2026-05-25 (commit `1f9f5a0`); stroke-
+geometry bullet at line 37 extended with Phase 2b Track B
+summary (G1/G3/G4 enforced, G2 investigated-not-viable, G5
+CI-wired). Curve-workstream "Open follow-up" sub-clause
+preserved for the §4.2 decision.
 
 ### 4.2 `docs/ROADMAP.md` line 37 — curve workstream
 
@@ -230,18 +224,15 @@ Fix these in a separate commit after David reviews this stocktake.
   bake improvements: applicable to future fonts (Light, Schreibschrift)
   only; not part of Regular's shipping path post-`6a85811c`."
 
-### 4.3 `docs/BAKE_INVARIANTS.md` §6 header
+### 4.3 `docs/BAKE_INVARIANTS.md` §6 header — RESOLVED 2026-05-25
 
-- **What the doc says.** "## 6. Enforcement tally — current state
-  (before Phase 2b)"
-- **What's actually true.** The body of the section reflects
-  post-Phase-2b-Track-B state (Thresholds 1/3/4 marked Enforced
-  via bake-gates.yml; Threshold 2 marked investigated-not-viable).
-  Header lags the body.
-- **Fix.** Rename header to "Enforcement tally — current state
-  (post-Phase 2b Track B, 2026-05-24)". Also update the closing
-  "Net." paragraph which still describes Phase 2b in future tense
-  ("Phase 2b ships Thresholds 1–4 as automated gates").
+Header renamed to "Enforcement tally — current state
+(post-Phase 2b Track B, 2026-05-24)". "Net." paragraph rewritten
+to past tense: Rules 1/2 measurement-backed via G1/G3/G4,
+enforcement floor names the live gates, Threshold 2 marked
+not-viable, Threshold 3-curved noted as the one pending gate.
+Other Phase-2b future-tense references throughout the doc
+remain pending the §4.6 sweep.
 
 ### 4.4 `docs/STROKE_AUDIT.md` status note
 

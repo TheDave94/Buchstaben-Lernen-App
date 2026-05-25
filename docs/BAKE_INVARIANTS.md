@@ -534,7 +534,7 @@ gameplay, keep this distinction in mind:
 
 ---
 
-## 6. Enforcement tally — current state (before Phase 2b)
+## 6. Enforcement tally — current state (post-Phase 2b Track B, 2026-05-24)
 
 | Rule / Threshold | Mechanism |
 |---|---|
@@ -555,18 +555,21 @@ gameplay, keep this distinction in mind:
 skeleton audit) are informational gauges, not ship gates.
 
 **Net.** Rules 1 and 2 are operationally defined under
-SPEC-VISUAL-APPROVAL (§0): the shipped corpus IS the reference, and
-visual review by the maintainer is the criterion. Rule 3 has
-construction-only enforcement. Rule 4 has construction-only
-endpoint sharing; tangent alignment pending. Only Threshold 6
-(determinism) is automated. Phase 2b ships Thresholds 1–4 as
-automated gates against the shipped reference AND lifts
-`verify_bake.sh` into CI (currently a manual / pre-commit guard).
-After Phase 2b, Rules 1 / 2 move from "visual-review only" to
-"measurement-backed visual review" (the gate detects drift from
-the approved reference); Rules 3 / 4 (tangent) move from
-"construction-only" to "construction + measurement"; and the
-automated enforcement floor becomes "every PR passes Thresholds 1,
-2, 3, 4, and 6 in CI before merge; Threshold 5 remains
-construction-enforced (by the T-junction pre-compute, which always
-writes the shared pixel)."
+SPEC-VISUAL-APPROVAL (§0): the shipped corpus IS the reference,
+and visual review by the maintainer is the criterion. After
+Phase 2b Track B (commits `e00a0d8d` G1 / `4f84afc7` G3 /
+`cfc70a2d` G4 / `e238ad63` G5, 2026-05-23/24), Rules 1 / 2 are
+measurement-backed visual review — G1, G3, G4 detect drift from
+the approved reference. Rule 3 has construction enforcement
+(`kind: line` vs `path` discriminator). Rule 4 has construction
+(endpoint sharing via the anchor cache + T-junction pre-compute)
+plus measurement (G4 tangent alignment). Threshold 6
+(determinism + b firewall + byte-identity) is automated via
+`scripts/verify_bake.sh`. The automated enforcement floor is:
+every PR passes G1, G3, G4, and Threshold 6 in CI
+(`bake-gates.yml`) before merge. Threshold 2 was investigated
+2026-05-23 and is not viable as a freeze-gate metric (preserved
+in code; see `g2_calibration_run.md`). Threshold 3-curved (no
+straight runs ≥ 5 cp with turn-sum < 5°) remains the one
+pending gate. Threshold 5 remains construction-enforced (by the
+T-junction pre-compute, which always writes the shared pixel).
