@@ -99,8 +99,10 @@ classifies as `no_junctions_detected`.**
 **Future work:** a separate gate could measure mid-stroke attachment
 quality (e.g., perpendicular distance from the attaching stroke's
 endpoint to the host stroke's medial axis, with a tolerance for
-measurement noise). Not in Phase 2b Track B scope; flagged for
-methodology-chapter discussion or future Phase 2c work.
+measurement noise). Not in Phase 2b Track B scope. Scoped as the
+**G6 workstream item in Phase 2c** — see
+`research_data/phase2b_gates/phase2c_design.md` for the design
+discussion + calibration plan.
 
 ## Polish-preservation verification
 

@@ -31,7 +31,10 @@
 >   optional `stop_at` parameter (a node whose edge to the loop entry
 >   is blocked) so the bowl-only loop terminates at the bowl/tail
 >   junction. Tracked forward in `docs/ROADMAP.md`.
-> - Resolver work for `Y y ß`. The curve workstream for `l t f j r i`
+> - Resolver work for `ß`. (Earlier revisions also listed `Y`
+>   and `y`; both are actually shipped in Light via the spec
+>   at `scripts/generate_strokes_auto.py` lines 450-478 —
+>   corrected 2026-05-25.) The curve workstream for `l t f j r i`
 >   noted in earlier revisions has been resolved (l confirmed
 >   intentional 2026-05-25; t/f/j/r ship via the same
 >   `smoothed_medial_axis` architecture; i shipped as the warmup).

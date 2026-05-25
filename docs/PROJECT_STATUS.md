@@ -132,37 +132,7 @@ These exist only in this session's transcript or in
 `/root/.claude/projects/.../memory/`. They are the items most at
 risk of being lost when memory resets.
 
-### 3.1 "Track A" — never defined in any committed doc
-
-- **Where mentioned.** Earlier prompts this session referred to
-  "Track A (endpoint_trim bake fix)" as the work after Phase 2b
-  Track B. The user has since clarified (2026-05-24) that the
-  earlier prompt was a placeholder.
-- **What it is.** Undefined. The only "Track" letter in committed
-  docs is Track C (= corpus growth, per
-  `research_data/spec_decision/framing.md:176`).
-- **Why it matters.** I echoed the framing in my own summaries
-  ("Ready for the Track A prompt"). Future sessions could carry
-  the phantom framing forward. Either define Track A
-  substantively in a committed doc, or drop the term.
-
-### 3.2 "Phase 2c" — referenced once in g4_calibration_run.md
-
-- **Where.** `research_data/phase2b_gates/g4_calibration_run.md`
-  "Discovered scope constraint" section: "Mid-stroke attachment
-  quality could be gated by a separate metric in future Phase 2c
-  work."
-- **What it is.** A placeholder name for the next phase of
-  bake-invariant work, used to defer the mid-stroke attachment
-  junction case (lowercase p's bowl).
-- **Why it matters.** "Phase 2c" isn't defined anywhere — no
-  scope, owner, or trigger. If it's the right umbrella for
-  future post-Track-B work, it should get a brief scoping doc
-  next to `g{1..5}_design.md`. If not, the reference should be
-  rephrased ("future post-Phase-2b work" or specific issue
-  number).
-
-### 3.3 Lowercase `g` stroke decomposition — confirmed-intentional
+### 3.1 Lowercase `g` stroke decomposition — confirmed-intentional
 
 - **Where.** `g3_calibration_run.md` "Post-deployment refinement"
   and `g4_calibration_run.md` "Discovered scope constraint".
@@ -173,7 +143,7 @@ risk of being lost when memory resets.
   (2026-05-24). Documented as a "for David's eye" item; no
   further action.
 
-### 3.4 Ä s1 / Ä s2 borderline G3 classifications
+### 3.2 Ä s1 / Ä s2 borderline G3 classifications
 
 - **Where.** `g3_calibration_run.md` "Borderline classifications"
   section.
@@ -182,11 +152,13 @@ risk of being lost when memory resets.
   just over π/12). Pure A's analogous strokes are well clear.
   Indicates the composite-umlaut bake produces slightly different
   geometry than pure A.
-- **Why it matters.** Flagged as "future-track-A composite-umlaut-
-  bake investigation" — but Track A is undefined. Either fold into
-  whatever Phase 2c becomes, or surface as a standalone issue.
+- **Status.** Scoped 2026-05-25 as the **composite-umlaut
+  investigation sub-item in Phase 2c**, see
+  `research_data/phase2b_gates/phase2c_design.md`. The
+  investigation determines fix-and-ship vs document-and-defer
+  per root cause.
 
-### 3.5 Memory-only / userMemories items
+### 3.3 Memory-only / userMemories items
 
 `/root/.claude/projects/.../memory/MEMORY.md` carries 14 entries.
 Most are operational reflexes (CI-wait scope, commit-boundary
@@ -286,27 +258,38 @@ solid.
 
 ### 5.1 What's the post-Phase-2b-Track-B workstream?
 
-You've alluded to "Track A" (endpoint_trim bake fix) and "Track
-C" (corpus growth) in session, but the project's committed
-documentation doesn't define them. The ROADMAP's at-a-glance
-table after Phase 2b Track B's completion still lists P6 +
-U5 + U10 + D8 as "what's next" — which are accurate but mostly
-asset/device work, not engineering. Is the next engineering
-push:
-- (a) defined as Track A (endpoint_trim or other bake-pipeline
-  fix), with a scoping prompt forthcoming?
-- (b) thesis writing (the primae-thesis content/*.typ files are
-  KUG template stubs with placeholder italic prompts — no
-  actual prose yet)?
+The ROADMAP's at-a-glance table after Phase 2b Track B's
+completion still lists P6 + U5 + U10 + D8 as "what's next" —
+accurate but mostly asset/device work, not engineering. As of
+2026-05-25 the engineering-push options are:
+- (a) **Phase 2c** (defined in
+  `research_data/phase2b_gates/phase2c_design.md`): G6
+  mid-stroke attachment gate + G3-curved + composite-umlaut
+  investigation. Methodology-relevant gate-coverage gap
+  closure. Pre-thesis or post-thesis is your call — the
+  methodology chapter narrates either way (see
+  phase2c_design.md "Methodology-chapter framing").
+- (b) thesis writing (the primae-thesis content/*.typ files
+  are KUG template stubs with placeholder italic prompts —
+  no actual prose yet).
 - (c) corpus growth (Track C — collect more session pairs;
-  trigger conditions in framing.md §"Open question")?
-- (d) something else / TBD?
+  trigger conditions in framing.md §"Open question").
+- (d) something else / TBD.
 
-### 5.2 "Phase 2c" — is that the right name?
+"Track A" (endpoint_trim bake fix) was a placeholder term used
+in earlier session prompts; deprecated 2026-05-25 since
+Phase 2c is now defined and the "Track A" term was never given
+substantive content.
 
-The g4_calibration_run.md uses "future Phase 2c work" as a
-placeholder for post-Track-B bake-invariant work. If yes, scope
-it briefly. If no, sweep the references.
+### 5.2 "Phase 2c" — is that the right name? — RESOLVED 2026-05-25
+
+Yes — defined as the gate-coverage gap-closure umbrella in
+`research_data/phase2b_gates/phase2c_design.md`. Scope: G6
+mid-stroke attachment gate + G3-curved + composite-umlaut
+investigation. Explicit out-of-scope items (Q-class bake
+topology, ß resolver, `verify_bake.sh` CI lift, G5.5 merge-base
+switch) each tracked separately. All "Phase 2c" placeholder
+references swept to point at the design doc.
 
 ### 5.3 Calibration corpus growth — when?
 

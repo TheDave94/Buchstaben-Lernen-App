@@ -148,7 +148,8 @@ anchor GUI, not in the bake.
   accidentally become a curve; they are different code paths.
 - *Measurement (straight strokes only).* Perpendicular-deviation
   on straight strokes enforced via G3 (Threshold 3 below).
-  Curved-strokes portion remains post-Phase-2b future work.
+  Curved-strokes portion is scoped as the G3-curved workstream
+  item in Phase 2c (`research_data/phase2b_gates/phase2c_design.md`).
 
 > *Note: construction enforces type-LABEL purity — a line stroke
 > can't become a curve at the data-model level. Visual purity (a
@@ -306,8 +307,9 @@ flagged `'straight'` or `'curved'` in the `LETTERS` spec.
 
 This curved-stroke check is not yet implemented; it would be a
 separate gate from G3, which addresses only the straight-strokes
-portion of Rule 3. Pending post-Phase-2b future work or
-methodology-chapter discussion.
+portion of Rule 3. Scoped as the **G3-curved workstream item in
+Phase 2c** — see
+`research_data/phase2b_gates/phase2c_design.md`.
 
 ### Threshold 4 — End-to-end junction (Rule 4)
 
@@ -345,10 +347,11 @@ attachment junctions (where one stroke endpoint lies in another
 stroke's interior, e.g., lowercase p's bowl attaches mid-stem)
 classify as `no_junctions_detected` and are out of G4's scope. G4
 specifically gates end-to-end junctions per Rule 4. Mid-stroke
-attachment quality could be gated by a separate metric in future
-Phase 2c work; flagged for methodology-chapter discussion. See
-`research_data/phase2b_gates/g4_calibration_run.md` "Discovered
-scope constraint" section.
+attachment quality is scoped as the **G6 workstream item in
+Phase 2c** — see `research_data/phase2b_gates/phase2c_design.md`
+for the design discussion + calibration plan, and
+`g4_calibration_run.md` "Discovered scope constraint" section for
+the original characterization.
 
 **Threshold calibration.** Derived 2026-05-23 against the 2026-05-22
 session-pair corpus (13 letters; 5 detected end-to-end junctions —
@@ -567,7 +570,7 @@ gameplay, keep this distinction in mind:
 | Threshold 1 — asymmetry-profile Pearson vs reference ≥ 0.2005 (post-G1 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g1` |
 | Threshold 2 — turn-angle-profile Pearson vs reference | **Investigated 2026-05-23, not viable** as freeze-gate metric; implementation preserved (see `g2_calibration_run.md`) |
 | Threshold 3 — straight ≤ 2.05 px (post-G3 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g3` |
-| Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — pending post-Phase-2b future work |
+| Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — scoped as G3-curved in Phase 2c (`phase2c_design.md`) |
 | Threshold 4 — tangent-kink drift ≤ 4.43° (post-G4 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g4` |
 | Threshold 5 — Y-junction gap = 0 px | Construction (T-junction pre-compute) |
 | Threshold 6 — determinism + b firewall + byte-identity vs HEAD | Automated (`scripts/verify_bake.sh`, manual / pre-commit) |

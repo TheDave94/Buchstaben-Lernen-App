@@ -25,3 +25,11 @@ that updates `BAKE_INVARIANTS.md` with the derived threshold.
   threshold, corpus state SHA.
 
 G2-G5 design + calibration docs land here as each gate ships.
+
+`phase2c_design.md` scopes the gate-coverage gaps that Track B
+identified but did not close (G6 mid-stroke attachment, G3-curved,
+composite-umlaut investigation). It defines what "Phase 2c"
+means after the term had been used as an undefined forward-pointer
+in `g4_calibration_run.md` and `BAKE_INVARIANTS.md`. Per-gate
+design + calibration docs (`g6_design.md`,
+`g3_curved_design.md`, etc.) land here as Phase 2c items ship.

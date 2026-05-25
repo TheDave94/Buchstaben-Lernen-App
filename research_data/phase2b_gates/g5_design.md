@@ -112,7 +112,8 @@ that landed after branching. For a single-maintainer thesis project
 with simple workflow and infrequent main rebases, `origin/main` HEAD
 is simpler. If main is frequently rebased and the PR's gate
 behavior depends on which version of main it's compared against,
-switch to merge-base in a future Phase 2c iteration.
+switch to merge-base in a future G5 iteration. (Explicitly out of
+scope for Phase 2c — see `phase2c_design.md` Scope table.)
 
 ### G5.5 — Letter scope: all letters on disk
 

@@ -109,9 +109,11 @@ on Ä's base diagonals that pure A doesn't have**.
 admit Ä s1 would be fitting to one borderline case — exactly the kind
 of fitting-to-data the calibration methodology is supposed to avoid.
 
-**Future-track-A item:** investigate why the composite-umlaut bake at
-`scripts/generate_strokes_auto.py::bake_composite` produces
-geometrically different base diagonals from pure A. Not blocking G3.
+**Phase 2c composite-umlaut investigation sub-item:** investigate why
+the composite-umlaut bake at `scripts/generate_strokes_auto.py::bake_composite`
+produces geometrically different base diagonals from pure A. Scoped
+as a tier-2 sub-item (investigation, not gate design) in
+`research_data/phase2b_gates/phase2c_design.md`. Not blocking G3.
 
 ## Polish-preservation verification
 
