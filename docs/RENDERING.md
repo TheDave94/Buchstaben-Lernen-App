@@ -1,5 +1,19 @@
 # Rendering model
 
+> **SUPERSEDED 2026-05-25 — see `docs/BAKE_INVARIANTS.md` §5
+> (Rendering model).** The substantive content (polyline =
+> pen centerline, bbox-relative, size/instrument/width-agnostic;
+> renderer responsibilities; scoring split; calibrator vs
+> gameplay distinction) has been carried forward verbatim into
+> BAKE_INVARIANTS.md §5.1–§5.5. The "Open questions for renderer
+> implementation" section at the end of this file was migrated
+> to `docs/ROADMAP.md` §4 (Technical Debt) on 2026-05-25; all
+> four questions are still open as of the migration date.
+> This file is preserved as a historical reference; consult
+> BAKE_INVARIANTS.md §5 for the operative spec.
+
+---
+
 ## Core principle
 
 The letter polyline (in `PrimaeNative/Resources/Letters/<L>/strokes.json`)

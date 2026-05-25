@@ -1,5 +1,44 @@
 # Stroke Calibration — six-rule pass/fail spec
 
+> **SUPERSEDED 2026-05-25 — see `docs/BAKE_INVARIANTS.md` §2
+> (Measurable acceptance thresholds) and §4 (Visual-review
+> cadence).** This file is preserved as the pre-Phase-2b
+> calibration spec for historical reference; the rule numbering
+> and several threshold values below contradict the current
+> Phase-2b-Track-B state (G1 / G3 / G4 use drift-from-reference
+> Pearson + perpendicular-deviation + tangent-kink drift against
+> a static HEAD reference, not the absolute thresholds listed
+> below). Do not rely on the threshold values in this file.
+>
+> **80%-margin disposition.** The 80%-margin rule (autonomous-
+> ship requires all metrics ≤ 80% of threshold) does NOT carry
+> forward in current form. The pre-Phase-2b design treated each
+> rule as a single pass/fail threshold; the 80% rule encoded a
+> confidence margin within that flat structure. Phase 2b Track B
+> replaced this with per-gate noise-floor margins built into the
+> gate thresholds themselves (G3: +1.0 px rasterization noise;
+> G4: +2.0° LSQ + resample noise; G1: no noise floor since the
+> reference is static).
+>
+> These gate-level margins encode "don't false-positive on
+> measurement noise" rather than "candidate must be comfortably
+> better than the worst observation." The two concepts are
+> different and not interchangeable. If a tiered autonomous-ship
+> workflow is reintroduced post-thesis, the high-confidence tier
+> would need per-gate re-derivation using each gate's actual
+> corpus observations (G1: candidate ≥ corpus lowest non-vacuous
+> Pearson; G3: candidate ≤ corpus max non-vacuous deviation; G4:
+> candidate ≤ corpus max kink drift) — see
+> `research_data/phase2b_gates/g{1,3,4}_calibration_run.md` for
+> current corpus values.
+>
+> For methodology-chapter purposes: the move from flat-threshold
+> to drift-from-reference framing changed the safety story
+> qualitatively, not just quantitatively. Worth flagging as a
+> design-pattern observation.
+
+---
+
 A candidate polyline ships only if it passes all six rules. **Auto-reject any candidate that fails any rule.** If a candidate passes calibration but the visual still looks wrong, the calibration is incomplete — flag and propose a new rule before iterating further.
 
 ## Rule 1 — Centerline location

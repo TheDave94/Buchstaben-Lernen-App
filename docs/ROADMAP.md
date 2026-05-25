@@ -124,6 +124,22 @@ If any of those fails on device, the fix is a tweak in `Coordinator.pencilIntera
 
 ---
 
+### D9 — Renderer architecture open questions
+**Effort:** M (design + impl) · **Priority:** P3
+
+Carried forward from the superseded `docs/RENDERING.md` "Open questions for renderer implementation" section (2026-05-25 migration). Four polish-tier renderer-architecture questions, none answered in code today:
+
+1. **Default display band width + finger/pencil scaling logic.** `TracingCanvasView` uses hardcoded `lineWidth` values per layer (6 / 8 / 12 / 14) and modulates pencil ink via `8 + pressure * 14`; there's no finger/pencil mode switch for the display band itself, and no scaling logic relating display-band width to letter render size. Decide: smooth crossfade vs hard switch on input-device detection.
+2. **Mid-stroke device change support.** Touch type is read at touch-down and not re-evaluated mid-stroke. Decide whether to detect (and how to handle: re-style mid-stroke, ignore, snap to one or the other).
+3. **Pencil scoring tolerance band tuning.** `StrokeTracker` uses `checkpointRadius * radiusMultiplier` for difficulty adaptation; there's no pencil-vs-finger tolerance split. RENDERING.md suggested starting at 50% of the display band's half-width — needs derivation against real device data.
+4. **Glyph fade-out vs persistent visibility during tracing.** Typical learn-to-write apps fade the display glyph as the child traces over it; Primae currently keeps it persistent. Decide based on classroom observation / pedagogy literature.
+
+**Why deferred.** Polish-tier UX questions; current rendering is functional. None of these blocks the thesis.
+
+**Trigger to revisit.** Post-thesis F1 (App Store readiness) is a natural moment to revisit display-band tuning. The other three can wait for classroom-data evidence.
+
+---
+
 ## 5. POST-THESIS
 
 These are worthwhile additions once the thesis ships. None of them is a thesis-blocker.

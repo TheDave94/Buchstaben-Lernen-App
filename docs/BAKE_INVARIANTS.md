@@ -107,6 +107,19 @@ below).
   tracking polylines as a starting point; the calibrator refines
   them. Documented for context, not enforcement.
 
+**Construction invariant — inner-counter framing.** At bake time,
+the centerline's overall shape mirrors the inner border (counter)
+of the glyph, not the outer silhouette. For asymmetric bands — D
+bowl, P bowl, b bowl, R bowl, etc., where inner and outer
+borders differ — the centerline resembles the inner counter
+shape, scaled outward into the middle of the band. Visual check
+when authoring: place the centerline alongside the counter — same
+shape, larger size, sitting halfway out into the band. This is a
+permanent bake-time invariant for the construction step, distinct
+from the post-construction reference-conformance measurement
+above; it shapes what the medial-axis tracking / calibrator
+should aim at, not what the gate measures.
+
 ### Rule 2 — Centerline shape matches reference
 
 Every shipped polyline's overall turn-angle profile matches the

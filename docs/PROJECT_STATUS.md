@@ -239,19 +239,26 @@ the curve workstream for l/t/f/j/r/i marked resolved (l per
 architecture).
 
 ### 4.5 `docs/INVARIANTS.md`, `docs/STROKE_CALIBRATION.md`,
-       `docs/RENDERING.md` — status?
+       `docs/RENDERING.md` — RESOLVED 2026-05-25
 
-- **What.** `BAKE_INVARIANTS.md` opening claims it "Replaces the
-  earlier split across `INVARIANTS.md`, `STROKE_CALIBRATION.md`,
-  and `RENDERING.md`. Those files remain in place until Phase 2b
-  ships the missing gates; this doc supersedes them once verified."
-- **What's actually true.** Phase 2b Track B has shipped. The
-  three older docs presumably should now be removed or marked
-  superseded.
-- **Fix.** Either delete the three files (commit history preserves
-  them) or add a "SUPERSEDED — see BAKE_INVARIANTS.md" header to
-  each. Verify the contents are fully captured in BAKE_INVARIANTS
-  before deleting.
+Per-doc resolution after per-claim diff audit:
+- **INVARIANTS.md** — deleted. Claim "centerline mirrors inner
+  counter, not outer silhouette" (asymmetric-bowl framing for
+  D/P/b/R bowls) merged into `BAKE_INVARIANTS.md` §1 Rule 1 as
+  a permanent construction invariant. Claim "SKELETT bootstrap
+  read-only against editableStrokes" (12 write sites audited;
+  Python simulator verified 0.00 px drift across 59 letters)
+  merged into `LESSONS.md` Part B under a new ## Calibrator
+  section.
+- **STROKE_CALIBRATION.md** — SUPERSEDED header added pointing
+  to `BAKE_INVARIANTS.md` §2 / §4. 80%-margin rule documented
+  in the header as dropped-with-rationale (gate noise-floor
+  margins ≠ comfortable-margin buffers; methodology-chapter
+  relevance flagged).
+- **RENDERING.md** — SUPERSEDED header added pointing to
+  `BAKE_INVARIANTS.md` §5. The four "Open questions for
+  renderer implementation" migrated to `docs/ROADMAP.md` §4
+  Technical Debt as D9.
 
 ### 4.6 Phase 2b future-tense references throughout — RESOLVED 2026-05-25
 
@@ -301,13 +308,7 @@ The g4_calibration_run.md uses "future Phase 2c work" as a
 placeholder for post-Track-B bake-invariant work. If yes, scope
 it briefly. If no, sweep the references.
 
-### 5.3 Are the three older bake docs (INVARIANTS, STROKE_CALIBRATION,
-       RENDERING) ready to delete?
-
-Section 4.5 above. Verify contents are captured in
-`BAKE_INVARIANTS.md`, then either delete or mark superseded.
-
-### 5.4 Calibration corpus growth — when?
+### 5.3 Calibration corpus growth — when?
 
 `framing.md` says ~50-100 session pairs would be needed before
 revisiting residual-model approaches. Current corpus has 38 pairs
