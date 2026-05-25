@@ -353,29 +353,54 @@ vacuous-pass reason; the result dict's `max_ref_angle`,
 `p95_ref_angle`, and `signed_cum_ref` fields preserve which
 criterion(ia) fired for diagnostic transparency.
 
-### Finding — Primae's lowercase l has a foot/serif
+### Finding — Primae's lowercase l has a foot/curl (RESOLVED 2026-05-25)
 
-During G3 classifier verification, the lowercase l stroke in Primae was
-found to be **L-shaped** (vertical stem with a foot/serif at the
-bottom), not a uniform straight stem. Concretely: the polyline starts
-at (0.39, 0.05), descends to (0.20, 0.79), then turns right to end at
-(0.84, 0.93). l correctly classifies as non-straight under G3 and
-vacuous-passes (max=0.254, p95=0.231 — both fail).
+The lowercase l stroke in Primae traces a vertical stem that hooks
+right and downward at the bottom into a small foot/curl bulb. Polyline
+starts at bbox-rel (0.39, 0.05) at the ascender top and ends at
+bbox-rel (0.84, 0.93) at the foot-curl tip; signed-cumulative turn
+across 200 cps is −112.51° (a CW quarter-turn through the bend).
 
-Separately, this finding clarifies G1's calibration result for l
-(Pearson -0.04 with edit_count=0): that value reflects
-perpendicular-walk asymmetry behavior on an L-shape, not noise on a
-uniform stem. G1's threshold (0.2005) stands; only the framing
-narrative for l in `g1_calibration_run.md` would benefit from a minor
+**Resolution (2026-05-25):** intentional Druckschrift design feature,
+not a bake artifact. Three lines of evidence:
+
+1. **Spec.** `scripts/generate_strokes_auto.py:353-365` defines l as a
+   single `smoothed_medial_axis` stroke from `STEM_T` (ascender top)
+   to `CURL_TIP_R` (foot-curl skeleton endpoint), with an explicit
+   reference to a SWEEP 2 visual review where skeleton-smooth beat
+   cubic-Bézier and quadratic-Bézier variants. The spec at
+   `generate_strokes_auto.py` is the durable source of truth.
+2. **Visual.** Rendered through the bake's own `rasterize()` (so the
+   polyline's bbox-relative coordinates land on the same canvas frame
+   as the source glyph), the polyline lies entirely inside the dark
+   ink, tracing the glyph's medial axis precisely through the stem
+   and the bend. A naive PIL text render places the glyph at a
+   different optical offset and is misleading — the bake's optical-
+   bbox centering in `rasterize()` is the correct frame for any
+   overlay check. Working renderings produced during the investigation
+   were ephemeral and have not been committed.
+3. **Corpus comparison.** Among Primae's vertical-stem letters, l is
+   the only one with a curl, because l is the only one whose source
+   font glyph has one. I (signed-cum −5.00°, max 2.66°) and i stem
+   (signed-cum −3.69°, max 3.59°) are plain slightly-slanted stems
+   with no foot; their polylines reflect that.
+
+G3 classifies l correctly as not-straight via the signed-cumulative
+criterion added during G5 verification (2026-05-24, commit
+`c4c143b8`): |signed_cum_l| = 1.96 rad > π/12 ≈ 0.262, so l
+vacuous-passes G3 as `not_applicable_not_straight`. The earlier
+max+p95 framing (max=0.254, p95=0.231, both above threshold) also
+fires; the signed-cumulative is the durable trigger because it
+isolates the smooth net-direction-change that is the defining feature
+of l's curl, whereas max+p95 only fire when the resampling happens to
+catch a sharp-enough local segment.
+
+This resolution also clarifies G1's calibration result for l
+(Pearson −0.04 with `edit_count`=0): the value reflects
+perpendicular-walk asymmetry on a stem+curl glyph, not noise on a
+uniform stem. G1's threshold (0.2005) stands; the framing narrative
+for l in `g1_calibration_run.md` would benefit from a minor wording
 adjustment.
-
-**Open question flagged for David:** is l's foot/serif intentional in
-Primae's lowercase l design? If intentional, the corpus is correctly
-representing the font. If unintentional, there may be a separate
-investigation needed in the bake or calibrator (l should have been
-imported as a uniform vertical stroke from the calibrator; the L-shape
-may indicate a stroke-decomposition error or an import error).
-Surfacing for visual confirmation; not blocking G3 either way.
 
 ### G3.2 — Perpendicular deviation: what's the reference line?
 

@@ -66,6 +66,11 @@ landed during verification: scikit-image added to CI deps
 criterion (`c4c143b8`) to filter smooth-long-curves that the
 max+p95-only classifier wrongly admitted.
 
+Lowercase l foot/curl open question resolved 2026-05-25 as an
+intentional Druckschrift feature (see `g3_design.md` §"Finding —
+Primae's lowercase l has a foot/curl"); G3 handles it correctly
+via the signed-cumulative criterion.
+
 ### 1.4 Calibration corpus
 
 `research_data/calibration_sessions/2026-05-22/` — 13 letters,
@@ -157,21 +162,7 @@ risk of being lost when memory resets.
   rephrased ("future post-Phase-2b work" or specific issue
   number).
 
-### 3.3 Lowercase `l` foot/serif — open design question
-
-- **Where.** `research_data/phase2b_gates/g3_design.md` G3.1
-  "Finding — Primae's lowercase l has a foot/serif" subsection.
-- **What it is.** During G3 implementation, lowercase l was
-  found to be L-shaped (vertical stem + foot/serif), not a
-  uniform straight stem. The doc flags an open question: "is
-  l's foot/serif intentional in Primae's lowercase l design?"
-  Surfaced for visual confirmation; not blocking.
-- **Why it matters.** If intentional, document it (so the next
-  contributor doesn't try to "fix" l). If unintentional,
-  separate investigation needed.
-- **Status.** Question never answered.
-
-### 3.4 Lowercase `g` stroke decomposition — confirmed-intentional
+### 3.3 Lowercase `g` stroke decomposition — confirmed-intentional
 
 - **Where.** `g3_calibration_run.md` "Post-deployment refinement"
   and `g4_calibration_run.md` "Discovered scope constraint".
@@ -182,7 +173,7 @@ risk of being lost when memory resets.
   (2026-05-24). Documented as a "for David's eye" item; no
   further action.
 
-### 3.5 Ä s1 / Ä s2 borderline G3 classifications
+### 3.4 Ä s1 / Ä s2 borderline G3 classifications
 
 - **Where.** `g3_calibration_run.md` "Borderline classifications"
   section.
@@ -195,7 +186,7 @@ risk of being lost when memory resets.
   bake investigation" — but Track A is undefined. Either fold into
   whatever Phase 2c becomes, or surface as a standalone issue.
 
-### 3.6 Memory-only / userMemories items
+### 3.5 Memory-only / userMemories items
 
 `/root/.claude/projects/.../memory/MEMORY.md` carries 14 entries.
 Most are operational reflexes (CI-wait scope, commit-boundary
@@ -314,24 +305,19 @@ push:
   trigger conditions in framing.md §"Open question")?
 - (d) something else / TBD?
 
-### 5.2 Lowercase `l` foot/serif — intentional or not?
-
-Section 3.3 above. Cheap to resolve: a single yes/no answers it.
-Affects how future contributors handle l's geometry.
-
-### 5.3 "Phase 2c" — is that the right name?
+### 5.2 "Phase 2c" — is that the right name?
 
 The g4_calibration_run.md uses "future Phase 2c work" as a
 placeholder for post-Track-B bake-invariant work. If yes, scope
 it briefly. If no, sweep the references.
 
-### 5.4 Are the three older bake docs (INVARIANTS, STROKE_CALIBRATION,
+### 5.3 Are the three older bake docs (INVARIANTS, STROKE_CALIBRATION,
        RENDERING) ready to delete?
 
 Section 4.5 above. Verify contents are captured in
 `BAKE_INVARIANTS.md`, then either delete or mark superseded.
 
-### 5.5 Calibration corpus growth — when?
+### 5.4 Calibration corpus growth — when?
 
 `framing.md` says ~50-100 session pairs would be needed before
 revisiting residual-model approaches. Current corpus has 38 pairs
