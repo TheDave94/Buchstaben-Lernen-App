@@ -22,9 +22,12 @@ Audience: maintainer authoring a letter; Claude Code reviewing a
 bake change; thesis reader asking about reproducibility.
 
 Replaces the earlier split across `INVARIANTS.md`,
-`STROKE_CALIBRATION.md`, and `RENDERING.md`. Those files remain in
-place until Phase 2b ships the missing gates; this doc supersedes
-them once verified.
+`STROKE_CALIBRATION.md`, and `RENDERING.md`. Phase 2b Track B
+shipped the gates (G1 / G3 / G4 enforced via `bake-gates.yml`;
+G2 investigated 2026-05-23 and not viable as a freeze-gate
+metric; G5 wires the gates into CI). Supersession of the three
+older files is a separate pending decision — they remain in
+place until that review completes.
 
 ---
 
@@ -130,9 +133,9 @@ anchor GUI, not in the bake.
   ...}` (chord-based composition via arm/joint primitives) vs
   `{"path": [...]}` (Dijkstra-on-DT routing). A line stroke cannot
   accidentally become a curve; they are different code paths.
-- *Not enforced as a measurement.* No perpendicular-deviation
-  computation against an analytical line. Pending Phase 2b
-  (Threshold 3 below).
+- *Measurement (straight strokes only).* Perpendicular-deviation
+  on straight strokes enforced via G3 (Threshold 3 below).
+  Curved-strokes portion remains post-Phase-2b future work.
 
 > *Note: construction enforces type-LABEL purity — a line stroke
 > can't become a curve at the data-model level. Visual purity (a
@@ -161,9 +164,13 @@ meeting point.
 ## 2. Measurable acceptance thresholds
 
 The four rules expand into six numeric thresholds. A candidate that
-fails any measured threshold must auto-reject; thresholds the bake
-doesn't measure today are reviewed by the visual-sweep workflow
-(§4) and tracked for Phase 2b coverage.
+fails any measured threshold must auto-reject. Thresholds 1 / 3
+(straight) / 4 / 6 are measured today by G1 / G3 / G4 / `verify_bake.sh`
+respectively (Phase 2b Track B, 2026-05-24). Threshold 2 was
+investigated 2026-05-23 and judged not-viable as a freeze-gate
+metric. Threshold 3-curved and Threshold 5 (Y-junction gap, currently
+construction-enforced) are the remaining un-measured thresholds and
+are reviewed by the visual-sweep workflow (§4).
 
 ### Threshold 1 — Asymmetry-profile drift from reference (Rule 1)
 
@@ -229,7 +236,7 @@ in `research_data/phase2b_gates/g2_calibration_run.md`.
 - Distribution-shift detection (Option IV — compare PR's Pearson
   distribution against corpus baseline rather than per-stroke threshold)
   reframes the gate away from per-stroke pass/fail. Out of scope for
-  the current Phase 2b round.
+  Phase 2b Track B (G2 investigation, 2026-05-23).
 
 **Enforced by**: not currently enforced; investigation complete; revisit
 gated on either more calibration data or a distribution-shift framing.
@@ -286,8 +293,8 @@ flagged `'straight'` or `'curved'` in the `LETTERS` spec.
 
 This curved-stroke check is not yet implemented; it would be a
 separate gate from G3, which addresses only the straight-strokes
-portion of Rule 3. Pending future Phase 2b work or methodology-
-chapter discussion.
+portion of Rule 3. Pending post-Phase-2b future work or
+methodology-chapter discussion.
 
 ### Threshold 4 — End-to-end junction (Rule 4)
 
@@ -388,9 +395,10 @@ must match commit `a803d9d`.
 
 **CI status**: `verify_bake.sh` is **not in CI today**. It is a
 manual / pre-commit guard; run it before any commit that touches
-`generate_strokes_auto.py`. Lifting it into CI is part of Phase
-2b — after Phase 2b, every PR runs determinism + byte-identity +
-b-firewall in CI.
+`generate_strokes_auto.py`. The Phase 2b Track B CI workflow
+(`bake-gates.yml`) runs G1 / G3 / G4 only — lifting
+`verify_bake.sh` into CI did not ship with Track B and remains
+post-Phase-2b future work.
 
 ---
 
@@ -434,9 +442,9 @@ Treat them as canaries, not gates.
 ### Claude Code may ship autonomously when
 
 - Candidate passes every automated check that exists today
-  (Threshold 6 — `verify_bake.sh`) AND every Phase 2b gate as
-  each lands AND the letter is in a family with at least one
-  already-visually-approved member.
+  (Threshold 6 — `verify_bake.sh`; Phase 2b Track B gates
+  G1 / G3 / G4 via `bake-gates.yml`) AND the letter is in a
+  family with at least one already-visually-approved member.
 - Re-bake of a previously approved spec with no algorithmic
   changes.
 
@@ -546,7 +554,7 @@ gameplay, keep this distinction in mind:
 | Threshold 1 — asymmetry-profile Pearson vs reference ≥ 0.2005 (post-G1 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g1` |
 | Threshold 2 — turn-angle-profile Pearson vs reference | **Investigated 2026-05-23, not viable** as freeze-gate metric; implementation preserved (see `g2_calibration_run.md`) |
 | Threshold 3 — straight ≤ 2.05 px (post-G3 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g3` |
-| Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — pending future Phase 2b |
+| Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — pending post-Phase-2b future work |
 | Threshold 4 — tangent-kink drift ≤ 4.43° (post-G4 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g4` |
 | Threshold 5 — Y-junction gap = 0 px | Construction (T-junction pre-compute) |
 | Threshold 6 — determinism + b firewall + byte-identity vs HEAD | Automated (`scripts/verify_bake.sh`, manual / pre-commit) |
@@ -565,9 +573,9 @@ the approved reference. Rule 3 has construction enforcement
 (endpoint sharing via the anchor cache + T-junction pre-compute)
 plus measurement (G4 tangent alignment). Threshold 6
 (determinism + b firewall + byte-identity) is automated via
-`scripts/verify_bake.sh`. The automated enforcement floor is:
-every PR passes G1, G3, G4, and Threshold 6 in CI
-(`bake-gates.yml`) before merge. Threshold 2 was investigated
+`scripts/verify_bake.sh` (manual / pre-commit; not in CI). The
+automated CI enforcement floor is: every PR passes G1, G3, G4
+in `bake-gates.yml` before merge. Threshold 2 was investigated
 2026-05-23 and is not viable as a freeze-gate metric (preserved
 in code; see `g2_calibration_run.md`). Threshold 3-curved (no
 straight runs ≥ 5 cp with turn-sum < 5°) remains the one

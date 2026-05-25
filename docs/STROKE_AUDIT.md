@@ -22,15 +22,19 @@
 >   the v/w fillet apex revisions (HEAD = `joint_fillet_at_intersection`,
 >   v trim_back=24, w trim_back=40).
 >
-> Still open / referenced from `docs/ROADMAP.md`:
+> Still open / referenced from `docs/ROADMAP.md` (bake pipeline,
+> Light + future fonts only; Regular ships as hand-calibrated
+> artifact since `6a85811c`):
 >
 > - Q-class topology (bowl-with-attached-tail letters: Q, a_l, ä_l, g_l,
 >   q_l, ü_l). Recommended approach: extend the loop walker with an
 >   optional `stop_at` parameter (a node whose edge to the loop entry
 >   is blocked) so the bowl-only loop terminates at the bowl/tail
 >   junction. Tracked forward in `docs/ROADMAP.md`.
-> - Curve workstream for line-deferred letters (`t f j r i`) and the
->   resolver work for `Y y ß`.
+> - Resolver work for `Y y ß`. The curve workstream for `l t f j r i`
+>   noted in earlier revisions has been resolved (l confirmed
+>   intentional 2026-05-25; t/f/j/r ship via the same
+>   `smoothed_medial_axis` architecture; i shipped as the warmup).
 >
 > The audit's analysis stays accurate for the as-of-May-2026 state; treat
 > it as background reading for anyone picking up Q-class topology or the

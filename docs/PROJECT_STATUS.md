@@ -210,19 +210,15 @@ summary (G1/G3/G4 enforced, G2 investigated-not-viable, G5
 CI-wired). Curve-workstream "Open follow-up" sub-clause
 preserved for the §4.2 decision.
 
-### 4.2 `docs/ROADMAP.md` line 37 — curve workstream
+### 4.2 `docs/ROADMAP.md` line 37 — curve workstream — RESOLVED 2026-05-25
 
-- **What the doc says.** "Open follow-up: Q-class topology (Q
-  a_l ä_l g_l q_l ü_l) and a curve workstream covering l (revisit)
-  + t f j r i + Y y ß."
-- **What's actually true.** Both items were superseded by SPEC-
-  VISUAL-APPROVAL adoption + bake retirement for Regular at
-  commit `6a85811c`. The bake pipeline no longer drives Regular
-  output; any "curve workstream" affecting Regular polylines
-  would happen through the calibrator, not the bake.
-- **Fix.** Either delete the line or replace with "Curve-workstream
-  bake improvements: applicable to future fonts (Light, Schreibschrift)
-  only; not part of Regular's shipping path post-`6a85811c`."
+Sub-clause rewritten to: "Open follow-up for the bake pipeline
+(Light + future fonts only; Regular ships as hand-calibrated
+artifact since `6a85811c`): Q-class topology (Q a_l ä_l g_l q_l
+ü_l) and resolver work for Y/y/ß." Dropped l (resolved
+2026-05-25 — see g3_design.md), dropped t/f/j/r/i (shipped via
+the same `smoothed_medial_axis` architecture as l per
+`generate_strokes_auto.py:353-415`).
 
 ### 4.3 `docs/BAKE_INVARIANTS.md` §6 header — RESOLVED 2026-05-25
 
@@ -234,16 +230,13 @@ not-viable, Threshold 3-curved noted as the one pending gate.
 Other Phase-2b future-tense references throughout the doc
 remain pending the §4.6 sweep.
 
-### 4.4 `docs/STROKE_AUDIT.md` status note
+### 4.4 `docs/STROKE_AUDIT.md` status note — RESOLVED 2026-05-25
 
-- **What the doc says.** "Still open / referenced from
-  `docs/ROADMAP.md`: Q-class topology... Curve workstream for
-  line-deferred letters."
-- **What's actually true.** Same as 4.2 — superseded by bake
-  retirement. The audit's open-items list is now moot.
-- **Fix.** Update the status header to note bake retirement
-  superseded the listed open items, OR delete the open-items
-  bullet.
+"Still open" block updated to mirror §4.2's wording: Q-class
+topology and Y/y/ß resolver kept as bake-pipeline open work;
+the curve workstream for l/t/f/j/r/i marked resolved (l per
+2026-05-25 investigation; t/f/j/r/i shipped via same
+architecture).
 
 ### 4.5 `docs/INVARIANTS.md`, `docs/STROKE_CALIBRATION.md`,
        `docs/RENDERING.md` — status?
@@ -260,15 +253,21 @@ remain pending the §4.6 sweep.
   each. Verify the contents are fully captured in BAKE_INVARIANTS
   before deleting.
 
-### 4.6 Phase 2b future-tense references throughout
+### 4.6 Phase 2b future-tense references throughout — RESOLVED 2026-05-25
 
-Several committed docs reference Phase 2b in future tense
-(BAKE_INVARIANTS.md §6 closing paragraph; `framing.md`
-mentions; some calibration-run docs mention "pending Phase 2b
-work" for the Threshold 3 curved-strokes portion). After Track B
-shipped, "future Phase 2b work" is ambiguous — is there a Track
-C of Phase 2b, or has Phase 2b ended? Worth picking one and
-sweeping references.
+Scope decision: Phase 2b ended with Track B. Swept 8 ambiguous
+references in `BAKE_INVARIANTS.md` (lines 26, 134, 166, 232,
+289, 392, 437, 549) to past tense for shipped portions or
+"post-Phase-2b future work" for genuinely pending items
+(Threshold 3-curved; `verify_bake.sh` CI lift). Avoided
+"Phase 2c" naming pending §5.2. `g3_calibration_run.md:23`
+verified accurate (past-tense factual claim) — no edit needed.
+`framing.md` reported by the stocktake as having Phase 2b
+mentions, but `grep` finds none today — discrepancy in
+stocktake; either since-removed or mis-recalled. Also corrected
+an inaccuracy I introduced in `d55f4da`'s Net-paragraph rewrite
+(had claimed Threshold 6 was in CI — it is not; manual /
+pre-commit only).
 
 ---
 
