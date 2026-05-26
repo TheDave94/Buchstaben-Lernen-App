@@ -298,59 +298,44 @@ for the dual-purpose methodology claim.
 
 ### G3-curved — Curved-stroke inversion gate
 
-**Problem statement.** G3 enforces that strokes classified
-STRAIGHT have low perpendicular-deviation against a least-squares
-best-fit line. The symmetric question is: do strokes classified
-CURVED have any sub-segments that have accidentally become
-STRAIGHT at the resampled scale? `BAKE_INVARIANTS.md` §2
-Threshold 3 spec: "no straight runs ≥ 5 consecutive points with
-cumulative turn-sum < 5°."
+**Status:** investigated 2026-05-26, **not viable** as a freeze-gate
+metric on the current corpus. See
+`research_data/phase2b_gates/g3_curved_not_viable.md` for the
+diagnostic findings + reframing options.
 
-**Proposed approach.** For each stroke classified CURVED by G3's
-existing classifier (`scripts/audit_invariants.py::_stroke_angle_stats`
-+ the straightness-criterion check in `gate_g3_per_stroke`):
+**One-paragraph summary.** G3-curved was scoped as the inversion of
+G3 — flag CURVED-classified strokes that have ≥5-cp runs with
+absolute cumulative turn-sum < 5° (visually-straight segments
+inside a curved stroke). The pre-implementation diagnostic
+(G3-curved.v1, 2026-05-26) surfaced that the proposed criterion
+fires on 47 of 53 CURVED strokes (89%) because the existing G3
+classifier groups three distinct populations under the single
+CURVED label: (a) angular strokes (M/V/W/N/K/Z/Y — sharp turns +
+straight legs by design), (b) smoothly curved strokes (B/P/R
+bowls — the gate's intended target), and (c) near-straight strokes
+with cumulative noise (E s2 and similar). Populations (a) and (c)
+have straight sub-segments intrinsic to their geometry; the naive
+gate would fire on them. The freeze-gate framing does not survive
+contact with the corpus's actual curvature heterogeneity.
 
-1. Walk the resampled polyline in a sliding window of 5 cps.
-2. Compute cumulative `|turn-sum|` within each window.
-3. Flag any window with cumulative turn-sum < 5°.
-4. Threshold: zero flagged windows for the stroke to pass.
+**Methodology pattern.** G3-curved joins G2 in the
+predicted-then-falsified-by-diagnostic track. The methodology
+chapter can frame the gate set as "five shipped + two
+investigated-not-viable," with the not-viable cases as substantive
+findings rather than absences. The structural insight (the
+corpus's CURVED class is heterogeneous, and a meaningful "curve
+purity" gate requires prior sub-classification by curvature
+shape) is captured in `g3_curved_not_viable.md` as
+methodology-chapter-relevant content.
 
-The metric is structurally different from G3's drift-from-reference
-framing — it is a **single-stroke shape-purity check**, not a
-comparison to a reference. G3 asks "did the polyline drift from
-approved geometry?"; G3-curved asks "is the polyline actually
-curved everywhere it claims to be?"
+**If revisited.** Three reframing options documented in
+`g3_curved_not_viable.md`: (a) sub-classify CURVED into angular
+vs smooth; (b) loosen the looks-straight criterion to require
+sustained runs; (d) refine the upstream G3 classifier so
+populations (a) and (c) re-classify as STRAIGHT. Option (d) is
+the natural first step. None pursued in the current pass.
 
-**Calibration plan.**
-
-1. Run the classifier from `g3_design.md` over the corpus to
-   identify CURVED strokes (D bowl, O, p bowl, b bowl, U arc,
-   etc.; the classifier already handles this via the combined
-   max + p95 + signed-cumulative criterion documented in G3.1).
-2. Compute the sliding-window metric per CURVED stroke.
-3. Verify expected pass: hand-calibrated reference strokes should
-   all pass (any straight runs would have been caught by the
-   maintainer's visual review). Per-stroke results land in
-   `g3_curved_calibration_run.md` when ready.
-4. Verify polish-preservation: rounds 1 and 2 should produce
-   identical pass/fail (polish refines centerline shape but
-   doesn't introduce or remove straight sub-segments).
-5. Verify the constants (window=5 cps, turn-sum=5°) are
-   corpus-appropriate before locking. These come from
-   `BAKE_INVARIANTS.md` §2 Threshold 3 spec; the corpus may
-   suggest tighter or looser values.
-
-**Methodology framing — predict explicitly, verify empirically,
-refine when data falsifies.** Prediction: every CURVED stroke in
-the corpus passes (otherwise the maintainer would have flagged it
-during visual review). Falsification means either the corpus has
-latent issues worth surfacing, or the constants need tuning.
-Either outcome is informative — same predict-verify-refine
-pattern as G6.
-
-**Effort.** M — classifier reuse + sliding-window metric + corpus
-run + CI integration. Smaller code surface than G6 because the
-metric is simpler and the classifier is already implemented.
+**Effort.** S (disposition documentation only; no code shipped).
 
 ---
 

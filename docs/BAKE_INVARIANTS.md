@@ -148,8 +148,9 @@ anchor GUI, not in the bake.
   accidentally become a curve; they are different code paths.
 - *Measurement (straight strokes only).* Perpendicular-deviation
   on straight strokes enforced via G3 (Threshold 3 below).
-  Curved-strokes portion is scoped as the G3-curved workstream
-  item in Phase 2c (`research_data/phase2b_gates/phase2c_design.md`).
+  Curved-strokes portion investigated 2026-05-26 and judged
+  not-viable as a freeze-gate metric on the current corpus (see
+  `research_data/phase2b_gates/g3_curved_not_viable.md`).
 
 > *Note: construction enforces type-LABEL purity — a line stroke
 > can't become a curve at the data-model level. Visual purity (a
@@ -182,9 +183,10 @@ fails any measured threshold must auto-reject. Thresholds 1 / 3
 (straight) / 4 / 6 are measured today by G1 / G3 / G4 / `verify_bake.sh`
 respectively (Phase 2b Track B, 2026-05-24). Threshold 2 was
 investigated 2026-05-23 and judged not-viable as a freeze-gate
-metric. Threshold 3-curved and Threshold 5 (Y-junction gap, currently
-construction-enforced) are the remaining un-measured thresholds and
-are reviewed by the visual-sweep workflow (§4).
+metric. Threshold 3-curved was investigated 2026-05-26 and likewise
+judged not-viable (see `g3_curved_not_viable.md`). Threshold 5
+(Y-junction gap) is construction-enforced and reviewed by the
+visual-sweep workflow (§4).
 
 ### Threshold 1 — Asymmetry-profile drift from reference (Rule 1)
 
@@ -301,15 +303,22 @@ boundaries).
 `scripts/run_gates.py --gate g3`), wired into CI as a PR merge-
 blocker via `.github/workflows/bake-gates.yml` (G5).
 
-**Curved portion (not yet enforced).** No straight runs ≥ 5
+**Curved portion (investigated, not viable).** No straight runs ≥ 5
 consecutive points with cumulative turn-sum < 5°. Each stroke is
 flagged `'straight'` or `'curved'` in the `LETTERS` spec.
 
-This curved-stroke check is not yet implemented; it would be a
-separate gate from G3, which addresses only the straight-strokes
-portion of Rule 3. Scoped as the **G3-curved workstream item in
-Phase 2c** — see
-`research_data/phase2b_gates/phase2c_design.md`.
+This curved-stroke check is not implemented. Investigated
+2026-05-26 (G3-curved.v1 pre-implementation diagnostic) and
+judged not-viable as a freeze-gate metric on the current corpus.
+The existing G3 classifier groups three heterogeneous
+populations under the CURVED label, and the naive 5-cp/5°
+inversion criterion fires on 89% of CURVED strokes because
+populations (a) angular strokes (M, V, W, N, K, Z, Y — sharp
+turns with intrinsic straight legs) and (c) near-straight
+strokes with cumulative noise have straight sub-segments that
+the gate would flag as authoring bugs. See
+`research_data/phase2b_gates/g3_curved_not_viable.md` for the
+full disposition + reframing options if revisited.
 
 ### Threshold 4 — End-to-end junction (Rule 4)
 
@@ -651,7 +660,7 @@ mismatch".
 | Threshold 1 — asymmetry-profile Pearson vs reference ≥ 0.2005 (post-G1 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g1` |
 | Threshold 2 — turn-angle-profile Pearson vs reference | **Investigated 2026-05-23, not viable** as freeze-gate metric; implementation preserved (see `g2_calibration_run.md`) |
 | Threshold 3 — straight ≤ 2.05 px (post-G3 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g3` |
-| Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — scoped as G3-curved in Phase 2c (`phase2c_design.md`) |
+| Threshold 3 — curved (no straight runs ≥ 5 cp with turn-sum < 5°) | **Not enforced** — investigated 2026-05-26, not viable as freeze-gate metric (see `g3_curved_not_viable.md`) |
 | Threshold 4 — tangent-kink drift ≤ 4.43° (post-G4 calibration 2026-05-23) | **Enforced** via `bake-gates.yml` (G5); CLI: `scripts/run_gates.py --gate g4` |
 | Threshold 5 — Y-junction gap = 0 px | Construction (T-junction pre-compute) |
 | Threshold 6 — determinism + b firewall + byte-identity vs HEAD | Automated (`scripts/verify_bake.sh`, manual / pre-commit) |
@@ -674,7 +683,9 @@ plus measurement (G4 tangent alignment). Threshold 6
 automated CI enforcement floor is: every PR passes G1, G3, G4
 in `bake-gates.yml` before merge. Threshold 2 was investigated
 2026-05-23 and is not viable as a freeze-gate metric (preserved
-in code; see `g2_calibration_run.md`). Threshold 3-curved (no
-straight runs ≥ 5 cp with turn-sum < 5°) remains the one
-pending gate. Threshold 5 remains construction-enforced (by the
-T-junction pre-compute, which always writes the shared pixel).
+in code; see `g2_calibration_run.md`). Threshold 3-curved was
+investigated 2026-05-26 and is likewise not viable as a
+freeze-gate metric on the current corpus (see
+`g3_curved_not_viable.md`). Threshold 5 remains
+construction-enforced (by the T-junction pre-compute, which
+always writes the shared pixel).
