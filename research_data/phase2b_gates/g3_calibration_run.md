@@ -94,26 +94,38 @@ Total: 23 stroke pairs. 8 STRAIGHT (G3 applies); 15 vacuous-pass.
 
 Two strokes sit just outside the STRAIGHT class:
 
-- **Ä s1 (right diagonal):** p95 = 0.103, just above the 0.100
-  threshold (3% margin). Classified SMOOTH-CURVED.
-- **Ä s2 (crossbar):** max = 0.290, just above the π/12 = 0.262
-  threshold (10% margin). Classified SHARP-CORNER.
+- **Ä s1 (right diagonal):** p95 = 0.103 rad (5.92°), just above
+  the 0.100 rad (5.73°) threshold (3% margin). Classified
+  CURVED.
+- **Ä s2 (crossbar):** max = 0.290 rad (16.62°), just above the
+  π/12 = 0.262 rad (15.00°) threshold (10% margin). Classified
+  CURVED.
 
-The analogous strokes in pure A are well clear of the thresholds (A
-s1 p95 = 0.010; A s2 max = 0.102). Ä's base glyph is nominally
-identical to A, so this geometric divergence indicates the
-**composite-umlaut bake introduces slight curvature/corner artifacts
-on Ä's base diagonals that pure A doesn't have**.
+The analogous strokes in pure A are well clear of the thresholds
+(A s1 p95 = 0.010 rad / 0.60°; A s2 max = 0.102 rad / 5.85°).
 
-**Decision: keep thresholds as derived.** Tweaking p95 to 0.11 to
-admit Ä s1 would be fitting to one borderline case — exactly the kind
-of fitting-to-data the calibration methodology is supposed to avoid.
+**Source of the divergence — calibrator-authored, NOT
+`bake_composite`.** Original framing (pre-2026-05-26) attributed
+this to a `bake_composite` artifact. Investigation 2026-05-26
+falsified that attribution: Ä's shipped strokes.json carries
+`[200, 200, 181, 1, 1]` cps per stroke (calibrator densities),
+while pure A carries `[40, 40, 40]` (the `bake_letter` default).
+`bake_composite` preserves cp count; the densification mismatch
+proves the calibrator authored Ä's base directly, bypassing
+`bake_composite`. Empirically, `bake_composite` is
+angle-preserving on this corpus (uniform 1.0×1.0 scale factors
+across A/Ä, O/Ö, U/Ü); if it had been used, the base would
+match pure A. The borderline geometry is the calibrator's
+authored intent, not a pipeline artifact. See
+`research_data/phase2b_gates/phase2c_design.md` "Composite-
+umlaut bake artifact investigation" section for the full
+finding.
 
-**Phase 2c composite-umlaut investigation sub-item:** investigate why
-the composite-umlaut bake at `scripts/generate_strokes_auto.py::bake_composite`
-produces geometrically different base diagonals from pure A. Scoped
-as a tier-2 sub-item (investigation, not gate design) in
-`research_data/phase2b_gates/phase2c_design.md`. Not blocking G3.
+**Decision: keep thresholds as derived.** The G3 classifier
+correctly catches the calibrator-authored geometric variation in
+Ä's base. Tweaking p95 to 0.11 to admit Ä s1 would fit to one
+borderline case — exactly the kind of fitting-to-data the
+calibration methodology is supposed to avoid.
 
 ## Polish-preservation verification
 
@@ -159,8 +171,9 @@ are A s2 (0.89), p s0 (0.89), U s1 (0.76). Pure A strokes are all
 under 0.89 px.
 
 The Ä base diagonal (s0) deviates more than the pure A diagonals —
-consistent with the composite-umlaut-bake-artifacts pattern noted in
-the Borderline classifications section above. The threshold of 2.05
+consistent with the calibrator-authored variation in Ä's base (see
+the Borderline classifications section above for the misattribution
+correction). The threshold of 2.05
 px is therefore set higher than it would have been on a pure-A-only
 corpus (which would put the threshold around 1.89 px based on A s2's
 0.89 max + 1 px margin). **This is the correct behavior — the corpus

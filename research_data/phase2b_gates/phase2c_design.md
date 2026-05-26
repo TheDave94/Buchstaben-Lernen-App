@@ -43,13 +43,23 @@ explicitly identified two unmeasured-threshold gaps:
 A third item surfaced during G3 calibration but is methodologically
 distinct from the two gates above:
 
-- **Composite-umlaut bake artifact** (Ä s1/s2 borderline
-  classifications) — characterized in `g3_calibration_run.md:93-114`
-  as a `bake_composite` geometry artifact, not a missing gate.
+- **Composite-umlaut borderline classifications** (Ä s1/s2
+  borderline G3 classifications) — characterized in
+  `g3_calibration_run.md:93-114`; not a missing gate but a
+  sub-item to disposition. Initially suspected as a
+  `bake_composite` artifact; investigation 2026-05-26 corrected
+  to calibrator-authored geometry.
 
-Phase 2c covers all three. After Phase 2c, the §6 tally reads "all
-six thresholds measured" and the composite-umlaut question has a
-documented disposition (fix-and-ship vs document-and-defer).
+Phase 2c covered all three (closure 2026-05-26). The §6 tally
+now reads "five measured/enforced (G1/G3/G4/G6) + two
+investigated-not-viable (G2/G3-curved)"; the
+gate-completeness narrative is "five shipped + two
+investigated-not-viable," with the not-viable cases as
+substantive methodology findings. The composite-umlaut
+investigation reframed its premise: the original
+`bake_composite` attribution was empirically falsified, and
+Ä's borderline G3 classifications are calibrator-authored
+geometry. Documentation-only disposition; no code change.
 
 ---
 
@@ -62,7 +72,9 @@ documented disposition (fix-and-ship vs document-and-defer).
 - **G3-curved** — Curved-stroke inversion gate (new measurement
   gate; symmetric counterpart of G3)
 - **Composite-umlaut investigation** — tier-2 sub-item;
-  bake-pipeline analysis, not a new gate
+  source-attribution investigation, not a new gate (resolved
+  2026-05-26: source is calibrator-authored, not
+  `bake_composite`)
 
 ### Out of scope (each tracked separately)
 
@@ -341,71 +353,92 @@ the natural first step. None pursued in the current pass.
 
 ### Composite-umlaut bake artifact investigation (Ä s1 / Ä s2)
 
-**Framing: investigation, not gate design.** This sub-item is
-qualitatively different from G6 and G3-curved. It does not
-propose a new measurement gate. The methodology question is:
-**where in the bake does the artifact come from?** The answer
-determines whether the disposition is fix-and-ship or
-document-and-defer.
+**Status:** investigated 2026-05-26. The original "bake artifact"
+framing was **empirically falsified**: Ä's base diagonals are
+calibrator-authored, NOT `bake_composite` output. The G3
+classifier is correct; the geometry IS marginally curved; the
+calibrator authored Ä's base with slight micro-variation from
+pure A. No code change. Disposition: documentation correction.
 
-**Phenomenon.** Ä's base diagonals classify just outside G3's
-STRAIGHT class:
+**Original framing (corrected below).** Ä's base diagonals
+classify just outside G3's STRAIGHT class:
 
-- Ä s1 (right diagonal): p95 = 0.103, just above the 0.100
-  threshold (3% margin) — classified SMOOTH-CURVED.
-- Ä s2 (crossbar): max = 0.290, just above π/12 = 0.262 (10%
-  margin) — classified SHARP-CORNER.
+- Ä s1 (right diagonal): p95 = 0.103 rad (5.92°), just above the
+  0.100 rad (5.73°) threshold (3% margin). Classified CURVED.
+- Ä s2 (crossbar): max = 0.290 rad (16.62°), just above the
+  π/12 = 0.262 rad (15.00°) threshold (10% margin). Classified
+  CURVED.
 
-Pure A is well clear: A s1 p95 = 0.010; A s2 max = 0.102. Ä's
-base glyph is nominally identical to A, so the geometric
-divergence indicates `scripts/generate_strokes_auto.py::bake_composite`
-introduces slight curvature/corner artifacts on Ä's base diagonals
-that pure A doesn't have. The same pattern likely affects Ö and Ü.
+Pure A is well clear: A s1 p95 = 0.010 rad (0.60°); A s2 max
+= 0.102 rad (5.85°). The original framing assumed this
+divergence indicated that
+`scripts/generate_strokes_auto.py::bake_composite` introduced
+slight curvature artifacts on Ä's base diagonals. Investigation
+proved this incorrect.
 
-**Investigation plan.**
+**Dispositive evidence — cp counts.** Pure A's shipped
+strokes.json carries `[40, 40, 40]` cps per stroke (the
+`bake_letter` default `CHECKPOINT_COUNT = 40`). Ä's shipped
+strokes.json carries `[200, 200, 181, 1, 1]` (calibrator
+densities per the `denseCount = min(200, max(60, path.count))`
+logic in `PrimaeNative/Features/Tracing/StrokeCalibrationOverlay.swift:811-813`).
 
-1. **Reproduce in isolation.** Bake Ä via `bake_composite` and
-   compare the resulting polyline against a fresh pure-A bake at
-   the same code state. Confirm the divergence is reproducible
-   (not corpus noise).
-2. **Localize.** Which step of `bake_composite` introduces the
-   curvature? Candidates: composite-mask construction (base + dot
-   union); skeleton-walk on the composite mask (the dot ink may
-   pull the skeleton near the top of the base); anchor resolution
-   differences between A and Ä rasters (the optical bbox shifts
-   when the diacritic is included); post-bake smoothing applied
-   only to composites.
-3. **Characterize.** If it's a mask-construction step, the fix is
-   bake-pipeline scoped. If it's a font-rasterization difference
-   (Ä's diacritic affecting optical bbox centering), the fix may
-   be intrinsic to the composite design.
-4. **Disposition decision tree.**
-   - **Reproducible on Light calibrator output AND fixable in
-     `bake_composite`** → fix the bake; re-bake Light composite
-     umlauts; ship.
-   - **Only appears in Regular hand-calibrated artifacts** (the
-     bake output for Light doesn't show the artifact, or the
-     artifact appears only because Regular's hand-calibration
-     happened to leave residual divergence) → document as a
-     known-limitation note. Regular ships these letters
-     hand-calibrated, so there's no functional impact on the
-     shipped product.
-   - **Reproducible but rooted in font rasterization** (not bake
-     logic) → document as intrinsic; flag in the methodology
-     chapter as an example of where the bake honestly mirrors
-     font-rendering quirks.
+`bake_composite` (at `scripts/generate_strokes_auto.py:3784-3902`)
+preserves the base's cp count — it is a coordinate
+transformation, not a resample. If Ä's base were `bake_composite`
+output of pure A, Ä's base would carry `[40, 40, 40]` cps. It
+does not. Therefore the calibrator opened Ä directly and
+re-authored the base geometry at 200/200/181 cps, bypassing
+`bake_composite`.
 
-**Methodology framing.** This is the smaller-stakes methodology
-vignette: not a gate, but a worked example of how the calibration
-pipeline surfaces issues that don't fit any existing metric. The
-useful claim is "we identified the artifact, characterized it,
-chose disposition based on root cause" — regardless of which
-branch of the decision tree fires.
+**Empirical bake_composite property — angle-preserving on this
+corpus.** The bbox dimensions of A's ink within Ä's composite
+raster are identical to A's standalone bbox:
 
-**Effort.** M — bake-pipeline analysis + targeted re-bake +
-disposition decision. Less predictable than G6/G3-curved because
-the investigation may take longer than any subsequent
-implementation work.
+| Pair | base bbox (px) | composite bbox (px) | base-region scale within composite |
+|---|---|---|---|
+| A → Ä | 345×488 (339–684, 224–712) | 345×616 (339–684, 96–712) | uniform 1.0×1.0 (composite extends y_min upward only, to fit dots) |
+| O → Ö | 347×494 | 347×616 | uniform 1.0×1.0 |
+| U → Ü | 321×488 | 321×616 | uniform 1.0×1.0 |
+
+The affine transformation in `bake_composite` produces scale
+factors of exactly 1.0 in both dimensions on this corpus. **If
+`bake_composite` were used for Ä's base, it would produce
+angle-preserving output of pure A.** The borderline
+classification cannot be attributed to the bake; it is genuinely
+calibrator-authored geometry.
+
+**Why the calibrator's Ä-base differs from A's standalone.**
+Speculation: hand-redrawing produces slight per-glyph micro-
+variation; with 200 cps capturing micro-jitter that A's 40-cp
+representation doesn't, G3's tolerance just barely flags Ä's
+diagonals as CURVED. The visual difference is almost certainly
+imperceptible. The calibrator-authored variation may be
+intentional (visual harmony with the dots above) or incidental
+(hand-drawing noise); either way, the calibrator accepted the
+geometry as correct.
+
+**Disposition: documentation correction, no code change.** The
+G3 classifier is correctly reading Ä's base as marginally more
+curved than A's. The original "bake artifact" framing across
+`phase2c_design.md`, `g3_calibration_run.md`, and
+`PROJECT_STATUS.md` §3.2 is corrected in this commit to attribute
+the source to the calibrator. Ä continues to ship with G3
+classifying its base strokes as CURVED — which is geometrically
+correct.
+
+**Methodology framing — third instance of predict-falsified-by-
+diagnostic in Phase 2c.** Alongside G6 (predicted "p alone";
+found 15 letters / 20 junctions / 3 archetypes) and G3-curved
+(predicted "few rows"; found 89% of CURVED strokes — populations
+(a) and (c) by design). The composite-umlaut investigation's
+prediction was "`bake_composite` produces the divergence";
+investigation found "the calibrator produces the divergence."
+The predict-explicitly methodology surfaced a structural
+correction (hypothesis-source mismatch) that hand-wavy framing
+would have missed.
+
+**Effort.** S (documentation correction only; no code shipped).
 
 ---
 

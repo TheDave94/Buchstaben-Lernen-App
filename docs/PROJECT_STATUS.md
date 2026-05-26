@@ -143,20 +143,24 @@ risk of being lost when memory resets.
   (2026-05-24). Documented as a "for David's eye" item; no
   further action.
 
-### 3.2 Ä s1 / Ä s2 borderline G3 classifications
+### 3.2 Ä s1 / Ä s2 borderline G3 classifications — RESOLVED 2026-05-26
 
 - **Where.** `g3_calibration_run.md` "Borderline classifications"
-  section.
+  section; `phase2c_design.md` composite-umlaut investigation
+  sub-item.
 - **What it is.** Ä's base diagonals classify just outside G3's
-  STRAIGHT class (Ä s1 p95=0.103 just over 0.100; Ä s2 max=0.290
-  just over π/12). Pure A's analogous strokes are well clear.
-  Indicates the composite-umlaut bake produces slightly different
-  geometry than pure A.
-- **Status.** Scoped 2026-05-25 as the **composite-umlaut
-  investigation sub-item in Phase 2c**, see
-  `research_data/phase2b_gates/phase2c_design.md`. The
-  investigation determines fix-and-ship vs document-and-defer
-  per root cause.
+  STRAIGHT class (Ä s1 p95 = 0.103 rad / 5.92° vs 0.100 rad /
+  5.73° threshold; Ä s2 max = 0.290 rad / 16.62° vs π/12 / 15.00°
+  threshold). Pure A's analogous strokes are well clear.
+- **Status.** RESOLVED 2026-05-26 via the composite-umlaut
+  investigation sub-item in Phase 2c. Original framing attributed
+  the divergence to `bake_composite`; investigation falsified
+  that attribution and corrected to calibrator-authored geometry
+  (cp-count dispositive: `[200, 200, 181, 1, 1]` vs
+  `[40, 40, 40]`). G3 classifier correctly reads the
+  calibrator-authored marginal curvature. No code change. See
+  `research_data/phase2b_gates/phase2c_design.md` composite-
+  umlaut sub-item for the full finding.
 
 ### 3.3 Memory-only / userMemories items
 
