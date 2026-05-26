@@ -521,10 +521,86 @@ does not. Suggested:
 - Finger trace render: ~3-4 mm.
 - Pencil trace render: ~1 mm.
 
-Stroke with `lineCap: .round` and `lineJoin: .round`. Rounded
-caps at endpoints produce the visible letter terminals; the
-filleted joints in the polyline data combined with round line
-joins produce smooth peaks/valleys.
+Both renderers use `lineCap: .round` and `lineJoin: .round`.
+Rounded caps at endpoints produce the visible letter terminals.
+
+**Smoothness has three contributing sources, not one.** The
+visible smoothness of a rendered stroke comes from (a) the
+filleted joints at peaks/valleys carried inside the polyline data
+per §5.2, (b) the round line joins applied at every cp, AND (c) a
+per-segment cubic Bezier blend applied by the ghost renderer at
+display time. All three contribute; removing any one degrades the
+visible smoothness. Earlier revisions of this section attributed
+the smoothness to (a) + (b) alone — that was incomplete; the
+Catmull-Rom-to-Bezier blend at (c) is load-bearing.
+
+**Rendering algorithms — the polyline takes two different paths
+to pixels.** The same `strokes.json` cps render via DIFFERENT
+algorithms in the two child-facing views:
+
+| Layer | When child sees it | Algorithm | Reference |
+|---|---|---|---|
+| Ghost guide | during `observe` / `guided` tracing | uniform Catmull-Rom (tension 1/6) → cubic Bezier per cp pair (`path.addCurve`) | `PrimaeNative/Features/Tracing/TracingCanvasView.swift:83`, `:361-382` |
+| KP reference overlay | during `freeWrite` post-trace review | straight-line `path.addLine` per cp; no smoothing | `PrimaeNative/Features/Tracing/TracingCanvasView.swift:227-231` |
+
+The ghost layer's Catmull-Rom blend produces a C¹-continuous
+cubic Bezier through every cp. Sub-pixel cp jitter on curves is
+absorbed; sharp turns are softened. The KP overlay's straight-line
+rendering does NOT smooth — each cp segment shows as-stored. A cp
+displacement that's invisible under the ghost may be visible on
+the KP overlay at sharp turns.
+
+**Per-stroke independence.** Each stroke is rendered as its own
+SwiftUI `Path` instance. The renderer NEVER smooths across a
+junction between strokes — the Catmull-Rom blend is intra-stroke
+only. For end-to-end junctions and T-junctions, the tangent
+discontinuity at the join is preserved through both renderers and
+visible to the child. This is the geometric property that the G4
+(end-to-end junction kink) and G6 (T-junction attachment angle)
+freeze-gates measure on the cp data.
+
+**Three-stage smoothing pipeline.** A cp in `strokes.json` is the
+output of one or two prior smoothing stages, and is consumed by
+the renderer's Stage 3 above. The stages do NOT share an
+algorithm:
+
+| Stage | Where | Algorithm | Output |
+|---|---|---|---|
+| 1. Bake | `scripts/generate_strokes_auto.py` | Moving-average window=5 on BFS-walked medial-axis pixels (`_smooth_path` at `:2662-2683`), then arc-length resample to `CHECKPOINT_COUNT = 40` | 40 cps per stroke |
+| 2. Calibrator (authoring) | `PrimaeNative/Features/Tracing/StrokeCalibrationOverlay.swift` | Centripetal Catmull-Rom (α = 0.5) over RDP-derived handles (`:907-940`), then arc-length resample to a stroke-complexity-dependent count via `denseCount` (`:811-813`) | 40–200 cps per stroke |
+| 3. Renderer (display) | `PrimaeNative/Features/Tracing/TracingCanvasView.swift` | Uniform Catmull-Rom (tension = 1/6) → cubic Bezier (`:361-382`) | renders to screen |
+
+Bake output is what ships when no calibrator override exists.
+An approximate proxy for calibrator authorship: 33 of the 59
+Regular letters carry at least one stroke with ≥ 200 cps, which
+is well above the bake's `CHECKPOINT_COUNT` default of 40. This
+is a heuristic — calibrator output isn't restricted to high-
+density strokes and bake-output strokes aren't restricted to
+40-cp density — but it indicates calibrator override is the
+majority pattern in the corpus, not the exception.
+
+**Calibrator-vs-renderer spline mismatch.** Stage 2 uses
+centripetal Catmull-Rom (α = 0.5); Stage 3 uses uniform
+Catmull-Rom (tension 1/6). These are two different splines
+through the same cps. They coincide at low curvatures and
+diverge at sharp turns — exactly where T-junctions and corner
+anchors sit. A polyline edited under the centripetal spline
+(what David sees in the calibrator) is rendered under the
+uniform spline (what the child sees in tracing). Both look
+correct in isolation; the visual mismatch is small for most
+letters but becomes noticeable at the highest-curvature points.
+Known artifact of two separately-developed smoothing surfaces,
+not a current bug.
+
+**Variable cp density across the corpus.** `CHECKPOINT_COUNT =
+40` is the bake-stage default but is NOT honored in production.
+Hand-calibrated letters carry 40–200 cps with variable density
+even WITHIN a single letter — empirical examples: E = [40, 200,
+168, 195], B = [40, 199, 153], R = [200, 40, 200], Ä = [200,
+200, 181, 1, 1] (trailing 1-cp strokes are dots). The freeze-
+gates resample to N = 100 internally for measurement; the
+renderer sees the raw native density. Any analysis assuming
+uniform sampling must resample first.
 
 ### 5.4 Scoring is separate from rendering
 
@@ -555,6 +631,11 @@ gameplay, keep this distinction in mind:
   view).
 - Gameplay: polyline stroked thick at constant absolute width
   (production view).
+
+For the algorithmic difference between authoring (calibrator UI)
+and gameplay (runtime renderer) — different Catmull-Rom variants
+on the same cp data — see §5.3 "Calibrator-vs-renderer spline
+mismatch".
 
 ---
 

@@ -53,7 +53,7 @@ David's stated thesis-AI workflow: baseline drafting + reference legwork + final
 - **Main target**: Uses `.defaultIsolation(MainActor.self)` — all types are implicitly @MainActor
 - **Test target**: Uses `.swiftLanguageMode(.v5)` — do NOT change this
 - **CI**: GitHub Actions on macos-26 runner with Xcode 26.4, self-hosted MacBook
-- **Learning phases**: observe → guided → freeWrite (managed by PhaseController)
+- **Learning phases**: observe → direct → guided → freeWrite (managed by PhaseController)
 - **Stroke data**: JSON files in `Resources/Letters/{letter}/strokes.json` with normalized coordinates
 - **Audio**: Proximity-triggered playback via AudioEngine + StrokeTracker
 
