@@ -145,6 +145,15 @@ GATE_METADATA: dict[str, dict] = {
         "comparison": "≤",
         "default_threshold": ai.G4_DEFAULT_THRESHOLD_DEG,
     },
+    "g6": {
+        "function_with_mask": None,
+        "function_without_mask": ai.gate_g6,
+        "needs_mask": False,
+        "title": "T-junction attachment-tangent drift from reference",
+        # Drift gate on per-junction property: pass iff drift ≤ threshold.
+        "comparison": "≤",
+        "default_threshold": ai.G6_DEFAULT_THRESHOLD_DEG,
+    },
 }
 
 

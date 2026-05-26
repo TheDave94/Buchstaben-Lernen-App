@@ -1,4 +1,4 @@
-name: "Bake gates (G1/G3/G4)"
+name: "Bake gates (G1/G3/G4/G6)"
 
 # Phase 2b Track B operational closure (G5): runs the three calibrated
 # drift-from-reference gates as PR merge-blockers when strokes.json
@@ -7,6 +7,11 @@ name: "Bake gates (G1/G3/G4)"
 #
 # G2 (turn-angle drift) is NOT invoked here — investigated 2026-05-23
 # and documented as not-viable; see g2_calibration_run.md.
+#
+# G6 (T-junction attachment-tangent drift, Phase 2c) added 2026-05-26.
+# Mirrors G4's step structure for the T-junction geometric class. Design
+# + rationale at research_data/phase2b_gates/g6_design.md +
+# phase2c_design.md G6 section.
 
 on:
   pull_request:
@@ -23,7 +28,7 @@ env:
 
 jobs:
   bake-gates:
-    name: "Bake gates (G1 / G3 / G4)"
+    name: "Bake gates (G1 / G3 / G4 / G6)"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -80,6 +85,18 @@ jobs:
             --reference-ref origin/main --json > g4.json \
             || true
 
+      - name: G6 — T-junction attachment-tangent drift from reference
+        run: |
+          python3 scripts/run_gates.py --gate g6 \
+            --reference-ref origin/main
+
+      - name: G6 — JSON output (artifact)
+        if: always()
+        run: |
+          python3 scripts/run_gates.py --gate g6 \
+            --reference-ref origin/main --json > g6.json \
+            || true
+
       - name: Upload gate JSON results
         if: always()
         uses: actions/upload-artifact@v4
@@ -89,4 +106,5 @@ jobs:
             g1.json
             g3.json
             g4.json
+            g6.json
           if-no-files-found: warn

@@ -1023,3 +1023,326 @@ def gate_g4(candidate_strokes_rel: list[list[tuple[float, float]]],
         "letter_reason": letter_reason,
         "pass": overall_pass,
     }
+
+
+# -----------------------------------------------------------------------------
+# G6 — Threshold 6 (mid-stroke attachment tangent-drift gate)
+# Design: research_data/phase2b_gates/phase2c_design.md G6 section (scoping-
+# level lock 2026-05-26) and g6_design.md (detailed design when shipped).
+#
+# G6 measures drift in the attachment angle at T-junctions (one stroke's
+# endpoint sits on another stroke's interior, NOT at the host's endpoint).
+# Mirrors G4's drift-gate structure but on a different geometric class:
+# G4 = end-to-end junctions; G6 = T-junctions. Strict classifier by
+# host_cp_idx: G4 owns idx < 5 OR idx > 94 (after N=100 resample);
+# G6 owns 5 ≤ idx ≤ 94. No overlap.
+# -----------------------------------------------------------------------------
+
+G6_RESAMPLE_N = 100             # mirrors G1/G2/G3/G4
+G6_ENDPOINT_SKIP = 3            # cps to skip from attaching endpoint (mirrors G4)
+G6_TANGENT_WINDOW = 5           # cps for LSQ tangent fit (both sides) (mirrors G4)
+# T-junction detection: attaching endpoint within this many px of host
+# polyline. Inherits G4_JUNCTION_EPSILON_PX rationale — corpus's actual
+# junctions all sit ≤ ~11 px apart at the 1024² mask scale.
+G6_JUNCTION_EPSILON_PX = 15.0
+# Host endpoint band — host_cp_idx within this many cps of either end of
+# host's resampled polyline classifies as END-TO-END (G4 territory) and is
+# excluded from G6 measurement. G4 owns idx < band OR idx > (N-1-band);
+# G6 owns band ≤ idx ≤ N-1-band. With N=100 and band=5: G6 owns [5, 94].
+G6_ENDPOINT_BAND = 5
+# Threshold of record (degrees), derived 2026-05-26 against the 2026-05-22
+# session-pair corpus. Max observed tangent drift = 0.50° (A s2→s0);
+# generous +4° margin given thin corpus (n=3 across 2 of 3 archetypes) and
+# measurement-instrument framing per phase2c_design.md G6 section.
+G6_DEFAULT_THRESHOLD_DEG = 4.50
+
+
+def _host_tangent_at_idx(poly_px: list[tuple[float, float]],
+                          host_idx: int,
+                          window: int = G6_TANGENT_WINDOW
+                          ) -> tuple[float, float] | None:
+    """LSQ-fit unit tangent on `window` cps centered at `host_idx`.
+    Window clips to the polyline endpoints if `host_idx` is near the
+    edge (the G4/G6 classifier guarantees 5 ≤ host_idx ≤ 94 after
+    N=100 resample, so the 5-cp window never spills past either end
+    for an honest detection). Sign is arbitrary — callers compare
+    angles unsigned via `abs(dot)`.
+    """
+    n = len(poly_px)
+    half = window // 2
+    start = max(0, host_idx - half)
+    end = min(n, start + window)
+    start = max(0, end - window)
+    if end - start < 2:
+        return None
+    pts = np.array(poly_px[start:end], dtype=float)
+    centroid = pts.mean(axis=0)
+    centered = pts - centroid
+    if np.allclose(centered, 0):
+        return None
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    direction = vh[0]
+    norm = float(np.linalg.norm(direction))
+    if norm < 1e-9:
+        return None
+    return (float(direction[0] / norm), float(direction[1] / norm))
+
+
+def _unsigned_angle_deg(t_a: tuple[float, float] | None,
+                          t_b: tuple[float, float] | None) -> float | None:
+    """Angle between two tangent directions ignoring sign, in [0°, 90°].
+    For T-junctions: attaching tangent vs host-local tangent; the host's
+    sign depends on polyline sampling direction so we collapse to
+    unsigned. Returns None if either tangent is missing.
+    """
+    if t_a is None or t_b is None:
+        return None
+    import math
+    cosv = abs(t_a[0] * t_b[0] + t_a[1] * t_b[1])
+    cosv = float(np.clip(cosv, 0.0, 1.0))
+    return math.degrees(math.acos(cosv))
+
+
+def _t_junction_detect(
+        attach_rel: list[tuple[float, float]],
+        host_rel: list[tuple[float, float]],
+        attach_at_first: bool,
+        bbox: tuple[int, int, int, int],
+        epsilon_px: float = G6_JUNCTION_EPSILON_PX,
+        endpoint_band: int = G6_ENDPOINT_BAND,
+        n_resample: int = G6_RESAMPLE_N,
+        min_cps: int = G6_ENDPOINT_SKIP + G6_TANGENT_WINDOW
+        ) -> dict | None:
+    """Detect a T-junction for one specific endpoint of an attaching
+    stroke against a host stroke.
+
+    Resamples both strokes to `n_resample` (arc-length), converts to
+    px-space via `bbox`. The attaching endpoint is `attach_px[0]`
+    if `attach_at_first` else `attach_px[-1]`. Finds the closest cp
+    on `host_px` to that endpoint and classifies:
+
+    - Returns None if dist > `epsilon_px` (NO-JUNCTION).
+    - Returns None if host_cp_idx is within `endpoint_band` of either
+      end (END-TO-END — G4 territory, not G6).
+    - Returns dict otherwise (MID-STROKE-ATTACHMENT in G6's lane).
+
+    Returned dict keys: host_cp_idx, dist_px, attach_px, host_px,
+    attach_at_first.
+    """
+    import math
+    if len(attach_rel) < 2 or len(host_rel) < 2:
+        return None
+    x_min, y_min, x_max, y_max = bbox
+    bw = max(1, x_max - x_min)
+    bh = max(1, y_max - y_min)
+    a_rs = _arc_length_resample(attach_rel, n_resample)
+    h_rs = _arc_length_resample(host_rel, n_resample)
+    attach_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in a_rs]
+    host_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in h_rs]
+    if len(attach_px) < min_cps:
+        return None
+    if len(host_px) < endpoint_band * 2 + 1:
+        return None
+    endpoint = attach_px[0] if attach_at_first else attach_px[-1]
+    best_d = float("inf")
+    best_i = -1
+    for i, (qx, qy) in enumerate(host_px):
+        d = math.hypot(endpoint[0] - qx, endpoint[1] - qy)
+        if d < best_d:
+            best_d, best_i = d, i
+    if best_d > epsilon_px:
+        return None
+    near_endpoint = (best_i < endpoint_band
+                      or best_i > len(host_px) - 1 - endpoint_band)
+    if near_endpoint:
+        return None
+    return {
+        "host_cp_idx": best_i,
+        "dist_px": best_d,
+        "attach_px": attach_px,
+        "host_px": host_px,
+        "attach_at_first": attach_at_first,
+    }
+
+
+def _t_junction_attachment_angle_deg(
+        det: dict,
+        endpoint_skip: int = G6_ENDPOINT_SKIP,
+        window: int = G6_TANGENT_WINDOW) -> float | None:
+    """Compute the unsigned attachment angle at a detected T-junction.
+
+    Attaching side: `_stroke_tangent_at_endpoint` (G4) — oriented
+    outward from the attaching endpoint toward the stroke's interior.
+    Host side: `_host_tangent_at_idx` — sign arbitrary, collapsed to
+    unsigned via `_unsigned_angle_deg`.
+
+    Result in [0°, 90°]. 0° = attaching stroke runs tangentially
+    along the host; 90° = perpendicular T. Returns None if either
+    tangent is unobtainable.
+    """
+    t_attach = _stroke_tangent_at_endpoint(
+        det["attach_px"], det["attach_at_first"],
+        endpoint_skip=endpoint_skip, window=window)
+    t_host = _host_tangent_at_idx(
+        det["host_px"], det["host_cp_idx"], window=window)
+    return _unsigned_angle_deg(t_attach, t_host)
+
+
+def gate_g6_per_junction(
+        cand_attach_rel: list[tuple[float, float]],
+        cand_host_rel: list[tuple[float, float]],
+        ref_attach_rel: list[tuple[float, float]],
+        ref_host_rel: list[tuple[float, float]],
+        attach_at_first: bool,
+        bbox: tuple[int, int, int, int],
+        threshold_deg: float,
+        epsilon_px: float = G6_JUNCTION_EPSILON_PX,
+        endpoint_band: int = G6_ENDPOINT_BAND,
+        n_resample: int = G6_RESAMPLE_N,
+        endpoint_skip: int = G6_ENDPOINT_SKIP,
+        window: int = G6_TANGENT_WINDOW) -> dict:
+    """Run G6 on a single (candidate, reference) T-junction-pair.
+
+    Detects the T-junction on BOTH rounds via the same classifier;
+    vacuous-passes if detection status differs between rounds.
+    Otherwise computes attachment_angle_deg on each round and returns
+    the absolute drift.
+
+    Returns a per-junction result dict with keys: kink_drift_deg,
+    kink_cand_deg, kink_ref_deg, host_idx_cand, host_idx_ref,
+    dist_cand_px, dist_ref_px, pass, reason?
+    """
+    cand_det = _t_junction_detect(
+        cand_attach_rel, cand_host_rel, attach_at_first, bbox,
+        epsilon_px, endpoint_band, n_resample,
+        min_cps=endpoint_skip + window)
+    ref_det = _t_junction_detect(
+        ref_attach_rel, ref_host_rel, attach_at_first, bbox,
+        epsilon_px, endpoint_band, n_resample,
+        min_cps=endpoint_skip + window)
+    if cand_det is None and ref_det is None:
+        return {
+            "kink_drift_deg": None,
+            "kink_cand_deg": None, "kink_ref_deg": None,
+            "host_idx_cand": None, "host_idx_ref": None,
+            "dist_cand_px": None, "dist_ref_px": None,
+            "pass": True,
+            "reason": "no_t_junction",
+        }
+    if cand_det is None or ref_det is None:
+        return {
+            "kink_drift_deg": None,
+            "kink_cand_deg": None, "kink_ref_deg": None,
+            "host_idx_cand": cand_det["host_cp_idx"] if cand_det else None,
+            "host_idx_ref": ref_det["host_cp_idx"] if ref_det else None,
+            "dist_cand_px": cand_det["dist_px"] if cand_det else None,
+            "dist_ref_px": ref_det["dist_px"] if ref_det else None,
+            "pass": True,
+            "reason": "t_junction_detection_mismatch_between_rounds",
+        }
+    kink_cand = _t_junction_attachment_angle_deg(
+        cand_det, endpoint_skip, window)
+    kink_ref = _t_junction_attachment_angle_deg(
+        ref_det, endpoint_skip, window)
+    if kink_cand is None or kink_ref is None:
+        return {
+            "kink_drift_deg": None,
+            "kink_cand_deg": kink_cand, "kink_ref_deg": kink_ref,
+            "host_idx_cand": cand_det["host_cp_idx"],
+            "host_idx_ref": ref_det["host_cp_idx"],
+            "dist_cand_px": cand_det["dist_px"],
+            "dist_ref_px": ref_det["dist_px"],
+            "pass": True,
+            "reason": "insufficient_measured_points",
+        }
+    drift = abs(kink_cand - kink_ref)
+    return {
+        "kink_drift_deg": drift,
+        "kink_cand_deg": kink_cand,
+        "kink_ref_deg": kink_ref,
+        "host_idx_cand": cand_det["host_cp_idx"],
+        "host_idx_ref": ref_det["host_cp_idx"],
+        "dist_cand_px": cand_det["dist_px"],
+        "dist_ref_px": ref_det["dist_px"],
+        "pass": drift <= threshold_deg,
+    }
+
+
+def gate_g6(candidate_strokes_rel: list[list[tuple[float, float]]],
+              reference_strokes_rel: list[list[tuple[float, float]]],
+              bbox: tuple[int, int, int, int],
+              threshold: float) -> dict:
+    """Run G6 on a candidate-vs-reference letter pair. Mask-free
+    (T-junction attachment angle is a pure polyline property).
+
+    Iterates over ALL (i, j) stroke pairs with i != j — bowl-on-stem
+    T-junctions need not be adjacent in stroke order, so unlike G4
+    we do not restrict to consecutive pairs — and BOTH endpoints
+    ("first", "last") of stroke i against host stroke j. Operates
+    only over the min(len_cand, len_ref) stroke range; extra strokes
+    in either round are ignored (topology change → vacuous-pass on
+    detection mismatch).
+
+    no_t_junction rows are skipped from per_junction output
+    (they're non-junctions, not vacuous-pass diagnostics worth
+    reporting). Letter-level reasons:
+    - "no_t_junctions": no MID-STROKE-ATTACHMENT detected in either
+      round (single-stroke letter or no qualifying junctions)
+    - "all_vacuous": junctions detected but all hit a vacuous-pass
+      reason (detection mismatch or insufficient measured points)
+    """
+    per_junction: list[dict] = []
+    n_strokes = min(len(candidate_strokes_rel), len(reference_strokes_rel))
+    for i in range(n_strokes):
+        for j in range(n_strokes):
+            if i == j:
+                continue
+            for which_label, attach_at_first in (("first", True),
+                                                   ("last", False)):
+                result = gate_g6_per_junction(
+                    candidate_strokes_rel[i], candidate_strokes_rel[j],
+                    reference_strokes_rel[i], reference_strokes_rel[j],
+                    attach_at_first, bbox, threshold)
+                if result.get("reason") == "no_t_junction":
+                    continue
+                result["stroke_i"] = i
+                result["stroke_j"] = j
+                result["which_endpoint_of_i"] = which_label
+                per_junction.append(result)
+    overall_pass = all(j["pass"] for j in per_junction)
+    real_drifts = [j["kink_drift_deg"] for j in per_junction
+                    if j.get("reason") is None
+                    and j.get("kink_drift_deg") is not None]
+    letter_score = max(real_drifts) if real_drifts else None
+    # Letter-level reason taxonomy:
+    # - no_pairs: < 2 strokes; nothing to iterate (clean vacuous pass)
+    # - no_t_junctions: ≥ 2 strokes, pairs iterated, zero junctions
+    #   detected in either round (clean vacuous pass — letter doesn't
+    #   have T-junctions)
+    # - all_vacuous: junctions detected but ALL hit vacuous reasons
+    #   (detection mismatch, insufficient measured points) —
+    #   methodologically meaningful "tried, couldn't measure"; CI
+    #   should pay attention.
+    if n_strokes < 2:
+        letter_reason = "no_pairs"
+    elif not per_junction:
+        letter_reason = "no_t_junctions"
+    elif not real_drifts:
+        letter_reason = "all_vacuous"
+    else:
+        letter_reason = None
+    # Count funnel: scanned → detected → measured. Diagnostic-relevant.
+    n_pairs_iterated = n_strokes * (n_strokes - 1) * 2 if n_strokes >= 2 else 0
+    n_t_junctions_detected = len(per_junction)
+    n_t_junctions_measured = len(real_drifts)
+    return {
+        "per_junction": per_junction,
+        "letter_score": letter_score,
+        "n_strokes_candidate": len(candidate_strokes_rel),
+        "n_strokes_reference": len(reference_strokes_rel),
+        "n_pairs_iterated": n_pairs_iterated,
+        "n_t_junctions_detected": n_t_junctions_detected,
+        "n_t_junctions_measured": n_t_junctions_measured,
+        "letter_reason": letter_reason,
+        "pass": overall_pass,
+    }
