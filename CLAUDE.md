@@ -127,6 +127,25 @@ xcodebuild test -project Primae.xcodeproj -scheme Primae \
    gh run list --repo TheDave94/Primae --limit 3
    ```
 
+## Credentials and the ELEVENLABS_API_KEY pattern
+
+*Based on `/opt/autocoder/CREDENTIAL_CONVENTIONS_TEMPLATE.md` (canonical), adapted for this repo.*
+
+This repo has exactly one credential surface: the `ELEVENLABS_API_KEY` used by `scripts/generate_letter_audio.py` and `scripts/generate_prompts.py`. **No `.env.local`** — the key is entered manually each session, not persisted. The rationale is workflow-shaped: audio generation is a deliberate, paid, low-frequency act ("I am consciously about to spend money") and removing the manual gate would dull that signal.
+
+**Preferred entry pattern** (avoids bash-history leak):
+
+```bash
+read -s -p "ELEVENLABS_API_KEY: " ELEVENLABS_API_KEY && export ELEVENLABS_API_KEY
+python3 scripts/generate_letter_audio.py …
+```
+
+`read -s` suppresses terminal echo; the value enters the shell as an env var without ever landing in `~/.bash_history`. Do **not** use the older `export ELEVENLABS_API_KEY=…<value>…` pattern — that writes the literal value into history, where it persists until rotation.
+
+**Rotation.** `/opt/autocoder/ROTATION_RUNBOOK.md` covers the ElevenLabs key under "manual, not on disk." If a session inadvertently used the `export FOO=…` antipattern, rotate the key.
+
+**`.gitignore`** already covers `.env` and `.env.*` (excluding `.env.example`) — no change needed here.
+
 ## DO NOT
 - Do NOT modify `AudioEngine.swift` — it is stable and fragile
 - Do NOT introduce new dependencies or frameworks
