@@ -82,69 +82,217 @@ tracked at the locations above, not in Phase 2c.
 
 ### G6 — Mid-stroke attachment gate
 
-**Problem statement.** Lowercase p has stroke 1 (the bowl)
-attaching at a non-endpoint of stroke 0 (the stem) — the bowl's
-first cp lies at y=0.33 bbox-rel, on the stem's centerline
-mid-stroke. The four endpoint-pairing distances for p (s0, s1)
-are 144–305 px apart in both rounds. p has no end-to-end junction
-in the geometric sense G4 measures, even though it has a
-structural junction in the pedagogical sense (the bowl is attached
-to the stem; the pen lifts between strokes during writing). G4
-correctly classifies p as `no_junctions_detected`, but the
-bowl/stem attachment quality is unmeasured. (See
-`g4_calibration_run.md` "Discovered scope constraint" for the
-characterization.)
+**Status:** design locked 2026-05-26 from pre-implementation
+diagnostic (G6.v1) + sub-diagnostic (G6.v2). Detailed design + the
+calibration-run output land in `g6_design.md` and
+`g6_calibration_run.md` when the implementation cycle ships; this
+scoping entry records the decisions made at the Phase 2c-scoping
+level so the methodology chapter and the implementation can both
+cite a single locked source.
 
-**Proposed approach.** Measure perpendicular distance from the
-attaching stroke's endpoint to the host stroke's medial axis, with
-a noise-floor tolerance analogous to G3/G4. Polish-preservation
-criterion (per the G2 negative-result lesson — see
-`g3_calibration_run.md` G2/G3 reflection section): the measured
-quantity must not change under maintainer-approved polish.
-Candidate metrics:
+**Reframing — measurement instrument, not merge-blocker.** Regular
+ships as 59 hand-calibrated static artifacts (commit `6a85811c`,
+2026-05-15); the Regular bake pipeline is retired. There is no
+"candidate Regular bundle" for G6 to gate against. G6 therefore
+exists not to protect Regular from regression but to provide a
+measurement primitive for future-font auto-calibration sessions:
+when Primae Light, or a future Schreibschrift weight, runs its
+own session-pair polish workflow, G6 quantifies whether T-junction
+attachment drift is occurring under polish.
 
-- (a) Perpendicular distance from attaching-stroke first-cp to
-  host-stroke medial-axis polyline
-- (b) Perpendicular distance from attaching-stroke first-cp to
-  host-stroke LSQ best-fit line
-- (c) Drift of (a) or (b) between rounds — analogous to G4's
-  kink-drift framing
+**What G6 actually preserves — narrow, data-structural claim.** The
+`strokes.json` polylines are not "the rendered glyph" — they are
+the **operational definition** of letter geometry, consumed six
+ways across the app:
 
-Decision deferred to G6's own design pass; the calibration corpus
-inventory should reveal which formulation is polish-stable.
+1. observe-phase animated guide-dot path (`AnimationGuideController.swift:74-77`)
+2. direct-phase numbered start-dot positions
+3. guided-phase Catmull-Rom ghost render + per-checkpoint
+   advancement gate (`StrokeTracker.swift:94-107`)
+4. freeWrite discrete Fréchet scoring against concatenated
+   reference (`FreeWriteScorer.swift:65, 173`)
+5. Werkstatt symmetric Hausdorff scoring (per-stroke, no
+   cross-stroke phantom edges; `FreeWriteScorer.swift:88-99`)
+6. post-trace KP overlay straight-line reference for
+   Knowledge-of-Performance feedback (`TracingCanvasView.swift:227-231`)
 
-**Calibration plan.**
+The renderer is one consumer of many. G6 measures a property of
+this data structure (the T-junction attachment angle in the cp
+data), not a property of any single downstream rendering. **This
+is explicitly NOT a claim about visual fidelity.** The ghost
+renderer's Catmull-Rom-to-Bezier blend absorbs sub-pixel cp
+jitter on curves (per `docs/BAKE_INVARIANTS.md` §5.3); gate
+thresholds can be tighter than what
+the ghost layer would show. The claim is about preserving the
+geometric data structure that defines the letter operationally
+across all six consumers.
 
-1. Inventory mid-stroke attachment letters in the corpus. At
-   minimum: p. Survey for others by scanning the `LETTERS` dict in
-   `scripts/generate_strokes_auto.py` for letters where one
-   stroke's anchors include `STEM_T` / `STEM_B` / `STEM_MID` of
-   another stroke, or whose first cp lies on another stroke's
-   medial axis. Likely candidates worth checking: k (arm meeting
-   stem), some forms of r.
-2. Compute the candidate metric for each attachment pair across
-   both rounds of the 2026-05-22 corpus.
-3. Polish-preservation check: does the metric stay stable between
-   rounds for maintainer-approved polish?
-4. Derive threshold = `max(observed) + noise-floor margin` (mirror
-   G4's `+2.0°` derivation pattern; the noise-floor for
-   distance-to-medial-axis needs its own derivation).
+**Motivation — the auto-calibrator's documented failure class.**
+The hand-calibrator-overrides-bake architecture (see `docs/LESSONS.md`
+Part A §1-3 and `research_data/spec_decision/framing.md:67-98`)
+exists because the auto-calibrator's `skeletonize` step produced
+spurious medial-axis branches at the T-junction class. Documented
+failure cluster from that investigation: **R, b, d, P** —
+bowl-on-stem T-junctions where the medial axis spawned non-
+trajectory branches that the BFS-walk picked up. The hand-
+calibrator overrides this with the clean T-junction the letters
+require. G6 is therefore not an abstract gate but the
+measurement primitive for the specific geometric class whose
+failure justified the entire calibrator-overrides-bake decision.
+When a future font runs its own auto-calibration, G6 quantifies
+whether the new font's T-junctions have drifted from the
+calibrated reference — catching the exact failure mode that
+motivated the architecture.
 
-**Methodology framing — predict explicitly, verify empirically,
-refine when data falsifies.** Prediction: mid-stroke attachment
-quality is polish-stable because the attachment point is
-structural — David's polish refines stroke geometry around the
-attachment without rotating the join itself. If the corpus
-falsifies this — polish actively moves attachment points across
-rounds — the metric needs different framing (e.g., gate the host
-stroke's straightness near the attachment point rather than the
-attachment-point position itself). This is the same
-predict-verify-refine pattern that G2 used (where the data
-falsified the prediction and the gate was retired) and G3/G4 used
-(where the data confirmed and the gates shipped).
+This is methodologically distinct from G1 / G3-straight / G4,
+which exist primarily as freeze-gates on the shipped artifact.
+Surfaced in "Methodology-chapter framing" below as a dual-
+purpose claim.
 
-**Effort.** M — gate design + corpus inventory + calibration + CI
-integration. Comparable to G4's effort profile.
+**Diagnostic finding — mid-stroke attachment is structural, not
+incidental.** A pre-implementation diagnostic (G6.v1, 2026-05-26)
+enumerated every stroke-pair (i, j) endpoint-vs-polyline pairing
+across the 59-letter Regular corpus and classified each row as
+END-TO-END (G4 territory; host_cp_idx within 5 cps of an endpoint
+after N=100 resample), MID-STROKE-ATTACHMENT (G6 territory;
+5 ≤ host_idx ≤ 94 AND distance ≤ 15 px), or NO-JUNCTION. **15
+letters surface 20 mid-stroke attachment rows**:
+
+| Archetype | Letters | Rows |
+|---|---|---|
+| Crossbar on vertical(s) | A, E, F, H, T | 6 rows |
+| Bowl/loop attached to stem | B, P, R, a, d, p, q, y | 10 rows |
+| Composite umlaut diacritic attachment | Ä, ä | 4 rows |
+
+This is not a Primae-decomposition idiosyncrasy — it is standard
+Latin letter anatomy. Primae's per-pen-lift stroke convention
+exposes the T-junction; alternative decompositions (one continuous
+winding stroke per glyph) would erase the pedagogically-relevant
+pen-lift semantics. The original G6 design hypothesis ("lowercase p
+alone") underestimated the corpus by 15×; G6 is a corpus-wide gate
+with a structural domain, not a p-specific patch.
+
+**Borderline rows** at the G4/G6 boundary: R s2→s1 at host_idx=93
+(band edge 94) and q s0→s1 at host_idx=6 (band edge 5). The strict
+host_cp_idx classifier assigns each unambiguously into G4-territory
+(idx < 5 or idx > 94) or G6-territory (5 ≤ idx ≤ 94) with no
+overlap — no per-letter override required.
+
+**Sub-diagnostic finding — three metrics co-vary; one is enough.**
+A second diagnostic (G6.v2, 2026-05-26) measured three candidate
+drift metrics against the 2026-05-22 session-pair corpus:
+
+- `position_drift` (cp idx on host between r1 and r2)
+- `tangent_drift_deg` (angle between attaching-stroke tangent and
+  host-local tangent at the attachment point; unsigned, 0–90°)
+- `distance_drift_px` (min-distance shift between r1 and r2)
+
+Only 3 of the 20 mid-stroke rows have measurable session pairs:
+A s2→s0, A s2→s1, p s1→s0. The other 17 fall into letters with no
+2026-05-22 sessions (B, E, F, H, P, R, T, a, d, q, y, ä) or into
+Ä's 12 batch-2 sessions, all of which involve stroke-count topology
+changes (umlaut-dot addition workflow; r1 has 2–4 strokes, r2 has
+4–5) and are excluded as polish-corpus-inapplicable.
+
+Results across the n=3 measurable rows:
+
+| Junction | pos_drift (cp) | tan_drift (°) | dist_drift (px) |
+|---|---|---|---|
+| A s2→s0 (crossbar → left leg) | 0 | 0.50 | 0.24 |
+| A s2→s1 (crossbar → right leg) | 1 | 0.15 | 1.22 |
+| p s1→s0 (bowl → stem) | 1 | 0.16 | 1.26 |
+
+**Critical observation: the three metrics co-vary.** When the
+junction shifts under polish, all three move together — they are
+three views of one "junction wiggled" phenomenon, not three
+orthogonal failure modes. Picking BOTH metrics (e.g.,
+tangent-AND-distance) is redundant; picking ONE loses no diagnostic
+power.
+
+**Metric selection: `tangent_drift_deg`.** Two reasons:
+
+1. *Closest analogue to G4.* G4 measures drift on per-junction kink
+   angle; G6 measures drift on per-junction attachment angle. The
+   methodology chapter can frame G6 as "G4's pattern extended from
+   end-to-end junctions to T-junctions" — clean continuity, single
+   pattern name for both gates.
+2. *Most geometrically meaningful.* A T-junction's "shape" is
+   fundamentally its attachment angle; position and distance are
+   downstream of the angle plus host polyline geometry. Picking the
+   semantically primary signal makes the methodology argument
+   cleaner than picking either downstream metric.
+
+**Threshold derivation: 4.5° = 0.50° (max observed) + 4° margin.**
+The margin is intentionally generous:
+
+- The calibration corpus is thin (n=3 across only 2 of 3 archetypes
+  identified by G6.v1; bowl-bearing letters represented only by p,
+  no representative from B/R/d/q; composite umlaut Ä/ä unmeasurable
+  on this corpus).
+- 13 of the 15 mid-stroke letters have no session-pair data;
+  unmeasured archetypes could exhibit different drift profiles.
+- G6's design driver is future-font measurement; Regular's
+  threshold need not be tight (Regular is frozen).
+
+For comparison (margin as fraction of max-observed-drift):
+
+| Gate | Max observed | Margin | Threshold | Margin / max |
+|---|---|---|---|---|
+| G3 | 1.05 px | +1.0 px | 2.05 px | ~95% |
+| G4 | 2.43° | +2.0° | 4.43° | ~82% |
+| G6 | 0.50° | +4.0° | 4.50° | ~800% |
+
+G6's 800% margin reflects both the corpus thinness AND the
+measurement-instrument framing. If a future-font calibration
+session surfaces a real tangent drift > 4.5° on a T-junction, that
+is signal the threshold needs re-derivation against the expanded
+corpus. Threshold-of-record may change; both outcomes are fine for
+a measurement instrument.
+
+**Methodology vignette — the bowl-bearing absence IS evidence.**
+The bowl-bearing archetype (B, P, R, a, d, q, y; p is the lone
+representative with a 2026-05-22 session pair) is conspicuously
+absent from the n=3 calibration corpus. This is not random absence.
+These letters were authored via the calibrator override precisely
+BECAUSE the auto-calibrator failed on their T-junction topology
+(per the Motivation block above: R, b, d, P documented failure
+cluster). Once correctly authored by the calibrator, they're
+stable — the 2026-05-22 polish sessions did not need to touch
+them. The absence is therefore not a calibration weakness; it
+reflects a structural property of the corpus: **the geometric
+class G6 measures is high-stability once correctly authored.**
+This is congruent with G6's measurement-instrument framing: the
+gate is for catching the class when it goes WRONG (the auto-
+calibrator-on-new-font case), not for tracking polish on Regular
+where the class is already correctly stable. The undercoverage
+of the most methodologically-motivating archetype is consistent
+with the right framing — if those letters were unstable under
+polish on Regular, we would have polish data on them, and we
+don't.
+
+**Implementation scope (mirrors G4).**
+
+1. `scripts/audit_invariants.py`: `gate_g6_per_junction`, `gate_g6`,
+   `_t_junction_detect`, `_host_tangent_at_idx`. Reuse
+   `_stroke_tangent_at_endpoint` from G4 for the attaching-stroke
+   side; reuse `_arc_length_resample` for both sides. Constant
+   `G6_DEFAULT_THRESHOLD_DEG = 4.50`.
+2. `scripts/run_gates.py`: GATE_METADATA["g6"] entry.
+3. `scripts/tests/test_gate_g6.py`: synthetic-T-junction unit tests
+   mirroring `test_gate_g4.py` (perpendicular T as identity case;
+   skewed T as off-90° case; topology-change vacuous-pass case;
+   borderline-band classifier handoff to G4 case; zero-junction
+   letter vacuous-pass case).
+4. `scripts/calibrate_g6_threshold.py`: formal calibration script
+   producing the 4.5° threshold deterministically. Output mirrors
+   `calibrate_g4_threshold.py`.
+5. `.github/workflows/bake-gates.yml`: add G6 step.
+6. `research_data/phase2b_gates/g6_design.md` +
+   `g6_calibration_run.md`: detailed design + calibration-run docs
+   (this scoping section is not a substitute).
+
+**Effort.** M — comparable to G4, plus a small documentation cost
+for the dual-purpose methodology claim.
 
 ---
 
@@ -329,6 +477,54 @@ load-bearing artifact for the methodology chapter.** The chapter
 cites this doc whether or not the gates ship. The doc gives the
 gap closure a defined shape that can be either claimed-as-shipped
 or claimed-as-scoped-and-deferred.
+
+**Dual purpose surfaced by G6.** Phase 2b's gates (G1 / G3-straight
+/ G4 / G5) function primarily as freeze-gates: they protect the
+shipped Regular artifact from regression. G6's design pass surfaces
+a second purpose — measurement instrument for future-font auto-
+calibration. Regular is frozen; G6 cannot meaningfully "protect"
+it. But when Primae Light or a future weight runs its own polish-
+session workflow, G6 quantifies T-junction attachment drift exactly
+as G4 quantifies end-to-end junction kink drift.
+
+The dual-purpose framing is grounded in two findings the G6
+design pass surfaced:
+
+1. *The polyline is the operational definition of letter geometry,
+   not a rendering input.* The `strokes.json` cps are consumed six
+   ways: observe guide-dot animation, direct start dots, guided
+   ghost render + checkpoint advancement, freeWrite Fréchet,
+   Werkstatt Hausdorff, KP overlay. Gates measure properties of
+   THIS data structure; the rendered glyph is one consumer of many.
+   Methodology claims should accordingly speak to the polyline's
+   geometric properties, not to visual fidelity in any single
+   renderer.
+
+2. *G6's geometric class is exactly the class that motivated the
+   calibrator-overrides-bake architecture.* The auto-calibrator's
+   documented failure cluster (`docs/LESSONS.md` Part A §1-3;
+   `research_data/spec_decision/framing.md:67-98`) was R, b, d, P
+   bowl-on-stem T-junctions where `skeletonize` produced spurious
+   medial-axis branches. G6 IS the measurement primitive for this
+   class. The gate's existence is therefore directly traceable to
+   the architectural decision that justified the entire hand-
+   calibrator workflow — making G6 a natural anchor for the
+   methodology chapter's narrative about why hand calibration is
+   necessary.
+
+The methodology chapter should be explicit about both purposes:
+gates as freeze-protection for shipped artifacts (G1, G3, G4
+primary use) and gates as calibration instruments for future
+artifacts (G6 primary use; arguably G3-curved if/when it ships).
+Every gate serves both roles to some degree — G6 is the case
+where the calibration-instrument role IS the design driver, and
+the threshold derivation reflects that (800% margin vs G3/G4's
+~80-95%). This dual framing strengthens the "predict explicitly,
+verify empirically" arc: G6 was predicted as a freeze-gate
+analogue to G4, then the data (Regular is frozen; bowl-bearing
+archetype already stable; no candidate to gate) surfaced that the
+gate's actual role is different. The predict-verify-refine
+pattern operates on the gate's PURPOSE, not only on its METRIC.
 
 ---
 
