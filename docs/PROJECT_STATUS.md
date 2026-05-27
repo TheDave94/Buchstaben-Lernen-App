@@ -164,13 +164,26 @@ risk of being lost when memory resets.
 
 ### 3.3 Memory-only / userMemories items
 
-`/root/.claude/projects/.../memory/MEMORY.md` carries 14 entries.
-Most are operational reflexes (CI-wait scope, commit-boundary
-hold, etc.) that don't translate to committed docs. The
-project-state entry (`project_phase2b_track_b_state.md`) is the
-only one carrying substantive project history; the contents of
-that entry are now reflected in this PROJECT_STATUS.md and in
-the per-gate calibration_run.md docs.
+Claude-Code session memory for this project currently lives at
+`/root/.claude/projects/-opt-repos-Buchstaben-Lernen-App/memory/` —
+the directory name still carries the pre-rebrand project path
+encoding (the repo was `Buchstaben-Lernen-App` before the Primae
+rebrand; Claude's memory-dir naming followed the original working-
+directory and did not migrate). The dir holds 14 memory entries
+(10 `feedback_*`, 4 `project_*`) indexed by `memory/MEMORY.md`.
+Created by earlier root-owned Claude sessions; today's
+thedave-owned sessions instead write to
+`/home/thedave/.claude/projects/-opt-repos-Primae/memory/`, which
+is currently empty.
+
+Most entries are operational reflexes (CI-wait scope,
+commit-boundary hold, visual-approval gate, code-comment standards,
+etc.) that don't translate to committed docs. The two `project_*`
+entries carrying substantive project history are
+`project_phase2b_track_b_state.md` (reflected in this
+PROJECT_STATUS.md and the per-gate `*_calibration_run.md` docs)
+and `project_thesis_scope.md` (Austrian Volksschule 1. Klasse
+scope decision, reflected in `docs/ROADMAP.md`).
 
 ---
 
