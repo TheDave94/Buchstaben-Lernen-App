@@ -260,25 +260,44 @@ Items where status can't be determined from docs alone. Each
 needs your call before the project's "what's next" framing is
 solid.
 
-### 5.1 What's the post-Phase-2b-Track-B workstream?
+### 5.1 What's next after Phase 2c completion?
 
-The ROADMAP's at-a-glance table after Phase 2b Track B's
-completion still lists P6 + U5 + U10 + D8 as "what's next" —
-accurate but mostly asset/device work, not engineering. As of
-2026-05-25 the engineering-push options are:
-- (a) **Phase 2c** (defined in
-  `research_data/phase2b_gates/phase2c_design.md`): G6
-  mid-stroke attachment gate + G3-curved + composite-umlaut
-  investigation. Methodology-relevant gate-coverage gap
-  closure. Pre-thesis or post-thesis is your call — the
-  methodology chapter narrates either way (see
-  phase2c_design.md "Methodology-chapter framing").
-- (b) thesis writing (the primae-thesis content/*.typ files
-  are KUG template stubs with placeholder italic prompts —
-  no actual prose yet).
-- (c) corpus growth (Track C — collect more session pairs;
-  trigger conditions in framing.md §"Open question").
-- (d) something else / TBD.
+**Status: Phase 2c complete (2026-05-26); remaining options narrow to
+thesis writing (b) or post-thesis polish.**
+
+Phase 2c shipped as scoped in
+`research_data/phase2b_gates/phase2c_design.md`:
+- **G6 mid-stroke attachment tangent-drift gate** — shipped at
+  commit `f6365b9`.
+- **G3-curved** — investigated, not viable as a freeze-gate metric
+  (see `research_data/phase2b_gates/g3_curved_not_viable.md`,
+  commit `4a2a224`).
+- **Composite-umlaut investigation** — closed; original "bake
+  artifact" framing for Ä's borderline G3 classification was
+  empirically false. Ä's base geometry is calibrator-authored
+  intent (densified strokes prove the calibrator bypassed
+  `bake_composite`), not a pipeline artifact (commit `0c89b0d`).
+
+Engineering-push options now:
+- (a) **Post-thesis polish** — Phase 2c is complete; remaining
+  engineering work is limited and none of it thesis-blocking:
+  - Composite-umlaut shipped Light-only items (Q-class bake
+    topology for `Q, a_l, ä_l, g_l, q_l, ü_l`; ß Light resolver)
+    — tracked in `docs/ROADMAP.md` line 37 (bake-pipeline open
+    follow-up).
+  - `verify_bake.sh` CI lift — operational CI hygiene; tracked in
+    `docs/BAKE_INVARIANTS.md` §2 Threshold 6 + §6 tally.
+  - G5.5 merge-base switch — contingency for a workflow that
+    doesn't yet exist (frequent main rebases); tracked in
+    `research_data/phase2b_gates/g5_design.md` G5.4.
+  - D8 (Canvas redraw frequency profile) and D9 (renderer open
+    questions) — tracked in `docs/ROADMAP.md` §4 Technical Debt.
+- (b) **Thesis writing** — biggest remaining workstream. The
+  `primae-thesis` content/*.typ files are KUG template stubs with
+  placeholder italic prompts; no actual prose yet.
+- (c) **Corpus growth** — RESOLVED, see §5.3 (corpus frozen for
+  Regular's lifetime; trigger tied to new-font calibration).
+- (d) Something else / TBD.
 
 "Track A" (endpoint_trim bake fix) was a placeholder term used
 in earlier session prompts; deprecated 2026-05-25 since
@@ -295,13 +314,32 @@ topology, ß resolver, `verify_bake.sh` CI lift, G5.5 merge-base
 switch) each tracked separately. All "Phase 2c" placeholder
 references swept to point at the design doc.
 
-### 5.3 Calibration corpus growth — when?
+### 5.3 Calibration corpus growth — when? — RESOLVED 2026-05-26
 
 `framing.md` says ~50-100 session pairs would be needed before
 revisiting residual-model approaches. Current corpus has 38 pairs
-(13 letters). Growing the corpus is a multi-session activity
-that has to be slotted alongside thesis-blocking work. Worth
-deciding when to schedule the next iPad calibration session.
+(13 letters).
+
+**David's stated position (2026-05-26):** no further calibration
+sessions are planned for Regular. The corpus is treated as frozen
+for Regular's lifetime. The "when do we hit 50-100 via natural
+growth?" framing therefore dissolves — there is no scheduled
+extension of Regular's corpus.
+
+The 50-100-pair threshold remains a forward-pointer, but it now
+becomes a question of whether a *future font's* calibration
+(Primae Light, a future Schreibschrift weight, or another future
+weight) accumulates that many pairs across its own corpus.
+**Trigger condition for revisiting residual-model approaches:**
+new-font calibration crossing the threshold.
+
+**Methodology implication.** G6's n=3 calibration corpus —
+calibration on 2 of 3 T-junction archetypes per
+`research_data/phase2b_gates/g6_design.md` — is the concrete
+instance of this constraint. "Corpus is what it is" for the gate
+set as well: the n=3 limitation is shipped-as-is, and any future
+revisit is coupled to whichever new font is next calibrated, not
+to a scheduled Regular extension.
 
 ---
 
