@@ -27,7 +27,7 @@ The app is more complete and sophisticated than a "freeze-triage" frame suggeste
 - `FreeWriteScorer.score(tracedPoints:reference:)` — blank-canvas production scorer, decoupled from the guidance UI (scores from points + reference, no UI dependency). Returns a 4-dim `WritingAssessment` (Form/Tempo/Druck/Rhythmus, Marquardt & Söhl 2016).
 - `RetrievalPromptView` — already a recognition mini-test (target + distractors + audio cue + `onAnswer(tapped, correct)` callback).
 - `LetterScheduler` (priority/`fixedOrder`); `SettingsView` @State+UserDefaults+Toggle pattern; CoreML `LetterRecognizer` (53-class, shipping in freeWrite/Werkstatt).
-- `AudioEngine.pitchCents` — independent pitch knob, **wired but currently undriven during tracing** (only `rate` is mapped). Available headroom; intentionally unused (see D7).
+- `AudioEngine.pitchCents` — independent pitch knob, **wired but currently undriven during tracing** (only `rate` is mapped). Per D7 (RESOLVED 2026-05-30), pitch joins the coupling at build time; what movement parameter drives it is D7-sub (open).
 
 **Not problems (confirmed):** zero TODO/FIXME in the Swift codebase; tracing/input/scheduling spine mature and works end-to-end; the audio engine is the thesis mechanism, not a gap.
 
@@ -71,7 +71,8 @@ Implications:
 | D3 | Post-test outcome design: what each of the 3 modes measures; scoring; recognition distractor choice; production prompt (NB: a sound prompt in a sound-off test is a contradiction — resolve). Which is the PRIMARY outcome. | Defines what the study measures. | OPEN — prime Seither-Preisler item |
 | D4 | Which outcomes to RUN in the pilot. Build-all-three decided (H6); *running* all three in a 10–20 min kindergarten session is a methods question (attention budget; multiple-comparison load on N≈40). Settings toggle moves this to pilot-run time; does not dissolve it. | Session feasibility + analysis validity | Build all three (decided); run-selection deferred |
 | D6 | Stop-consonant under continuous looping. The loop+speed-couple principle works naturally for continuants (/m/, /f/, /l/ stretch and loop). Stops (/b/, /k/, /t/) have no steady state to loop/stretch. What does the phoneme arm play for stops? (Also applies to the arbitrary loop.) Intersects the no-schwa spec. | Phoneme-arm fidelity for ~⅓ of letters | OPEN — sound-domain, likely Groß-Vogt |
-| D7 (deferred) | Pitch coupling. The `pitchCents` knob is wired but undriven. The thesis prose leaves the acoustic parameter unspecified, so adding pitch is **fidelity-permissible** (neither described nor contradicted) — IF applied identically across phoneme+arbitrary arms (matching discipline). Concern is attentional load on young children (Merritt mechanism), NOT fidelity. | Possible intervention enrichment | DEFERRED pending the auditory-complexity evidence sweep; David open to it; leaning toward reserving for a FUTURE study to keep the pilot intervention clean and interpretable |
+| D7 | Pitch coupling. The `pitchCents` knob is wired but undriven. The thesis prose leaves the acoustic parameter unspecified, so adding pitch is **fidelity-permissible** (neither described nor contradicted) — IF applied identically across phoneme+arbitrary arms (matching discipline). | Intervention enrichment with documented multi-parameter caveat | RESOLVED 2026-05-30 — **pitch IN the pilot.** Rationale: (a) fidelity-permissible per thesis prose; (b) closest same-age precedents — Ecalle 2021 (5yo, trajectory→pitch+brightness, sonification group beat controls) and Groß-Vogt 2024 (first-graders, pen-y→pitch) — both used pitch without reported harm; both FULL-read and already cited in §2.6; (c) no contraindication in the coupling sweep (see *Evidence base for D7* below); (d) already wired (`pitchCents` knob). **CONDITIONS (non-negotiable):** (1) **matching discipline** — identical pitch coupling in BOTH phoneme and arbitrary arms, only the audio file differs (the shared `setAdaptivePlayback` path makes this automatic); (2) **honest framing** — in Ch.5/methodology, pitch is a design choice consistent with precedents, NOT an evidence-backed component; (3) **documented limitation** — the pilot intervention is a three-parameter coupling (rate+pan+pitch), so an effect cannot be attributed to any single parameter; single-parameter isolation is an explicit future-study direction. |
+| D7-sub | Pitch mapping target — `pitchCents` is wired but what movement parameter drives it is undecided (y-position? curvature? something else?). Matched across arms per D7 condition (1). | Defines the pitch axis of the three-parameter coupling | OPEN — decide at build time |
 
 ---
 
@@ -89,6 +90,20 @@ Six papers read in full (both sides):
 
 ---
 
+## Evidence base for D7 (pitch RESOLVED)
+
+**Same-age precedents (FULL-read, already cited in thesis §2.6):**
+- **Ecalle et al. 2021** (Hum Mov Sci): 5-year-olds, sonification group (trajectory → pitch + brightness) outperformed controls on letter learning. Pitch present in the intervention, no reported harm.
+- **Groß-Vogt et al. 2024**: first-graders, pen y-position → pitch mapping. Pitch present, no reported harm.
+
+**Adult-only coupling-sweep papers (abstract-only):** Maslovat, Effenberg & Schmitz 2018, Ghai 2019, Frid. Surveyed at abstract level for the evidence-AGAINST question; LOW/VERY-LOW Ch-2-relevance.
+
+**Honesty note.** The verdict "keep speed-coupling; pitch defensible" rests on an **abstract-level literature survey** (adequate for the evidence-AGAINST question, since a contraindicating study would surface in its abstract), **NOT full reads**. The same-age justification (Ecalle 2021, Groß-Vogt 2024) IS full-read (already cited in the thesis). The adult pitch papers (Effenberg & Schmitz 2018, Ghai 2019) are abstract-only and would need full reads only if Ch.5 methodology cites them.
+
+**Conclusion.** No contraindication for adding pitch to the coupling. Pitch joins rate + pan as the third coupling parameter, under the three D7 conditions (matching discipline, honest framing, documented multi-parameter limitation).
+
+---
+
 ## Related separate workstreams (not the Primae freeze)
 
 **Listening study — a SEPARATE app David will build.** Not a Primae mode. Tests non-phoneme sounds; out of scope for the Primae freeze.
@@ -99,7 +114,11 @@ Six papers read in full (both sides):
 - **Measurement-design caveat:** graded association judgments by young children are a real validity challenge (acquiescence bias, etc.) — a Seither-Preisler item when that app is built.
 - **Status:** own document when built; this is the brief cross-reference.
 
-**Thesis-relevant papers (separate acquire-read-verify-cite into the closed, CI-green thesis):** Bara-2018 → §2.1 candidate (Bara/Gentaz lineage); Zemlock-2018 → §2.2 candidate (James lab, strengthens production-over-procedure); Merritt-2020 → optional methodological-cautions note.
+**Thesis-relevant papers (deliberate §2.1/§2.2 recon + citation-candidate survey, 2026-05-30):**
+- **Bara-2018, Zemlock-2018:** CONFIRMED REDUNDANT for Chapter 2 (existing cites cover their points). They remain load-bearing in PILOT_READINESS only — Bara-2018 → D5 evidence base; Zemlock-2018 → production-helps frame.
+- **Coupling-sweep papers (Maslovat, Effenberg & Schmitz 2018, Ghai 2019, Frid):** LOW/VERY-LOW Ch-2-relevance, NOT Ch-2-bound.
+- **Seyll & Content 2022:** the survey's ONE find — integrated into §2.2 ¶4 as a single-sentence qualification of the variability prediction (committed separately in the thesis repo, `35a0419`).
+- **No remaining Chapter-2 citation work pending.**
 
 ---
 
@@ -113,4 +132,4 @@ Six papers read in full (both sides):
 - `docs/APP_DOCUMENTATION.md` line 1819 cites Thibon with DOI `10.1016/j.actpsy.2017.11.014` — a typo; the correct DOI is `10.1016/j.actpsy.2017.12.001`. (The §4.4 reference at line 633 has no DOI.) Fix whenever convenient.
 
 ## Sequencing
-No human-gated blockers remain (no ethics/committee dependency). Everything is build-David-controls or design-David-decides. The HIGH items (arms H1–H3, arbitrary-sound H4+D2, P6 H5, post-test H6+D3) are pilot-blocking. The `direct` cut (D5) is a separate scoped change. The design decisions D2 (arbitrary sound) and D3 (post-test outcomes) gate their respective builds and should be settled well — D2/D6 are the prime Groß-Vogt sanity-checks (sound domain); D3 is the prime Seither-Preisler item. The pitch question (D7) is deferred to the auditory-complexity evidence sweep.
+No human-gated blockers remain (no ethics/committee dependency). Everything is build-David-controls or design-David-decides. The HIGH items (arms H1–H3, arbitrary-sound H4+D2, P6 H5, post-test H6+D3) are pilot-blocking. The `direct` cut (D5) is a separate scoped change. The design decisions D2 (arbitrary sound) and D3 (post-test outcomes) gate their respective builds and should be settled well — D2/D6 are the prime Groß-Vogt sanity-checks (sound domain); D3 is the prime Seither-Preisler item. The pitch question (D7) is RESOLVED (pitch IN the pilot, under three conditions); D7-sub (what movement parameter drives pitch) is open and decided at build time.
