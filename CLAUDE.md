@@ -49,6 +49,16 @@ When METHODOLOGY.md in Primae gets a new or revised decision entry, Claude Code 
 
 David's stated thesis-AI workflow: baseline drafting + reference legwork + final spelling/wording pass. Substance iteration is David's. The KUG affidavit at submission will disclose this.
 
+## Session boundaries — code work vs thesis prose
+
+This repo and `primae-thesis` share working sessions today, and that's the primary context-pressure source — recent sessions have pegged the 1M-token ceiling and `/compact`ed 13–19 times. Split deliberately:
+
+- **One axis per session.** A session is either Swift code work (feature impl, sweep cycles, baking, CI watching) **or** thesis prose work (drafting `content/*.typ`, citation hunting, bibliography curation). Not both in one session. The two-repo working setup is also a two-session setup.
+- **Phase / milestone = session boundary.** When a sweep cycle, a feature, or a chapter section wraps, summarise the outcome into `~/.claude/projects/-opt-repos-Primae/memory/project_primae.md` and start a fresh session for the next phase.
+- **For thesis-only sessions, start CC from `/opt/repos/primae-thesis`** rather than this tree. CC creates a separate project workspace and memory namespace there; you get a clean context budget per side.
+
+User-level `~/.claude/CLAUDE.md` has the general output discipline (Bash caps, ranged Reads, test-output verbatim) — it applies here.
+
 ## Architecture
 - **Main target**: Uses `.defaultIsolation(MainActor.self)` — all types are implicitly @MainActor
 - **Test target**: Uses `.swiftLanguageMode(.v5)` — do NOT change this
