@@ -140,7 +140,7 @@ Carried forward from the superseded `docs/RENDERING.md` "Open questions for rend
 
 ---
 
-### D10 — Self-hosted CI runner: `xcrun` can't find `simctl` — RESOLVED 2026-06-19 (pending CI re-run confirmation)
+### D10 — Self-hosted CI runner: `xcrun` can't find `simctl` — RESOLVED 2026-06-19
 **Effort:** S (a couple of local commands on the runner machine) · **Priority:** P2 — precondition for on-device golden-test work
 
 **Symptom.** The `Device Test (MacBook self-hosted)` CI job fails at its first step, "List available iPad simulators", with `xcrun: error: unable to find utility "simctl", not a developer tool or in PATH`. It dies before compilation. The hosted `Build & Test — iPad Simulator (macos-26 / Xcode 26)` job builds and runs the full suite on the same SHA and is green — so a red overall badge from this is **runner-infra, not code** (first observed on the docs-only commit `3f9cda3`, 2026-06-19).
