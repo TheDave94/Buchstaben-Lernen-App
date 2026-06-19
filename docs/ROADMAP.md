@@ -140,14 +140,21 @@ Carried forward from the superseded `docs/RENDERING.md` "Open questions for rend
 
 ---
 
-### D10 — Self-hosted CI runner: `xcrun` can't find `simctl`
-**Effort:** S (one local command on the runner machine) · **Priority:** P2 — precondition for on-device golden-test work
+### D10 — Self-hosted CI runner: `xcrun` can't find `simctl` — RESOLVED 2026-06-19 (pending CI re-run confirmation)
+**Effort:** S (a couple of local commands on the runner machine) · **Priority:** P2 — precondition for on-device golden-test work
 
 **Symptom.** The `Device Test (MacBook self-hosted)` CI job fails at its first step, "List available iPad simulators", with `xcrun: error: unable to find utility "simctl", not a developer tool or in PATH`. It dies before compilation. The hosted `Build & Test — iPad Simulator (macos-26 / Xcode 26)` job builds and runs the full suite on the same SHA and is green — so a red overall badge from this is **runner-infra, not code** (first observed on the docs-only commit `3f9cda3`, 2026-06-19).
 
 **Root cause.** The self-hosted MacBook's active developer directory is unset or points at CLT-only / a missing toolchain, so `xcrun simctl` can't resolve. Prior runs were green through 2026-05-31, so something changed on that machine since (Xcode path, OS update, or toolchain removal).
 
-**Fix (local op on the runner machine — David runs it, NOT a claudebox task).** `sudo xcode-select -s /Applications/Xcode.app` on the self-hosted runner, then re-run the job to confirm `xcrun simctl list devices` resolves.
+**Fix (local op on the runner machine — David runs it, NOT a claudebox task).** The runner has **Xcode-beta**, not release Xcode — `/Applications/Xcode.app` does not exist on that machine, only `/Applications/Xcode-beta.app`. What worked (2026-06-19):
+```
+sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer
+sudo xcodebuild -license accept
+```
+After which `xcrun simctl list devices` resolved (iOS 26.5 sims present) and `xcode-select -p` confirmed the beta path.
+
+**Caveat (keep visible).** The runner now builds against a **BETA toolchain**. This will break again the same way whenever Xcode-beta updates/relocates or a release Xcode is installed without repointing. The durable fix is to keep `xcode-select` pointed at whatever Xcode is actually installed (or install release Xcode for stability).
 
 **Priority flag.** This is a **precondition for the planned geometry golden-test / characterization work**: any golden test that depends on the on-device runner cannot be trusted until the runner is healthy. Fix before building the golden-test net — not necessarily before then.
 
