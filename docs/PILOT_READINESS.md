@@ -128,6 +128,9 @@ Six papers read in full (both sides):
 - Post-thesis features (F1–F10, gated on thesis ship per ROADMAP).
 - U5 Pencil-2 squeeze device validation (P3), U10 VoiceOver walkthrough (P3) — pre-existing P3, not pilot-blocking.
 
+## Known issue — CalibrationStore override-shadow (pilot-blocking)
+- This shadow is now a thesis-truth-condition: Ch.5's reframe asserts every child traces the identical frozen stimulus, which is false on a device where CalibrationStore overrides outrank the bundle for Druckschrift. Fix (study-mode guard + cleared overrides) is required before the pilot, not optional hardening.
+
 ## Known doc-hygiene fix (independent of the freeze)
 - `docs/APP_DOCUMENTATION.md` line 1819 cites Thibon with DOI `10.1016/j.actpsy.2017.11.014` — a typo; the correct DOI is `10.1016/j.actpsy.2017.12.001`. (The §4.4 reference at line 633 has no DOI.) Fix whenever convenient.
 
