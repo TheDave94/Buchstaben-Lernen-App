@@ -28,6 +28,11 @@ struct TracingDependencies {
     /// Play the phoneme instead of the letter name; falls back to
     /// name audio for letters without phoneme recordings.
     var enablePhonemeMode: Bool
+    /// Study mode for pilot devices: bypass the CalibrationStore override
+    /// so the scored path returns the frozen bundle stimulus
+    /// (thesis-truth-condition; see `TracingViewModel.resolvedStrokes`).
+    /// Off by default.
+    var studyMode: Bool
     /// Opt-in spaced-retrieval prompts before every Nth letter.
     var enableRetrievalPrompts: Bool
     /// Reverse direct-phase tap order (Spooner 2014).
@@ -106,6 +111,9 @@ struct TracingDependencies {
         enablePhonemeMode: Bool = UserDefaults.standard.bool(
             forKey: "de.flamingistan.primae.enablePhonemeMode"
         ),
+        studyMode: Bool = UserDefaults.standard.bool(
+            forKey: "de.flamingistan.primae.studyMode"
+        ),
         enableRetrievalPrompts: Bool = UserDefaults.standard.bool(
             forKey: "de.flamingistan.primae.enableRetrievalPrompts"
         ),
@@ -140,6 +148,7 @@ struct TracingDependencies {
         self.enablePaperTransfer = enablePaperTransfer
         self.enableFreeformMode = enableFreeformMode
         self.enablePhonemeMode = enablePhonemeMode
+        self.studyMode = studyMode
         self.enableRetrievalPrompts = enableRetrievalPrompts
         self.enableBackwardChaining = enableBackwardChaining
         self.letterRecognizer = letterRecognizer

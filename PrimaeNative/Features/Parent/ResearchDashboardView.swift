@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ResearchDashboardView: View {
     @Environment(TracingViewModel.self) private var vm
+    @State private var showClearCalibrationConfirm = false
 
     var body: some View {
         ScrollView {
@@ -20,6 +21,7 @@ struct ResearchDashboardView: View {
                 schedulerSection
                 phaseRecordsSection
                 letterTableSection
+                studyDeviceSection
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 24)
@@ -44,6 +46,40 @@ struct ResearchDashboardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Study device prep
+
+    /// Researcher control to wipe on-device stroke calibrations before a
+    /// pilot session. Pilot iPads are used devices that may carry
+    /// Druckschrift overrides; clearing them (together with `studyMode`)
+    /// makes every child trace the identical frozen bundle stimulus.
+    /// Surfaces `clearAllCalibrations()` — previously reachable only via
+    /// the debug calibrator overlay — and mirrors that overlay's
+    /// destructive-confirm pattern. Scoped, like the overlay, to the
+    /// active `SchriftArt` (the pilot runs Druckschrift).
+    private var studyDeviceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(title: "Studien-Gerät vorbereiten",
+                          subtitle: "Gespeicherte Stroke-Kalibrierungen für die aktive Schriftart entfernen, damit jedes Kind exakt das gebündelte Stimulus-Set nachspurt")
+            Button(role: .destructive) {
+                showClearCalibrationConfirm = true
+            } label: {
+                Label("Kalibrierungs-Overrides löschen", systemImage: "trash")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            .confirmationDialog("Kalibrierungs-Overrides löschen?",
+                                isPresented: $showClearCalibrationConfirm,
+                                titleVisibility: .visible) {
+                Button("Löschen", role: .destructive) { vm.clearAllCalibrations() }
+                Button("Abbrechen", role: .cancel) {}
+            } message: {
+                Text("Entfernt jede auf diesem Gerät gespeicherte Stroke-Kalibrierung für die aktive Schriftart. Das gebündelte Set übernimmt anschließend. Für Studien-Geräte vor dem Piloten empfohlen.")
+            }
+        }
     }
 
     // MARK: - Schreibmotorik

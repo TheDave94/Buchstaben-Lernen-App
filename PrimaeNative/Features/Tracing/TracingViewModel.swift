@@ -235,16 +235,33 @@ public final class TracingViewModel {
     /// Stroke data for the calibration overlay (canvas-mapped).
     var strokeDefinition: LetterStrokes? { strokeTracker.definition }
 
+    /// The single resolution chokepoint for a letter's scored,
+    /// bbox-relative strokes. In study mode the on-device
+    /// `CalibrationStore` override is bypassed so the scored path returns
+    /// the identical frozen *bundle* stimulus — the thesis-truth-condition
+    /// behind Ch.5's "every child traces the identical frozen stimulus"
+    /// claim (`StrokeGeometryGoldenTests` pins this `letter.strokes`
+    /// target). Otherwise the saved user calibration wins, unchanged.
+    /// Used by the three scored-geometry sites only — deliberately NOT by
+    /// `loadAllEffectiveStrokes` (the calibrator export must still see
+    /// overrides).
+    func resolvedStrokes(for letter: LetterAsset) -> LetterStrokes {
+        if studyMode { return letter.strokes }
+        return calibrationStore.strokes(for: letter.name, schriftArt: schriftArt)
+            ?? letter.strokes
+    }
+
     /// Raw glyph-relative strokes (0-1 within bbox). Non-Druckschrift
     /// always uses bundle JSON (committed calibrations in
     /// `strokes_schulschrift.json` are authoritative). Druckschrift
-    /// prefers the user-calibrated Application Support file.
+    /// prefers the user-calibrated Application Support file (unless
+    /// `studyMode` bypasses it — see `resolvedStrokes(for:)`).
     var glyphRelativeStrokes: LetterStrokes? {
         guard !letters.isEmpty, letterIndex < letters.count else { return nil }
         if showingVariant, let vs = variantStrokeCache { return vs }
         if let ss = activeScriptStrokes { return ss }
         let letter = letters[letterIndex]
-        return calibrationStore.strokes(for: letter.name, schriftArt: schriftArt) ?? letter.strokes
+        return resolvedStrokes(for: letter)
     }
 
     /// Active-letter strokes mapped from bbox-relative to cell-fraction
@@ -261,8 +278,7 @@ public final class TracingViewModel {
         } else if let ss = activeScriptStrokes {
             bbox = ss
         } else {
-            bbox = calibrationStore.strokes(for: letter.name, schriftArt: schriftArt)
-                ?? letter.strokes
+            bbox = resolvedStrokes(for: letter)
         }
         let cellSize = grid.activeCell.frame.size
         guard cellSize.width > 0, cellSize.height > 0,
@@ -369,6 +385,19 @@ public final class TracingViewModel {
             // Reset the variant cursor so a swipe doesn't index out
             // of the new population.
             audioIndex = 0
+        }
+    }
+    /// Study mode for pilot devices: bypass the on-device
+    /// `CalibrationStore` override so the scored path returns the frozen
+    /// *bundle* stimulus (the thesis-truth-condition behind Ch.5's
+    /// identical-across-arms claim). Off by default, so default behavior
+    /// is unchanged. Geometry-only — affects nothing but
+    /// `resolvedStrokes(for:)`. Persisted like the other research flags
+    /// so a configured study device stays in study mode across relaunches.
+    var studyMode: Bool = false {
+        didSet {
+            UserDefaults.standard.set(studyMode,
+                forKey: "de.flamingistan.primae.studyMode")
         }
     }
     /// Opt-in spaced-retrieval prompts before every Nth letter; off
@@ -610,6 +639,7 @@ public final class TracingViewModel {
         self.enablePaperTransfer    = deps.enablePaperTransfer
         self.enableFreeformMode     = deps.enableFreeformMode
         self.enablePhonemeMode      = deps.enablePhonemeMode
+        self.studyMode              = deps.studyMode
         self.enableRetrievalPrompts = deps.enableRetrievalPrompts
         self.enableBackwardChaining = deps.enableBackwardChaining
         self.letterRecognizer       = deps.letterRecognizer
@@ -1551,7 +1581,7 @@ public final class TracingViewModel {
         } else if let ss = activeScriptStrokes {
             source = ss
         } else {
-            source = calibrationStore.strokes(for: letter.name, schriftArt: schriftArt) ?? letter.strokes
+            source = resolvedStrokes(for: letter)
         }
         for cell in grid.cells {
             let cellLetter = cell.item.letter
