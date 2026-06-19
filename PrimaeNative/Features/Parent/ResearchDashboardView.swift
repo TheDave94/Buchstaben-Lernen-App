@@ -59,9 +59,25 @@ struct ResearchDashboardView: View {
     /// destructive-confirm pattern. Scoped, like the overlay, to the
     /// active `SchriftArt` (the pilot runs Druckschrift).
     private var studyDeviceSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        @Bindable var vm = vm
+        return VStack(alignment: .leading, spacing: 12) {
             sectionHeader(title: "Studien-Gerät vorbereiten",
-                          subtitle: "Gespeicherte Stroke-Kalibrierungen für die aktive Schriftart entfernen, damit jedes Kind exakt das gebündelte Stimulus-Set nachspurt")
+                          subtitle: "Studienmodus aktivieren und gespeicherte Kalibrierungen entfernen, damit jedes Kind exakt das gebündelte Stimulus-Set nachspurt")
+            Toggle(isOn: $vm.studyMode) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Studienmodus")
+                        .font(.body(FontSize.md, weight: .semibold))
+                    Text(vm.studyMode
+                         ? "An — dieses Gerät spurt exakt das gebündelte Stimulus-Set nach; gespeicherte Kalibrierungs-Overrides werden umgangen."
+                         : "Aus — normale Kalibrierung; gespeicherte Overrides gewinnen.")
+                        .font(.caption)
+                        .foregroundStyle(Color.inkSoft)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 8))
             Button(role: .destructive) {
                 showClearCalibrationConfirm = true
             } label: {
