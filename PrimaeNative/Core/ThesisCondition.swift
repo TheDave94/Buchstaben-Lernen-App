@@ -143,4 +143,41 @@ enum ParticipantStore {
     static var enrolledAt: Date? {
         UserDefaults.standard.object(forKey: enrolledAtKey) as? Date
     }
+
+    /// Spaced-retrieval counter key (per participant). Mirrors
+    /// `RetrievalScheduler.counterKey`; reset for a new participant so the
+    /// retrieval cadence restarts.
+    private static let retrievalCounterKey = "de.flamingistan.primae.retrievalCounter"
+
+    /// Resets participant IDENTITY for a fresh enrollee on a shared study
+    /// device, returning the new UUID. Generates a new `participantId`
+    /// (which re-derives BOTH arm axes via their independent UUID-modulo
+    /// bytes — `ThesisCondition` on byte 0, `PilotAudioCondition` on byte
+    /// 15), clears both researcher overrides (so the new UUID isn't
+    /// pinned to a forced arm), re-enrols with a fresh `enrolledAt` = now,
+    /// and clears the per-participant retrieval counter.
+    ///
+    /// Device/parent config (studyMode, schriftArt, weights, toggles) is
+    /// deliberately untouched — only participant-scoped identity resets.
+    /// Data stores are wiped separately by the caller
+    /// (`TracingViewModel.resetForNewParticipant`).
+    ///
+    /// `enrolledAt` is stamped at this instant; the new participant's
+    /// first record can only occur after the required app relaunch
+    /// (strictly later), so no real record can fall before it and the
+    /// exporter's pre-enrolment filter never drops a legitimate row.
+    @discardableResult
+    static func startNewParticipant() -> UUID {
+        let new = UUID()
+        UserDefaults.standard.set(new.uuidString, forKey: key)
+        // Clear arm pins so the fresh UUID re-randomises both axes.
+        UserDefaults.standard.removeObject(forKey: conditionOverrideKey)
+        UserDefaults.standard.removeObject(forKey: audioConditionOverrideKey)
+        // Re-enrol with a fresh timestamp at the reset instant.
+        UserDefaults.standard.set(true, forKey: enrolledKey)
+        UserDefaults.standard.set(Date(), forKey: enrolledAtKey)
+        // Restart the spaced-retrieval cadence for the new participant.
+        UserDefaults.standard.removeObject(forKey: retrievalCounterKey)
+        return new
+    }
 }

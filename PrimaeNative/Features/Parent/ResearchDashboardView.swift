@@ -10,6 +10,12 @@ import SwiftUI
 struct ResearchDashboardView: View {
     @Environment(TracingViewModel.self) private var vm
     @State private var showClearCalibrationConfirm = false
+    /// New-participant flow: export-then-wipe. The share URL drives the
+    /// export sheet; on its dismiss the destructive wipe confirm appears.
+    @State private var newParticipantShareURL: URL?
+    @State private var showNewParticipantConfirm = false
+    @State private var showRelaunchAlert = false
+    @State private var showExportError = false
 
     var body: some View {
         ScrollView {
@@ -33,16 +39,28 @@ struct ResearchDashboardView: View {
     // MARK: - Participant header
 
     private var participantHeader: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Teilnehmer-ID")
+        // Short ID + the ACTIVE session arms (read live from the VM, not
+        // the last record) so a proctor glancing at the device during
+        // handoff can confirm which participant is enrolled — the
+        // anti-data-merge safeguard. Research-tab only (parent-gated);
+        // never surfaced child-facing. After a "Neuer Teilnehmer" reset
+        // the arms reflect the running session until the app is
+        // relaunched (see the relaunch prompt).
+        let shortID = ParticipantStore.participantId.uuidString.prefix(8)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Aktiver Teilnehmer")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Color.inkSoft)
-            Text(ParticipantStore.participantId.uuidString)
-                .font(.system(.footnote, design: .monospaced))
+            Text("Teilnehmer \(String(shortID))")
+                .font(.system(.title2, design: .monospaced).weight(.bold))
                 .textSelection(.enabled)
-            Text("Studienarm: \(conditionLabel(vm.dashboardSnapshot.phaseSessionRecords.last?.condition))")
-                .font(.caption)
+            Text("\(vm.audioCondition.displayName) · \(vm.thesisCondition.displayName)")
+                .font(.callout.weight(.medium))
                 .foregroundStyle(Color.inkSoft)
+            Text(ParticipantStore.participantId.uuidString)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(Color.inkSoft)
+                .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -79,6 +97,30 @@ struct ResearchDashboardView: View {
             .padding(.vertical, 8)
             .background(Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 8))
+
+            Divider().padding(.vertical, 2)
+            Text("Neuen Teilnehmer beginnen")
+                .font(.body(FontSize.md, weight: .semibold))
+            Text("Exportiert zuerst die aktuellen Daten (JSON-Archiv), dann werden alle Teilnehmer-Daten gelöscht und ein neuer Teilnehmer mit neuer ID und neuer Studienarm-Zuordnung angelegt. Geräte-Einstellungen bleiben erhalten.")
+                .font(.caption)
+                .foregroundStyle(Color.inkSoft)
+            Button {
+                do {
+                    newParticipantShareURL = try ParentDashboardExporter.exportFileURL(
+                        from: vm.dashboardSnapshot,
+                        format: .json,
+                        progress: vm.allProgress)
+                } catch {
+                    showExportError = true
+                }
+            } label: {
+                Label("Neuer Teilnehmer", systemImage: "person.crop.circle.badge.plus")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.borderedProminent)
+
+            Divider().padding(.vertical, 2)
             Button(role: .destructive) {
                 showClearCalibrationConfirm = true
             } label: {
@@ -96,6 +138,40 @@ struct ResearchDashboardView: View {
             } message: {
                 Text("Entfernt jede auf diesem Gerät gespeicherte Stroke-Kalibrierung für die aktive Schriftart. Das gebündelte Set übernimmt anschließend. Für Studien-Geräte vor dem Piloten empfohlen.")
             }
+        }
+        // Export the outgoing participant's data first; the wipe confirm
+        // only appears AFTER this sheet dismisses — export strictly
+        // precedes any destructive action.
+        .sheet(isPresented: Binding(
+            get: { newParticipantShareURL != nil },
+            set: { if !$0 { newParticipantShareURL = nil } }
+        ), onDismiss: {
+            showNewParticipantConfirm = true
+        }) {
+            if let url = newParticipantShareURL {
+                ActivitySheet(items: [url])
+            }
+        }
+        .confirmationDialog("Teilnehmer-Daten löschen?",
+                            isPresented: $showNewParticipantConfirm,
+                            titleVisibility: .visible) {
+            Button("Löschen & neu starten", role: .destructive) {
+                vm.resetForNewParticipant()
+                showRelaunchAlert = true
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Daten exportiert? Diese Aktion löscht unwiderruflich alle Teilnehmer-Daten (Fortschritt, Sessions, Sterne, Kalibrierungen) und legt einen neuen Teilnehmer mit neuer ID und neuer Studienarm-Zuordnung an. Geräte-Einstellungen bleiben erhalten.")
+        }
+        .alert("Neustart erforderlich", isPresented: $showRelaunchAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Neuer Teilnehmer angelegt. Bitte die App jetzt vollständig schließen und neu starten, damit die neue Studienarm-Zuordnung aktiv wird.")
+        }
+        .alert("Export fehlgeschlagen", isPresented: $showExportError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Die Export-Datei konnte nicht erstellt werden. Es wurde nichts gelöscht.")
         }
     }
 

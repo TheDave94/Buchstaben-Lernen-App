@@ -133,7 +133,9 @@ private struct ExportCenterView: View {
     }
 }
 
-private struct ActivitySheet: UIViewControllerRepresentable {
+/// Share-sheet wrapper. Module-internal so both the export center and
+/// the ResearchDashboard new-participant flow share one implementation.
+struct ActivitySheet: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: items, applicationActivities: nil)

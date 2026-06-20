@@ -1716,6 +1716,28 @@ public final class TracingViewModel {
         }
     }
 
+    /// Single clean-slate action for a new enrollee on a shared study
+    /// device. The caller MUST have exported first (researcher-gated in
+    /// ResearchDashboard) — this is irreversible. Wipes every
+    /// participant-scoped data store, clears on-device calibrations, and
+    /// regenerates participant identity (new UUID → re-randomised arms,
+    /// cleared overrides, fresh enrolment). Device/parent config is
+    /// preserved. Returns the new participant UUID.
+    ///
+    /// The new arm assignment takes effect on the NEXT app launch — the
+    /// VM captures `thesisCondition` / `audioCondition` as `let` at init —
+    /// so the caller surfaces a "relaunch required" prompt.
+    @discardableResult
+    func resetForNewParticipant() -> UUID {
+        dashboardStore.reset()          // PhaseSessionRecords, letterStats, durations
+        progressStore.resetAll()        // all LetterProgress
+        streakStore.reset()             // streak + stars
+        clearAllCalibrations()          // on-device stroke overrides (active SchriftArt)
+        let newID = ParticipantStore.startNewParticipant()  // new UUID + arms + enrolment
+        refreshProgressMirror()         // clear the SwiftUI progress mirror
+        return newID
+    }
+
     /// Persist calibrated glyph-relative checkpoints. Delegates to CalibrationStore
     /// and re-applies the new data to the tracker so the current letter reflects
     /// the calibration immediately without navigating away and back.
