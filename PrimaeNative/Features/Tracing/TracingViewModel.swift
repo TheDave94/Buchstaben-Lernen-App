@@ -786,13 +786,35 @@ public final class TracingViewModel {
         audio.loadAudioFile(named: files[audioIndex], autoplay: true)
     }
 
-    /// Audio population for the parent's phoneme toggle. Falls back
-    /// to name audio when no phoneme files are bundled.
+    /// Audio file list for the active pilot arm (`audioCondition`). The
+    /// arm chooses the CONTENT; the adaptive-playback coupling
+    /// (TouchDispatcher.updateAdaptivePlayback) is identical for both
+    /// sound arms and reads none of this — only the file list differs
+    /// (§2.6 matching discipline). Silent returns []; every read site
+    /// short-circuits on an empty list, so no file is ever loaded and no
+    /// loop can play.
     func activeAudioFiles(for asset: LetterAsset) -> [String] {
-        if enablePhonemeMode, !asset.phonemeAudioFiles.isEmpty {
-            return asset.phonemeAudioFiles
+        switch audioCondition {
+        case .silent:
+            return []
+        case .arbitrarySound:
+            // Placeholder slot — empty until H4/D2 sources the
+            // engagement-matched control sounds. No fallback to name
+            // audio: that would leak letter-name content into the
+            // non-phonemic arm and confound the contrast.
+            return asset.arbitraryAudioFiles
+        case .phoneme:
+            // Unchanged from the pre-pilot toggle: casual users and the
+            // phoneme arm both honour `enablePhonemeMode`. Falls back to
+            // name audio when no phoneme recording is bundled.
+            // (H2.1 will force phonemes on study devices so a phoneme-arm
+            // participant can't silently get name audio — see
+            // PILOT_READINESS.)
+            if enablePhonemeMode, !asset.phonemeAudioFiles.isEmpty {
+                return asset.phonemeAudioFiles
+            }
+            return asset.audioFiles
         }
-        return asset.audioFiles
     }
 
     // MARK: - Letter navigation

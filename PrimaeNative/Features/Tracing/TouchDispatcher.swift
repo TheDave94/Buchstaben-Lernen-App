@@ -284,6 +284,16 @@ final class TouchDispatcher {
     /// and stereo pan, then drive the playback state machine.
     private func updateAdaptivePlayback(canvasNormalized: CGPoint) {
         guard let vm else { return }
+        // Silent arm: no audio content (activeAudioFiles returns [] so no
+        // file ever loaded) AND no coupling. Short-circuit BEFORE any
+        // setAdaptivePlayback so the coupling drive never fires and no
+        // playback can resume. The two SOUND arms fall through to the
+        // identical path below — only the loaded file differs, never the
+        // coupling (§2.6 matching discipline).
+        if vm.audioCondition == .silent {
+            vm.playback.request(.idle, immediate: true)
+            return
+        }
         let speed       = Self.mapVelocityToSpeed(smoothedVelocity)
         let azimuthBias = vm.pencilPressure != nil ? cos(vm.pencilAzimuth) * 0.2 : 0
         // Pan follows absolute x across the whole canvas (not the

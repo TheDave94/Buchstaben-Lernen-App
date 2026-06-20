@@ -75,18 +75,22 @@ private struct CodableLetterAsset: Codable {
     let letterCase: LetterAsset.LetterCase?
     let audioFiles: [String]
     let phonemeAudioFiles: [String]?
+    /// Optional for backward-compatible decode of caches written before
+    /// the pilot's arbitrary-sound arm existed (decode → []).
+    let arbitraryAudioFiles: [String]?
     let strokes: LetterStrokes
     let variants: [String]?
 
     init(_ asset: LetterAsset) {
-        id                = asset.id
-        name              = asset.name
-        baseLetter        = asset.baseLetter
-        letterCase        = asset.letterCase
-        audioFiles        = asset.audioFiles
-        phonemeAudioFiles = asset.phonemeAudioFiles
-        strokes           = asset.strokes
-        variants          = asset.variants
+        id                  = asset.id
+        name                = asset.name
+        baseLetter          = asset.baseLetter
+        letterCase          = asset.letterCase
+        audioFiles          = asset.audioFiles
+        phonemeAudioFiles   = asset.phonemeAudioFiles
+        arbitraryAudioFiles = asset.arbitraryAudioFiles
+        strokes             = asset.strokes
+        variants            = asset.variants
     }
 
     var asset: LetterAsset {
@@ -98,7 +102,8 @@ private struct CodableLetterAsset: Codable {
             audioFiles: audioFiles,
             strokes: strokes,
             variants: variants,
-            phonemeAudioFiles: phonemeAudioFiles ?? []
+            phonemeAudioFiles: phonemeAudioFiles ?? [],
+            arbitraryAudioFiles: arbitraryAudioFiles ?? []
         )
     }
 }
