@@ -3,7 +3,7 @@
 > An iPad app that teaches **Austrian Volksschule 1. Klasse** children to write the alphabet by hand — through a research-backed four-phase pedagogical flow, on-device CoreML handwriting recognition, and a multidimensional *Schreibmotorik* motor-skill assessment.
 
 [![iOS Build & Test](https://github.com/TheDave94/Primae/actions/workflows/ios-build.yml/badge.svg)](https://github.com/TheDave94/Primae/actions/workflows/ios-build.yml)
-![Platform](https://img.shields.io/badge/platform-iPadOS%2018%2B-blue)
+![Platform](https://img.shields.io/badge/platform-iPadOS%2026%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-6.3-orange)
 ![Xcode](https://img.shields.io/badge/Xcode-26.4-blue)
 ![License](https://img.shields.io/badge/license-Master's%20thesis-lightgrey)
@@ -139,11 +139,12 @@ The repo intentionally keeps documentation small and role-separated:
 
 | File | Purpose |
 |------|---------|
-| [`docs/APP_DOCUMENTATION.md`](docs/APP_DOCUMENTATION.md) (+ [`.pdf`](docs/APP_DOCUMENTATION.pdf)) | **The single technical doc.** Architecture, scientific methods with citations, learning pipeline, data schemas, claim verification, the stroke-generation bake pipeline (§13 — arm/joint primitives + visual sweep workflow), bibliography. Includes appendices A (architecture quick reference), B (research export schema), C (phoneme audio authoring guide). |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | **The single outstanding-work file.** Forward-looking only — items shipped are removed (commit history is the archive). Each item has effort estimate, file list, citations, failure modes. |
+| [`docs/APP_DOCUMENTATION.md`](docs/APP_DOCUMENTATION.md) | **The single technical doc.** Architecture, scientific methods with citations, learning pipeline, data schemas, claim verification, the stroke-generation bake pipeline (§13 — arm/joint primitives + visual sweep workflow), bibliography. Includes appendices A (architecture quick reference), B (research export schema), C (phoneme audio authoring guide). |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | **The single outstanding-work file.** Forward-looking only — items shipped are removed (commit history is the archive). Each item has effort estimate, file list, citations, failure modes. Includes the pilot-study freeze items (H1–H6) and known issues. |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **Pilot decision ledger.** Locked + open design decisions (D-series), their evidence bases, and the governing design constraints — the *why* behind the pilot's shape. |
 | [`design-system/`](design-system/) | **Primae visual identity.** Color tokens (light + dark), type ramp, spacing scale, font files, sticker-button spec, preview HTML, and the iPad UI kit (`ui_kits/ipad-app/`). Source of truth for the SwiftUI tokens in `PrimaeNative/Theme/`. |
 | [`docs/LESSONS.md`](docs/LESSONS.md) | **Code-level invariants** — guardrails to read before touching `AudioEngine.swift`, `StrokeTracker.swift`, or the `load(letter:)` path. Kept separate so the next contributor reads it in full instead of skimming an appendix. |
-| [`docs/RENDERING.md`](docs/RENDERING.md) | **Rendering model reference.** The architectural distinction between the polyline data (size-agnostic pen centerline) and the renderer (which sets stroke width as a render-time parameter, independent of letter size). Read before any Swift rendering work. |
+| [`docs/BAKE_INVARIANTS.md`](docs/BAKE_INVARIANTS.md) | **Bake invariants + rendering model.** The permanent rules and measurable thresholds every shipped letter polyline must satisfy, plus the polyline-vs-renderer model (§5 — size-agnostic pen centerline vs render-time stroke width, the distinction to know before any bake or Swift rendering work). Absorbed the former `RENDERING.md` and `STROKE_CALIBRATION.md`. |
 | [`docs/STROKE_AUDIT.md`](docs/STROKE_AUDIT.md) | **Historical four-agent stroke audit** (May 2026) — the analysis that motivated the bake-pipeline rewrite. Most recommendations have shipped; retained as background for anyone picking up the Q-class topology or curve workstream noted in `docs/ROADMAP.md`. The status header at the top of the file indicates which phases shipped vs are still open. |
 | [`docs/TESTING_CHECKLIST.md`](docs/TESTING_CHECKLIST.md) (+ [`testing_checklist.html`](docs/testing_checklist.html)) | **Manual test checklist.** The `.md` is the canonical source — read it on GitHub. The companion `.html` (regenerated via `python3 scripts/render_checklist.py`) is a self-contained page with **real, interactive checkboxes** that persist to `localStorage`, a sticky progress counter, and a "Copy unchecked" button that drops your failure list onto the clipboard ready to paste back. Open `docs/testing_checklist.html` directly from Finder (`file://…`) — no server needed. |
 | [`CLAUDE.md`](CLAUDE.md) | Auto-loaded context for Claude Code agents. |
