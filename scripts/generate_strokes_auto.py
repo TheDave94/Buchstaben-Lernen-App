@@ -22,7 +22,7 @@ primitive architecture (straight_line + fillets/sharp joints). They
 shipped clean from an earlier pipeline and are byte-identical
 across pipeline changes.
 
-See `docs/INVARIANTS.md` for the permanent centerline rules — every
+See `docs/BAKE_INVARIANTS.md` for the permanent centerline rules — every
 bake must satisfy centerline location, centerline shape, stroke type
 purity, and junction continuity. Apply to every letter, every weight.
 

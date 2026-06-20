@@ -1,0 +1,35 @@
+Primae Font — License & Attribution
+====================================
+
+The Primae typeface (all bundled weights and cursive variants:
+Primae-Regular, -Light, -Semilight, -Semibold, -Bold, and their
+-Cursive / -Text companions) is the work of its designers and is
+distributed with the Primae application under:
+
+    Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+    International (CC BY-NC-SA 4.0)
+
+    Designers / rights holders: Nemeth, Tiefenthaler.
+
+License summary (not a substitute for the full legal text):
+- BY  — You must give appropriate credit to the designers.
+- NC  — You may not use the material for commercial purposes.
+- SA  — If you remix or build upon the material, you must distribute
+        your contributions under the same license.
+
+Full legal text and the human-readable deed:
+    https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
+    https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+Bundled locations in this repository:
+    PrimaeNative/Resources/Fonts/   (app bundle — runtime)
+    design-system/fonts/            (design-system reference copies)
+
+Note on commercial / App Store distribution: the NC clause is a
+constraint to resolve before any paid or commercial release of the app
+(tracked with the App Store readiness work in docs/ROADMAP.md). For the
+master's-thesis pilot and academic use, CC BY-NC-SA 4.0 covers the
+bundled use.
+
+The sibling Playwrite AT font (Schreibschrift / cursive script) is under
+the SIL Open Font License — see PlaywriteAT-OFL.txt in this directory.

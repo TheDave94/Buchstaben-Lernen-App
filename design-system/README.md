@@ -295,9 +295,12 @@ and colour.
 
 The user MUST iterate with us on these — see the closing ask.
 
-1. **Primae font is not bundled** — the real OTFs are not under a
-   redistributable license, so the system substitutes **Nunito**.
-   Visual rhythm is approximated, not pixel‑perfect.
+1. **Primae font is bundled** — the OTFs ship in `design-system/fonts/`
+   and `PrimaeNative/Resources/Fonts/` (12 weights) under
+   CC BY-NC-SA 4.0 (Nemeth/Tiefenthaler); see
+   `PrimaeNative/Resources/Fonts/Primae-Font-CC-BY-NC-SA-4.0.txt`.
+   (An earlier note here claimed the font was unbundled and the system
+   substituted **Nunito** — no longer true.)
 2. **No screenshots, no Figma** — every visual decision (paper hue,
    world tints, card shadow style, layout grid) is *derived* from the
    doc's text. The app's actual interface may differ in details.

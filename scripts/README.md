@@ -87,9 +87,13 @@ Exits non-zero on drift. Cheap enough (~12 s for the full set) to
 run before any commit that touches `generate_strokes_auto.py`.
 
 ### `generate_letter_audio.py`
-ElevenLabs voice generator for letter phonemes, example words, and
-tracing words across multiple voices. Used to build the audio inventory
-for the demo letters and any future expansion.
+ElevenLabs voice generator for the letter-**name** audio, example
+words, and tracing words (the `audioFiles` population) across multiple
+voices. Used to build the name/word audio inventory for the demo
+letters and any future expansion. **Not for phonemes** — the pilot
+phoneme (Anlaut) set is RECORDED by a human voice, not synthesised
+(ElevenLabs returns letter names/words, not isolated phones); see
+`docs/SOUND_PRODUCTION_SPEC.md`.
 
 ```bash
 export ELEVENLABS_API_KEY=...                    # never commit; .env is gitignored
@@ -103,8 +107,10 @@ The script writes to `audio_variants/<Voice>/<Letter>/` and
 git — pick the favourite voice's files and copy them into
 `PrimaeNative/Resources/Letters/<X>/` to ship them.
 
-> Phonemes, not letter names. `M` is recorded as "mmmh", not "Em" — the
-> Anlauttabelle approach used in Austrian Volksschule 1. Klasse.
+> The phoneme (Anlaut) recordings — `M` as "mmmh", not "Em", the
+> Anlauttabelle approach used in Austrian Volksschule 1. Klasse — are
+> produced separately by studio recording (human voice), NOT by this
+> script. See `docs/SOUND_PRODUCTION_SPEC.md`.
 
 ### `generate_prompts.py`
 ElevenLabs generator for the 13 static prompt MP3s the child hears
