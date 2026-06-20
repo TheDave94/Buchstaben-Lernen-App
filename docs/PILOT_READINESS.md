@@ -59,7 +59,7 @@ Implications:
 | H1 | New `PilotAudioCondition: { phoneme, arbitrarySound, silent }` enum + assignment. Pedagogical flow held constant (D1), so this is the audio dimension only. | Build | Slots into existing UUID-modulo assignment + override + enrollment + per-arm exporter. |
 | H2 | Arm-aware audio selection — `activeAudioFiles(for:)` currently branches on the `enablePhonemeMode` Settings toggle; must branch on pilot arm. | Build | Single chokepoint: `if arm == .silent { return [] }`; phoneme → phoneme files; arbitrary → arbitrary files. One-function change. Both audio arms keep the identical shared `setAdaptivePlayback` coupling (matching discipline). |
 | H3 | Silent-arm codepath — no arm/mode-controlled silent path exists; today silence happens only by omission when an asset is missing. | Build | Cleanest via H2 (return `[]` short-circuits the playback path). Do NOT touch AudioEngine.swift (stable/fragile). |
-| H4 | Arbitrary-sound asset set — does not exist. Engagement-matched, coupling-matched, non-phonemic looping audio. **Design not yet decided (D2).** Must be loopable + speed-couplable like the phoneme loops. | Design + assets | Liking-match informed by the separate listening study (below). |
+| H4 | Arbitrary-sound asset set — does not exist. Engagement-matched, coupling-matched, non-phonemic looping audio. **Design DECIDED (D2 RESOLVED 2026-06-20: distinct abstract sound per letter); assets not yet designed.** Must be loopable + speed-couplable like the phoneme loops. | Design + assets | Liking-match informed by the separate listening study (below). |
 | H5 | P6 phoneme recordings — 0/90 (30 letters × 3 takes), no-schwa spec, ElevenLabs pipeline ready; 7 letters currently have non-phoneme audio. | Assets | XL per stocktake. The sonification engine works; it has almost nothing to sonify yet. |
 | H6 | In-app sound-off post-test — **build all three, selectable in Settings:** (a) recognition, (b) production, (c) letter-sound. No test-mode flow exists today (app is all learning/practice). | Build | Strong reuse: `FreeWriteScorer` (production, as-is), `RetrievalPromptView` (recognition + hear→tap letter-sound, as-is), `LetterScheduler` (letter set), Settings-toggle pattern (selection), new `PostTestResult` Codable record (overload-with-defaults pattern). MUST-BUILD-NEW: a `PostTestController` orchestrator (~100–200 lines, parallel to `LearningPhaseController`, NOT a 5th LearningPhase case); distractor-picker; researcher start-screen. Audio suppression via the H2 chokepoint. |
 
@@ -67,7 +67,7 @@ Implications:
 
 | # | Decision | Why it matters | Status |
 |---|----------|----------------|--------|
-| D2 | Arbitrary-sound arm design: what IS the engagement-matched, non-phonemic, coupling-matched control loop? | A wrong control confounds the central phoneme contrast — no committee backstop. Must be loopable + speed-couplable; must run the identical coupling path (matching discipline). Liking-match informed by the listening study. | OPEN — prime Groß-Vogt (sound domain) sanity-check |
+| D2 | Arbitrary-sound arm design: what IS the engagement-matched, non-phonemic, coupling-matched control loop? | A wrong control confounds the central phoneme contrast — no committee backstop. Must be loopable + speed-couplable; must run the identical coupling path (matching discipline). Liking-match informed by the listening study. | RESOLVED 2026-06-20 — **distinct abstract sound per letter** (structure decided; asset *design* is the Groß-Vogt execution ask, not the decision). See *D2 — RESOLVED* below. |
 | D3 | Post-test outcome design: what each of the 3 modes measures; scoring; recognition distractor choice; production prompt (NB: a sound prompt in a sound-off test is a contradiction — resolve). Which is the PRIMARY outcome. | Defines what the study measures. | OPEN — prime Seither-Preisler item |
 | D4 | Which outcomes to RUN in the pilot. Build-all-three decided (H6); *running* all three in a 10–20 min kindergarten session is a methods question (attention budget; multiple-comparison load on N≈40). Settings toggle moves this to pilot-run time; does not dissolve it. | Session feasibility + analysis validity | Build all three (decided); run-selection deferred |
 | D6 | Stop-consonant under continuous looping. The loop+speed-couple principle works naturally for continuants (/m/, /f/, /l/ stretch and loop). Stops (/b/, /k/, /t/) have no steady state to loop/stretch. What does the phoneme arm play for stops? (Also applies to the arbitrary loop.) Intersects the no-schwa spec. | Phoneme-arm fidelity for ~⅓ of letters | OPEN — sound-domain, likely Groß-Vogt |
@@ -101,6 +101,20 @@ Six papers read in full (both sides):
 **Honesty note.** The verdict "keep speed-coupling; pitch defensible" rests on an **abstract-level literature survey** (adequate for the evidence-AGAINST question, since a contraindicating study would surface in its abstract), **NOT full reads**. The same-age justification (Ecalle 2021, Groß-Vogt 2024) IS full-read (already cited in the thesis). The adult pitch papers (Effenberg & Schmitz 2018, Ghai 2019) are abstract-only and would need full reads only if Ch.5 methodology cites them.
 
 **Conclusion.** No contraindication for adding pitch to the coupling. Pitch joins rate + pan as the third coupling parameter, under the three D7 conditions (matching discipline, honest framing, documented multi-parameter limitation).
+
+---
+
+## D2 — RESOLVED (2026-06-20): arbitrary arm = distinct abstract sound per letter
+
+The arbitrary-sound control arm is a DISTINCT, NON-REFERENTIAL abstract sound per letter — structurally parallel to the phoneme arm (unique sound per letter), differing from it in exactly ONE dimension: whether that per-letter sound is a phoneme or a meaningless designed sound.
+
+Rationale: This isolates the variable of interest (phonemic vs. non-phonemic coupled sound) while controlling for letter-DISTINCTNESS. A single shared sound (rejected) would confound non-phonemic-ness with non-distinctness — the phoneme arm gives each letter a distinct anchor, so the control must too. A small assigned bank (rejected) introduces un-pre-registered sound-collision variance. Letter-associative (Affe/Auto, rejected) risks teaching the letter via Anlaut association (covert second intervention) AND can't cover the full alphabet coherently (no unambiguous associative sound exists for many letters).
+
+Downstream commitments (NOT yet done):
+- ~[N] abstract sounds to DESIGN (one per letter in the pilot set): non-referential, mutually distinct, distinct from the phonemes, and sustainable under continuous time-stretch/loop (same steady-state constraint as the phonemes — D6-adjacent).
+- ENGAGEMENT-UNIFORMITY is the validity burden: the set must be perceptually matched (no sound accidentally more/less engaging than the phonemes or each other). This is where Groß-Vogt's sonification expertise applies — D2's DECISION is made; the EXECUTION (designing perceptually-matched sounds) is the Groß-Vogt ask.
+- ACCIDENTAL-MEANING AUDIT before the pilot: naive-ear pass over the full set to flag any sound that evokes a word/animal/object (which would re-introduce Anlaut contamination). Pre-pilot QA step.
+- H4 wiring (drop-in once sounds exist): the arbitraryAudioFiles slot is built and waiting (commits 279d553/b212e82); H4 sources the assets into it.
 
 ---
 
