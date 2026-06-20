@@ -137,6 +137,12 @@ Six papers read in full (both sides):
 - **H2.1 — REQUIRED before the pilot (not optional hardening):** make the `.phoneme` arm force phoneme content on study devices. Gate on `studyMode`, and resolve it at **letter-load** (where `studyMode`/`resolvedStrokes` already branch), **NOT per-tick** — do not put an enrollment/flag read in the `updateAdaptivePlayback` adaptive-playback hot path (matching-discipline coupling must stay file-list-agnostic). When `studyMode` is on, the phoneme arm returns `phonemeAudioFiles` regardless of the toggle (still falling back to name audio only for letters with no phoneme recording — tracked by P6/H5).
 - Until H2.1 lands, a study-device setup step (turn `enablePhonemeMode` ON) is the only thing standing between the phoneme arm and a name-audio confound. H2.1 removes that footgun.
 
+## Known issue — new-participant reset→relaunch window (low-risk, tracked not built)
+- The "Neuer Teilnehmer" reset (ResearchDashboard) regenerates participant identity (new UUID → re-randomised arms) but the running VM holds `thesisCondition`/`audioCondition` as `let` captured at init, so the new arms only take effect on app relaunch — enforced by a "Neustart erforderlich" alert.
+- **Residual:** if a proctor ignores that alert, exits the parent area, and lets a child trace BEFORE relaunching, that record carries the **new participantId** but the **old arm** — a **mislabeled (not dropped)** record. (`recordedAt > enrolledAt`, so it survives the exporter's pre-enrolment filter.) The opposite failure — a real record silently dropped for `recordedAt < enrolledAt` — is impossible: `enrolledAt` is stamped at reset and all post-relaunch records are strictly later.
+- **Mitigated by protocol:** after reset the device sits in the parent-gated research tab (no tracing surface) and the relaunch alert directs an immediate restart, so the window requires the proctor to actively ignore it.
+- **Optional hardening (not built):** gate `recordPhaseSession` until relaunch after a reset (e.g. a "reset pending" flag that suppresses recording until the arms are re-seeded). Low-risk for a proctored single-session pilot; tracked here, not built.
+
 ## Known doc-hygiene fix (independent of the freeze)
 - `docs/APP_DOCUMENTATION.md` line 1819 cites Thibon with DOI `10.1016/j.actpsy.2017.11.014` — a typo; the correct DOI is `10.1016/j.actpsy.2017.12.001`. (The §4.4 reference at line 633 has no DOI.) Fix whenever convenient.
 
