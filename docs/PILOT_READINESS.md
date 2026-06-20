@@ -143,6 +143,12 @@ Six papers read in full (both sides):
 - **Mitigated by protocol:** after reset the device sits in the parent-gated research tab (no tracing surface) and the relaunch alert directs an immediate restart, so the window requires the proctor to actively ignore it.
 - **Optional hardening (not built):** gate `recordPhaseSession` until relaunch after a reset (e.g. a "reset pending" flag that suppresses recording until the arms are re-seeded). Low-risk for a proctored single-session pilot; tracked here, not built.
 
+## Investigated — Fréchet primary measure is cross-lift-safe (no fix needed, 2026-06)
+- The cross-pen-lift concatenation in the Fréchet primary measure (`FreeWriteScorer.score` → `formAccuracy` → `referencePolyline`) was investigated and found **Fréchet-SAFE**. `referencePolyline` concatenates all strokes into one polyline and resamples by arc length, bridging each lift gap with a phantom diagonal — but discrete Fréchet couples the trace's gap-bridge to the reference's gap-bridge at matching arc-length fractions, so the phantom diagonal **cannot inflate the score beyond the real per-stroke error** (empirically **≤1.4% on real letters, 0 in most cases, always toward HIGHER scores** — removing inflation can only reduce distance).
+- The genuine cross-lift "tank" the older docstring describes was on the **Hausdorff `formAccuracyShape`** (freeform / Werkstatt path), which is **already per-stroke-densified**. It is NOT the recorded thesis measure.
+- **No fix to the primary measure is warranted.** Threading `strokeStartIndices` through the outcome variable to shift it ≤1.4% would add risk for no benefit; the guarded-geometry "strong reason" is absent.
+- **Replica validation** (faithful Double-precision reimplementation of referencePolyline + arc-length resample + discrete-Fréchet DP + `radius*3` scaling): real **A / T / H** (multi-stroke) and **I** (single-stroke) bundle letters, plus synthetic **long-gap**, **length-mismatch**, and **gross-displacement** regimes. Single-stroke moved exactly 0; multi-stroke moved ≤+0.017, always up.
+
 ## Known doc-hygiene fix (independent of the freeze)
 - `docs/APP_DOCUMENTATION.md` line 1819 cites Thibon with DOI `10.1016/j.actpsy.2017.11.014` — a typo; the correct DOI is `10.1016/j.actpsy.2017.12.001`. (The §4.4 reference at line 633 has no DOI.) Fix whenever convenient.
 

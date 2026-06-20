@@ -162,6 +162,22 @@ struct FreeWriteScorer {
 
     // MARK: - Dimension: Form accuracy
 
+    /// Primary thesis Form measure (the recorded `WritingAssessment.formAccuracy`).
+    ///
+    /// Cross-pen-lift note (investigated 2026-06): the reference is built
+    /// by `referencePolyline`, which concatenates all strokes into one
+    /// polyline and resamples by arc length — bridging each lift gap with
+    /// a phantom diagonal. This was found **Fréchet-SAFE**: discrete
+    /// Fréchet couples the trace's gap-bridge to the reference's
+    /// gap-bridge at matching arc-length fractions, so the phantom
+    /// diagonal cannot inflate the score beyond the real per-stroke error
+    /// (empirically ≤1.4% on real letters, 0 in most cases, always toward
+    /// HIGHER scores). The genuine cross-lift "tank" the
+    /// `formAccuracyShape` docstring describes was a Hausdorff concern on
+    /// the freeform/Werkstatt path, which is already per-stroke-densified.
+    /// No per-stroke fix to this primary measure is warranted. Replica
+    /// validation covered real A/T/H/I letters + synthetic long-gap,
+    /// length-mismatch, and gross-displacement regimes. See PILOT_READINESS.
     private static func formAccuracy(tracedPoints: [CGPoint], reference: LetterStrokes) -> CGFloat {
         let refPoints = referencePolyline(from: reference)
         guard refPoints.count >= 2, tracedPoints.count >= 2 else { return 0 }
@@ -274,7 +290,10 @@ struct FreeWriteScorer {
 
     // MARK: - Helpers
 
-    /// Converts a LetterStrokes definition into a single polyline of normalised points.
+    /// Converts a LetterStrokes definition into a single polyline of
+    /// normalised points. Concatenates across pen-lifts; this is
+    /// Fréchet-safe for the primary measure — see the cross-pen-lift note
+    /// on `formAccuracy`.
     private static func referencePolyline(from strokes: LetterStrokes) -> [CGPoint] {
         strokes.strokes.flatMap { stroke in
             stroke.checkpoints.map { CGPoint(x: $0.x, y: $0.y) }
