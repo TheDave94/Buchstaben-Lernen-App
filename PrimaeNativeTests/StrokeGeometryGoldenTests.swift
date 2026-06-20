@@ -6,7 +6,8 @@
 // upcoming CalibrationStore study-mode guard and any later geometry
 // change (re-bake, font swap, parser edit).
 //
-// SEAM (see recon / PILOT_READINESS). Letters load through the
+// SEAM (see recon / docs/ROADMAP.md Known issues — CalibrationStore
+// override-shadow). Letters load through the
 // production `LetterRepository` + `BundleLetterResourceProvider`, which
 // decodes `strokes.json` straight into `LetterStrokes` and NEVER
 // consults `CalibrationStore`. So `LetterAsset.strokes` here is the

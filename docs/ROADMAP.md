@@ -1,6 +1,6 @@
 # Roadmap — Primae
 
-See `docs/INVARIANTS.md` for permanent bake invariants — apply to every letter, every weight, every bake.
+See `docs/BAKE_INVARIANTS.md` for permanent bake invariants — apply to every letter, every weight, every bake.
 
 _Single forward-looking work log. Last updated 2026-05-25 against `main` (commit `1f9f5a0`). Only items still requiring work appear here — every shipped item has been removed. Shipped items live in commit history._
 
@@ -12,7 +12,7 @@ _Single forward-looking work log. Last updated 2026-05-25 against `main` (commit
 
 | Item | Owner action | Why it matters | Effort |
 |---|---|---|---|
-| **P6** phoneme audio recordings | Generate 90 phoneme recordings via ElevenLabs (3 takes × 30 letters) using the prompt template + IPA table in Appendix C of `docs/APP_DOCUMENTATION.md`; drop into `Resources/Letters/<base>/` as `<base>_phoneme<n>.mp3` | Phonemic awareness ↔ reading acquisition (Adams 1990); the "Lautwert wiedergeben" toggle is already shipped — without recordings it falls back silently | **XL** (recording-time-bound) |
+| **P6** phoneme audio recordings | Record 90 phoneme recordings (human voice, 3 takes × 30 letters) per `docs/SOUND_PRODUCTION_SPEC.md`, using the IPA target table in Appendix C of `docs/APP_DOCUMENTATION.md`; drop into `Resources/Letters/<base>/` as `<base>_phoneme<n>.mp3` | Phonemic awareness ↔ reading acquisition (Adams 1990); the "Lautwert wiedergeben" toggle is already shipped — without recordings it falls back silently | **XL** (recording-time-bound) |
 | **U5** Pencil 2 squeeze validation | iPad with Apple Pencil 2 — confirm squeeze + double-tap fire `replayAudio()` and don't double-fire with finger taps | Code is shipped; just needs verifying the gesture lands as intended on real hardware | **0–1 days on device** |
 | **U10** VoiceOver walkthrough | iPad with VoiceOver enabled — walk every screen, watch for skipped elements / misordered focus / Switch Control routing / Dynamic Type clipping | Required before submitting the thesis externally; the partial in-code audit shipped, but the device walkthrough is the load-bearing part | **2–3 hours on device** |
 
@@ -60,13 +60,60 @@ Phonemic awareness (Adams 1990) predicts later reading acquisition; pairing hand
 
 **What's still needed.**
 1. **Audio recordings** following the convention `<base>_phoneme<n>.<ext>` per Appendix C in `docs/APP_DOCUMENTATION.md`. Three takes per letter (different voices for child preference). 30 letters × 3 takes = 90 recordings.
-2. ElevenLabs prompt template + per-letter IPA reference table is in the appendix. Generation should be straightforward; clean-up (trim silence, normalise to -16 LUFS, export at 44.1 kHz mp3) is the per-file labour.
+2. Per-letter IPA target table is in Appendix C; the recorded-phoneme production procedure (no-schwa Anlaut articulation, D6 stop-consonant handling, recording-session checklist) is in `docs/SOUND_PRODUCTION_SPEC.md`. Clean-up (trim silence, normalise to -16 LUFS, export at 44.1 kHz mono mp3) is the per-file labour.
 3. **Bundle wiring.** Drop the files into `PrimaeNative/Resources/Letters/<base>/`. Repository scan picks them up automatically; no Swift code changes required.
 4. **Verification checklist** (in the appendix): toggle on → tap → phoneme plays; two-finger swipe cycles through takes; toggle off → name resumes.
 
 **Citations.**
 - Adams, M. J. (1990). *Beginning to Read: Thinking and Learning about Print*. MIT Press.
 - Krech, E.-M. et al. (2009). *Deutsches Aussprachewörterbuch*. de Gruyter.
+
+---
+
+## 2. PILOT STUDY — freeze items & known issues
+
+_Consolidated from the former `PILOT_READINESS.md` (2026-06-20). The decision rationale for everything here lives in `docs/DECISIONS.md`; this section holds the **work** (freeze items) and the **open issues/residuals**._
+
+### Freeze items — HIGH (pilot cannot run as designed without these)
+
+| # | Item | Type | Reuse / notes |
+|---|------|------|---------------|
+| H1 | New `PilotAudioCondition: { phoneme, arbitrarySound, silent }` enum + assignment. Pedagogical flow held constant (D1), so this is the audio dimension only. | Build | Slots into existing UUID-modulo assignment + override + enrollment + per-arm exporter. |
+| H2 | Arm-aware audio selection — `activeAudioFiles(for:)` currently branches on the `enablePhonemeMode` Settings toggle; must branch on pilot arm. | Build | Single chokepoint: `if arm == .silent { return [] }`; phoneme → phoneme files; arbitrary → arbitrary files. One-function change. Both audio arms keep the identical shared `setAdaptivePlayback` coupling (matching discipline). |
+| H3 | Silent-arm codepath — no arm/mode-controlled silent path exists; today silence happens only by omission when an asset is missing. | Build | Cleanest via H2 (return `[]` short-circuits the playback path). Do NOT touch AudioEngine.swift (stable/fragile). |
+| H4 | Arbitrary-sound asset set — does not exist. Engagement-matched, coupling-matched, non-phonemic looping audio. **Design DECIDED (D2 RESOLVED 2026-06-20: distinct abstract sound per letter); assets not yet designed.** Must be loopable + speed-couplable like the phoneme loops. | Design + assets | Liking-match informed by the separate listening study. Production procedure: `docs/SOUND_PRODUCTION_SPEC.md`. |
+| H5 | P6 phoneme recordings — 0/90 (30 letters × 3 takes), no-schwa spec. **RECORDED (human voice) per `docs/SOUND_PRODUCTION_SPEC.md` — ElevenLabs is NOT used for phonemes** (it returns letter names/words, not isolated phones). 7 letters currently have non-phoneme audio. | Assets | XL per stocktake. The sonification engine works; it has almost nothing to sonify yet. |
+| H6 | In-app sound-off post-test — **build all three, selectable in Settings:** (a) recognition, (b) production, (c) letter-sound. No test-mode flow exists today (app is all learning/practice). | Build | Strong reuse: `FreeWriteScorer` (production, as-is), `RetrievalPromptView` (recognition + hear→tap letter-sound, as-is), `LetterScheduler` (letter set), Settings-toggle pattern (selection), new `PostTestResult` Codable record (overload-with-defaults pattern). MUST-BUILD-NEW: a `PostTestController` orchestrator (~100–200 lines, parallel to `LearningPhaseController`, NOT a 5th LearningPhase case); distractor-picker; researcher start-screen. Audio suppression via the H2 chokepoint. |
+
+> H5 overlaps §1 P6 above — same recordings, two views: §1 is the thesis-critical work item, this row is its pilot-arm dependency.
+
+### Known issues / residuals
+
+_Pilot-blocking and tracked-not-built issues consolidated from PILOT_READINESS (2026-06-20)._
+
+**Known issue — CalibrationStore override-shadow (pilot-blocking).**
+- This shadow is now a thesis-truth-condition: Ch.5's reframe asserts every child traces the identical frozen stimulus, which is false on a device where CalibrationStore overrides outrank the bundle for Druckschrift. Fix (study-mode guard + cleared overrides) is required before the pilot, not optional hardening.
+- **RESOLVED — `studyMode` mechanism complete and operable (CI-green):** the `studyMode` flag (off by default, persisted) + the `resolvedStrokes(for:)` guard routing all 3 scored-geometry sites + the researcher toggle + the clear-overrides control are all built, reachable in ResearchDashboardView, and CI-green (commits `84b759e`, `fd2b789`; bundle target pinned by `StrokeGeometryGoldenTests`). The thesis-truth-condition now has a working, reachable mechanism. Remaining deferred: the post-guard on-device golden layer pinning the font-derived bbox→cell mapping (waits on the new font).
+
+**Known issue — phoneme arm depends on `enablePhonemeMode` (pilot-blocking, H2.1).**
+- H2 routes `activeAudioFiles(for:)` on the audio arm, but the `.phoneme` branch deliberately preserves the legacy parent toggle: `enablePhonemeMode ? phonemes : name audio`. This keeps casual/non-enrolled users byte-identical. **The cost:** a phoneme-arm study device with `enablePhonemeMode` OFF plays the letter **name** audio (`/aː/`) instead of the **phoneme** (`/a/`) — a silent confound that corrupts the IV with **no error surfaced**. The `.silent` and `.arbitrarySound` arms are unaffected (they ignore the toggle).
+- **H2.1 — REQUIRED before the pilot (not optional hardening):** make the `.phoneme` arm force phoneme content on study devices. Gate on `studyMode`, and resolve it at **letter-load** (where `studyMode`/`resolvedStrokes` already branch), **NOT per-tick** — do not put an enrollment/flag read in the `updateAdaptivePlayback` adaptive-playback hot path (matching-discipline coupling must stay file-list-agnostic). When `studyMode` is on, the phoneme arm returns `phonemeAudioFiles` regardless of the toggle (still falling back to name audio only for letters with no phoneme recording — tracked by P6/H5).
+- Until H2.1 lands, a study-device setup step (turn `enablePhonemeMode` ON) is the only thing standing between the phoneme arm and a name-audio confound. H2.1 removes that footgun.
+
+**Known issue — new-participant reset→relaunch window (low-risk, tracked not built).**
+- The "Neuer Teilnehmer" reset (ResearchDashboard) regenerates participant identity (new UUID → re-randomised arms) but the running VM holds `thesisCondition`/`audioCondition` as `let` captured at init, so the new arms only take effect on app relaunch — enforced by a "Neustart erforderlich" alert.
+- **Residual:** if a proctor ignores that alert, exits the parent area, and lets a child trace BEFORE relaunching, that record carries the **new participantId** but the **old arm** — a **mislabeled (not dropped)** record. (`recordedAt > enrolledAt`, so it survives the exporter's pre-enrolment filter.) The opposite failure — a real record silently dropped for `recordedAt < enrolledAt` — is impossible: `enrolledAt` is stamped at reset and all post-relaunch records are strictly later.
+- **Mitigated by protocol:** after reset the device sits in the parent-gated research tab (no tracing surface) and the relaunch alert directs an immediate restart, so the window requires the proctor to actively ignore it.
+- **Optional hardening (not built):** gate `recordPhaseSession` until relaunch after a reset (e.g. a "reset pending" flag that suppresses recording until the arms are re-seeded). Low-risk for a proctored single-session pilot; tracked here, not built.
+
+**Investigated — Fréchet primary measure is cross-lift-safe (no fix needed, 2026-06).**
+- The cross-pen-lift concatenation in the Fréchet primary measure (`FreeWriteScorer.score` → `formAccuracy` → `referencePolyline`) was investigated and found **Fréchet-SAFE**. `referencePolyline` concatenates all strokes into one polyline and resamples by arc length, bridging each lift gap with a phantom diagonal — but discrete Fréchet couples the trace's gap-bridge to the reference's gap-bridge at matching arc-length fractions, so the phantom diagonal **cannot inflate the score beyond the real per-stroke error** (empirically **≤1.4% on real letters, 0 in most cases, always toward HIGHER scores** — removing inflation can only reduce distance).
+- The genuine cross-lift "tank" the older docstring describes was on the **Hausdorff `formAccuracyShape`** (freeform / Werkstatt path), which is **already per-stroke-densified**. It is NOT the recorded thesis measure.
+- **No fix to the primary measure is warranted.** Threading `strokeStartIndices` through the outcome variable to shift it ≤1.4% would add risk for no benefit; the guarded-geometry "strong reason" is absent.
+- **Replica validation** (faithful Double-precision reimplementation of referencePolyline + arc-length resample + discrete-Fréchet DP + `radius*3` scaling): real **A / T / H** (multi-stroke) and **I** (single-stroke) bundle letters, plus synthetic **long-gap**, **length-mismatch**, and **gross-displacement** regimes. Single-stroke moved exactly 0; multi-stroke moved ≤+0.017, always up.
+
+**Known doc-hygiene fix (independent of the freeze).**
+- `docs/APP_DOCUMENTATION.md` line 1819 cites Thibon with DOI `10.1016/j.actpsy.2017.11.014` — a typo; the correct DOI is `10.1016/j.actpsy.2017.12.001`. (The §4.4 reference at line 633 has no DOI.) Fix whenever convenient.
 
 ---
 
@@ -127,11 +174,11 @@ If any of those fails on device, the fix is a tweak in `Coordinator.pencilIntera
 ### D9 — Renderer architecture open questions
 **Effort:** M (design + impl) · **Priority:** P3
 
-Carried forward from the superseded `docs/RENDERING.md` "Open questions for renderer implementation" section (2026-05-25 migration). Four polish-tier renderer-architecture questions, none answered in code today:
+Carried forward from the now-removed `docs/RENDERING.md` "Open questions for renderer implementation" section (migrated here 2026-05-25; RENDERING.md itself deleted 2026-06-20, its rendering model consolidated into `docs/BAKE_INVARIANTS.md` §5). Four polish-tier renderer-architecture questions, none answered in code today:
 
 1. **Default display band width + finger/pencil scaling logic.** `TracingCanvasView` uses hardcoded `lineWidth` values per layer (6 / 8 / 12 / 14) and modulates pencil ink via `8 + pressure * 14`; there's no finger/pencil mode switch for the display band itself, and no scaling logic relating display-band width to letter render size. Decide: smooth crossfade vs hard switch on input-device detection.
 2. **Mid-stroke device change support.** Touch type is read at touch-down and not re-evaluated mid-stroke. Decide whether to detect (and how to handle: re-style mid-stroke, ignore, snap to one or the other).
-3. **Pencil scoring tolerance band tuning.** `StrokeTracker` uses `checkpointRadius * radiusMultiplier` for difficulty adaptation; there's no pencil-vs-finger tolerance split. RENDERING.md suggested starting at 50% of the display band's half-width — needs derivation against real device data.
+3. **Pencil scoring tolerance band tuning.** `StrokeTracker` uses `checkpointRadius * radiusMultiplier` for difficulty adaptation; there's no pencil-vs-finger tolerance split. The now-removed RENDERING.md (model now in `docs/BAKE_INVARIANTS.md` §5) suggested starting at 50% of the display band's half-width — needs derivation against real device data.
 4. **Glyph fade-out vs persistent visibility during tracing.** Typical learn-to-write apps fade the display glyph as the child traces over it; Primae currently keeps it persistent. Decide based on classroom observation / pedagogy literature.
 
 **Why deferred.** Polish-tier UX questions; current rendering is functional. None of these blocks the thesis.
@@ -220,7 +267,7 @@ For motor-impaired children, expose the direct-phase dot tap as a Switch Control
 
 The at-a-glance table at the top of this file is the authoritative version. Repeated here as a flow:
 
-1. **P6 phoneme recordings** — pure ElevenLabs work + drop-into-bundle; no device needed.
+1. **P6 phoneme recordings** — studio recording (human voice) per `docs/SOUND_PRODUCTION_SPEC.md` + drop-into-bundle; no device needed.
 2. **U5 + U10 device validation** — single iPad session: 30 minutes for the Pencil 2 squeeze check, 2–3 hours for the VoiceOver walkthrough. Get these out of the way before a thesis reviewer ever opens the app.
 
 **D8 canvas redraw profile** is post-thesis polish — schedule once there's classroom-data evidence of a need (or an Instruments hint of a problem). **F1–F10** are post-thesis full features.

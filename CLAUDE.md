@@ -3,7 +3,7 @@
 > Brand: **Primae** (formerly "Buchstaben-Lernen-App"). Everything carries the new name: the GitHub repo (`TheDave94/Primae`), Xcode project, scheme, host app, host folder (`Primae/`), Swift Package target (`PrimaeNative`), test target (`PrimaeNativeTests`), bundle identifier (`de.flamingistan.primae`), and the SPM relative path (`../../Primae`). Pre-rebrand UserDefaults keys (`de.flamingistan.buchstaben.*`) moved to `de.flamingistan.primae.*` — the app is in alpha so existing test-device state is intentionally reset. The local working-tree directory is still `Buchstaben-Lernen-App` on this machine (the SPM ref expects `Primae`, so a fresh `git clone https://github.com/TheDave94/Primae.git` is the cleanest way to land in the right path).
 
 ## Project Overview
-iPad app for teaching German children (ages 5-6) to trace letters. Built with SwiftUI, Swift 6.3, targeting iOS 18+. Academic thesis project.
+iPad app for teaching German children (ages 5-6) to trace letters. Built with SwiftUI, Swift 6.3, targeting iOS 26+ (the SPM manifest targets iOS 26.0). Academic thesis project.
 
 ## Bounded autonomy
 
@@ -24,7 +24,7 @@ This is a thesis project: David is the primary author, Claude Code is reviewer +
 1. Scope grew past the agreed spec.
 2. Two valid paths exist and the choice changes the artefact materially.
 3. Evidence contradicts the spec (e.g. doc says X, code does Y).
-4. A change touches a load-bearing doc (CLAUDE.md, BAKE_INVARIANTS.md, LESSONS.md Part B, claims in APP_DOCUMENTATION.md §11, research_data/spec_decision/framing.md, research_data/phase2b_gates/*.md).
+4. A change touches a load-bearing doc (CLAUDE.md, BAKE_INVARIANTS.md, LESSONS.md Part B, claims in APP_DOCUMENTATION.md §11, docs/DECISIONS.md, research_data/spec_decision/framing.md, research_data/phase2b_gates/*.md).
 5. A change touches **thesis-substance prose** (METHODOLOGY.md decision sections, examiner-facing claims, supervisor sign-off lines). Always switch to review-only.
 
 ## Two-repo working setup
@@ -87,8 +87,12 @@ For the full developer-grade reference + thesis foundation see
 `docs/APP_DOCUMENTATION.md` (single comprehensive doc; includes
 architecture quick reference, research export schema, and phoneme
 audio guide as Appendices A/B/C).
-Outstanding work, deferred items, and post-thesis ideas live in
-`docs/ROADMAP.md`.
+Outstanding work, deferred items, post-thesis ideas, and the pilot-study
+freeze items (H1–H6) + known issues live in `docs/ROADMAP.md`.
+Pilot design decisions (D-series), their evidence, and the governing
+constraints live in `docs/DECISIONS.md`; the sound-asset production
+procedure is `docs/SOUND_PRODUCTION_SPEC.md`. (These three absorbed the
+former `PILOT_READINESS.md`, removed in the 2026-06-20 doc reorg.)
 Read `docs/LESSONS.md` before touching `AudioEngine.swift`,
 `StrokeTracker.swift`, or the `load(letter:)` path.
 

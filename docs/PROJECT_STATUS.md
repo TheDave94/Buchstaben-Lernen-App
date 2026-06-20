@@ -81,6 +81,29 @@ subfolders.
 
 ---
 
+### 1.5 Capability census — the sonification mechanism (consolidated from PILOT_READINESS, 2026-06-20)
+
+The app is more complete and sophisticated than a "freeze-triage" frame suggested. The completeness is in the **generic letter-learning dimension**; the **thesis-specific dimension** (pilot arms, phoneme content, sound-off post-test) is the shallow end where the remaining work lands (tracked in `docs/ROADMAP.md` → *Pilot study*; decisions in `docs/DECISIONS.md`).
+
+**The core sonification mechanism already exists and is the thesis's mechanism.** This is the central census finding and it corrected an earlier mistaken belief that the audio was merely event-triggered playback. The reality:
+- `AudioEngine` (AVFoundation: `AVAudioEngine` + `AVAudioPlayerNode` + `AVAudioUnitTimePitch`) plays a **seamlessly looping** audio file with **real-time continuous parameter control**.
+- `setAdaptivePlayback(speed:horizontalBias:)`, driven every touch-update by `TouchDispatcher`, maps **smoothed trace velocity → time-stretch rate** (0.5×–2.0×, pitch preserved) and **canvas-x + pencil azimuth → stereo pan**.
+- During `guided`/`freeWrite` tracing, the child's writing movement continuously shapes the looping sound in real time. Code comment frames it correctly: "the letter sound is the phonemic anchor for the glyph, not Schmidt & Lee guidance feedback."
+- This **is** the thesis's "continuous, trace-coupled sound." David confirmed it is the intended core design principle from the beginning: a loopable sound whose playback speed couples to writing speed, plus a panning mapping. No rebuild needed — the hard part is done as designed.
+- Minor precision note: the audio is continuous *during active stroking* but gates off below a velocity threshold and on pencil-lift (activation threshold 22). "Continuous during tracing" is the precise claim; bare "continuous" slightly overstates (relevant only as a possible thesis-prose precision tweak, not a fidelity gap).
+
+**Reusable infrastructure (arm-shape-agnostic, confirmed):**
+- Deterministic UUID-modulo condition assignment (stable across sessions) + researcher override; enrollment gating (`isEnrolled`/`enrolledAt`) with pre-enrollment filtering; per-arm metric stratification in the exporter; CSV/TSV/JSON export with `# participantId=` header.
+- Condition-stamped Codable records (`PhaseSessionRecord`, `LetterAccuracyStat`, `SessionDurationRecord`, `DashboardSnapshot`), with a 4-overload `recordPhaseSession` pattern that is the established precedent for backward-compatible record extension.
+- `FreeWriteScorer.score(tracedPoints:reference:)` — blank-canvas production scorer, decoupled from the guidance UI (scores from points + reference, no UI dependency). Returns a 4-dim `WritingAssessment` (Form/Tempo/Druck/Rhythmus, Marquardt & Söhl 2016).
+- `RetrievalPromptView` — already a recognition mini-test (target + distractors + audio cue + `onAnswer(tapped, correct)` callback).
+- `LetterScheduler` (priority/`fixedOrder`); `SettingsView` @State+UserDefaults+Toggle pattern; CoreML `LetterRecognizer` (53-class, shipping in freeWrite/Werkstatt).
+- `AudioEngine.pitchCents` — independent pitch knob, **wired but currently undriven during tracing** (only `rate` is mapped). Per D7 (RESOLVED 2026-05-30, see `docs/DECISIONS.md`), pitch joins the coupling at build time; what movement parameter drives it is D7-sub (open).
+
+**Not problems (confirmed):** zero TODO/FIXME in the Swift codebase; tracing/input/scheduling spine mature and works end-to-end; the audio engine is the thesis mechanism, not a gap.
+
+---
+
 ## 2. Active pending work
 
 All five items below are in `docs/ROADMAP.md` and accurately
@@ -88,8 +111,10 @@ reflect actual state.
 
 ### 2.1 P6 — Phoneme audio recordings (P1, thesis-blocking)
 
-- **What.** 90 recordings (30 letters × 3 takes) via ElevenLabs +
-  drop into `PrimaeNative/Resources/Letters/<base>/`.
+- **What.** 90 recordings (30 letters × 3 takes), RECORDED (human
+  voice) per `docs/SOUND_PRODUCTION_SPEC.md` — ElevenLabs is NOT
+  used for phonemes (it returns letter names/words, not isolated
+  phones) + drop into `PrimaeNative/Resources/Letters/<base>/`.
 - **Why deferred.** Recording-time-bound (XL effort); needs
   voice-direction work.
 - **Trigger to revisit.** Pure asset work, no device needed —
@@ -243,11 +268,14 @@ Per-doc resolution after per-claim diff audit:
   to `BAKE_INVARIANTS.md` §2 / §4. 80%-margin rule documented
   in the header as dropped-with-rationale (gate noise-floor
   margins ≠ comfortable-margin buffers; methodology-chapter
-  relevance flagged).
+  relevance flagged). **DELETED 2026-06-20** (doc reorg) — the
+  superseded stub was removed; content lives in `BAKE_INVARIANTS.md`.
 - **RENDERING.md** — SUPERSEDED header added pointing to
   `BAKE_INVARIANTS.md` §5. The four "Open questions for
   renderer implementation" migrated to `docs/ROADMAP.md` §4
-  Technical Debt as D9.
+  Technical Debt as D9. **DELETED 2026-06-20** (doc reorg) — the
+  superseded stub was removed; rendering model lives in
+  `BAKE_INVARIANTS.md` §5, the open questions in ROADMAP D9.
 
 ### 4.6 Phase 2b future-tense references throughout — RESOLVED 2026-05-25
 

@@ -177,7 +177,8 @@ struct FreeWriteScorer {
     /// the freeform/Werkstatt path, which is already per-stroke-densified.
     /// No per-stroke fix to this primary measure is warranted. Replica
     /// validation covered real A/T/H/I letters + synthetic long-gap,
-    /// length-mismatch, and gross-displacement regimes. See PILOT_READINESS.
+    /// length-mismatch, and gross-displacement regimes. See
+    /// docs/ROADMAP.md → Pilot study → Known issues (Fréchet cross-lift-safe).
     private static func formAccuracy(tracedPoints: [CGPoint], reference: LetterStrokes) -> CGFloat {
         let refPoints = referencePolyline(from: reference)
         guard refPoints.count >= 2, tracedPoints.count >= 2 else { return 0 }
