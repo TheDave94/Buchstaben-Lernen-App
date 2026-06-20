@@ -21,6 +21,7 @@ struct ResearchDashboardView: View {
                 schedulerSection
                 phaseRecordsSection
                 letterTableSection
+                phonemeCoverageSection
                 studyDeviceSection
             }
             .padding(.horizontal, 20)
@@ -94,6 +95,59 @@ struct ResearchDashboardView: View {
                 Button("Abbrechen", role: .cancel) {}
             } message: {
                 Text("Entfernt jede auf diesem Gerät gespeicherte Stroke-Kalibrierung für die aktive Schriftart. Das gebündelte Set übernimmt anschließend. Für Studien-Geräte vor dem Piloten empfohlen.")
+            }
+        }
+    }
+
+    // MARK: - Phoneme coverage (phoneme-arm pilot-readiness check)
+
+    /// Before-the-fact surface for the H5/P6 gap: which loaded letters
+    /// will degrade to name audio in the phoneme arm because they carry
+    /// no phoneme recording. The gap is static (a property of the bundle),
+    /// so this is computed on-demand from the already-loaded assets —
+    /// `vm.letters`, exactly what `activeAudioFiles` resolves — when the
+    /// dashboard renders. No repo re-read, no audio-path or per-tick cost.
+    /// Per-asset (case variants list separately) since routing is
+    /// per-asset. Lets the researcher decide BEFORE the pilot whether the
+    /// phoneme arm is valid to run.
+    private var phonemeCoverageSection: some View {
+        let assets    = vm.letters.sorted { $0.name < $1.name }
+        let total     = assets.count
+        let degrading = assets.filter { $0.phonemeAudioFiles.isEmpty }
+        let covered   = total - degrading.count
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(title: "Phonem-Abdeckung (Phonem-Arm)",
+                          subtitle: "Pilot-Prüfung vor dem Start: welche Buchstaben im Phonem-Arm auf Name-Audio zurückfallen")
+            HStack {
+                Text("Phonem-Aufnahmen vorhanden")
+                Spacer()
+                Text("\(covered) von \(total)")
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(degrading.isEmpty ? .green : .orange)
+            }
+            .padding(12)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+
+            if total == 0 {
+                emptyHint("Noch keine Buchstaben geladen.")
+            } else if degrading.isEmpty {
+                Text("Alle geladenen Buchstaben haben Phonem-Aufnahmen — der Phonem-Arm ist vollständig.")
+                    .font(.caption)
+                    .foregroundStyle(Color.inkSoft)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Fallen im Phonem-Arm auf Name-Audio zurück (keine Phonem-Aufnahme):")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text(degrading.map(\.name).joined(separator: ", "))
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Vor dem Piloten entscheiden: Phoneme aufnehmen (H5) · Buchstaben-Set einschränken · oder als Limitation dokumentieren. Im Phonem-Arm verfälscht jeder zurückfallende Buchstabe die UV — auf Studien-Geräten still zu Name-Audio, nur im Log sichtbar.")
+                        .font(.caption)
+                        .foregroundStyle(Color.inkSoft)
+                }
+                .padding(12)
+                .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
             }
         }
     }
