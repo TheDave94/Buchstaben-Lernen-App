@@ -14,6 +14,17 @@
 // short-circuit — is H2 and is deliberately NOT wired here.
 
 import Foundation
+import os
+
+/// Surfaces pilot-audio integrity issues (e.g. a phoneme-arm study
+/// device degrading to name audio because a letter has no phoneme
+/// recording). Logged at letter-load frequency — never on the per-tick
+/// coupling path. `nonisolated(unsafe)` matches the module's other
+/// shared loggers.
+nonisolated(unsafe) let pilotAudioLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "PrimaeNative",
+    category: "PilotAudio"
+)
 
 /// Audio condition for the three-arm pilot. The arms differ ONLY in what
 /// sound plays during tracing; the pedagogical flow is identical across

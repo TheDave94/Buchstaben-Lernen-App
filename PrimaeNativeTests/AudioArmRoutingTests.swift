@@ -47,10 +47,26 @@ fileprivate final class RecordingAudio: AudioControlling {
         )
     }
 
-    private func makeVM(arm: PilotAudioCondition, phonemeToggle: Bool) -> TracingViewModel {
+    /// An asset with name audio but NO phoneme recording — the H5/P6
+    /// coverage gap. `arbitraryAudioFiles` left empty too.
+    private func assetNoPhoneme(_ name: String = "Q") -> LetterAsset {
+        LetterAsset(
+            id: name, name: name,
+            audioFiles: ["\(name)_name.mp3"],
+            strokes: LetterStrokes(letter: name, checkpointRadius: 0.1, strokes: []),
+            phonemeAudioFiles: []
+        )
+    }
+
+    private func makeVM(arm: PilotAudioCondition,
+                        phonemeToggle: Bool,
+                        studyMode: Bool = false) -> TracingViewModel {
         var deps = TracingDependencies.stub
         deps.audioCondition = arm
         deps.enablePhonemeMode = phonemeToggle
+        // Seeded via deps so the VM's didSet (UserDefaults write) never
+        // fires — keeps the test from polluting global state.
+        deps.studyMode = studyMode
         return TracingViewModel(deps)
     }
 
@@ -90,6 +106,42 @@ fileprivate final class RecordingAudio: AudioControlling {
         let vmB = makeVM(arm: .silent, phonemeToggle: false)
         #expect(vmA.activeAudioFiles(for: asset()).isEmpty)
         #expect(vmB.activeAudioFiles(for: asset()).isEmpty)
+    }
+
+    // MARK: - H2.1 study-device phoneme force
+
+    @Test("studyMode ON + phoneme arm + phoneme files → phonemes regardless of toggle")
+    func studyMode_forcesPhonemes_bothToggleStates() {
+        for toggle in [true, false] {
+            let vm = makeVM(arm: .phoneme, phonemeToggle: toggle, studyMode: true)
+            #expect(vm.activeAudioFiles(for: asset()) == ["A_phoneme1.mp3"],
+                    "studyMode must force phonemes even with enablePhonemeMode=\(toggle)")
+        }
+    }
+
+    @Test("studyMode ON + phoneme arm + NO phoneme files → name audio (H5/P6 gap)")
+    func studyMode_phonemelessLetter_degradesToName() {
+        // The one unavoidable residual: a letter with no phoneme
+        // recording can't play one. It degrades to name audio (logged in
+        // production, not silent).
+        let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: true)
+        #expect(vm.activeAudioFiles(for: assetNoPhoneme()) == ["Q_name.mp3"])
+    }
+
+    @Test("studyMode OFF + phoneme arm → existing toggle behavior preserved")
+    func studyMode_off_preservesToggle() {
+        let on  = makeVM(arm: .phoneme, phonemeToggle: true,  studyMode: false)
+        let off = makeVM(arm: .phoneme, phonemeToggle: false, studyMode: false)
+        #expect(on.activeAudioFiles(for: asset())  == ["A_phoneme1.mp3"])
+        #expect(off.activeAudioFiles(for: asset()) == ["A_name.mp3"])
+    }
+
+    @Test("studyMode does not override the silent or arbitrary arms")
+    func studyMode_doesNotLeakAcrossArms() {
+        let silent = makeVM(arm: .silent, phonemeToggle: true, studyMode: true)
+        let arb    = makeVM(arm: .arbitrarySound, phonemeToggle: true, studyMode: true)
+        #expect(silent.activeAudioFiles(for: asset()).isEmpty)
+        #expect(arb.activeAudioFiles(for: asset()) == ["A_arb1.mp3"])
     }
 
     // MARK: - Silent gates content AND coupling

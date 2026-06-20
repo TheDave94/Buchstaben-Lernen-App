@@ -804,12 +804,27 @@ public final class TracingViewModel {
             // non-phonemic arm and confound the contrast.
             return asset.arbitraryAudioFiles
         case .phoneme:
-            // Unchanged from the pre-pilot toggle: casual users and the
-            // phoneme arm both honour `enablePhonemeMode`. Falls back to
-            // name audio when no phoneme recording is bundled.
-            // (H2.1 will force phonemes on study devices so a phoneme-arm
-            // participant can't silently get name audio — see
-            // PILOT_READINESS.)
+            // H2.1 — study devices force phoneme content. A phoneme-arm
+            // participant must hear the phoneme, never the letter name,
+            // regardless of the parent `enablePhonemeMode` toggle (an
+            // unset toggle would otherwise corrupt the IV silently). This
+            // resolves at letter-load time, never on the per-tick
+            // coupling path, so the matching discipline is untouched.
+            if studyMode {
+                if !asset.phonemeAudioFiles.isEmpty {
+                    return asset.phonemeAudioFiles
+                }
+                // Residual, unavoidable confound: this letter has no
+                // phoneme recording (the H5/P6 gap), so the phoneme arm
+                // degrades to name audio. Logged — not silent — at
+                // letter-load frequency so a study run isn't quietly
+                // confounded. The real fix is recording the phoneme (H5).
+                pilotAudioLogger.warning(
+                    "Phoneme-arm study device: letter '\(asset.name, privacy: .public)' has no phoneme recording — degrading to name audio (H5/P6 gap).")
+                return asset.audioFiles
+            }
+            // Off study devices: preserve the exact pre-pilot toggle so
+            // casual users are byte-identical.
             if enablePhonemeMode, !asset.phonemeAudioFiles.isEmpty {
                 return asset.phonemeAudioFiles
             }
