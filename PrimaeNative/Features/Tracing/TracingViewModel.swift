@@ -561,6 +561,9 @@ public final class TracingViewModel {
     let streakStore: StreakStoring
     let dashboardStore: ParentDashboardStoring
     let thesisCondition: ThesisCondition
+    /// Pilot audio arm for this participant. Stamped onto every recorded
+    /// session (H1); per-arm audio playback routing is H2.
+    let audioCondition: PilotAudioCondition
     private let onboardingStore: OnboardingStoring
     private let notificationScheduler: LocalNotificationScheduler
     var adaptationPolicy: any AdaptationPolicy
@@ -636,6 +639,7 @@ public final class TracingViewModel {
         self.onboardingStore        = deps.onboardingStore
         self.notificationScheduler  = deps.notificationScheduler
         self.thesisCondition        = deps.thesisCondition
+        self.audioCondition         = deps.audioCondition
         self.enablePaperTransfer    = deps.enablePaperTransfer
         self.enableFreeformMode     = deps.enableFreeformMode
         self.enablePhonemeMode      = deps.enablePhonemeMode

@@ -120,7 +120,9 @@ struct ParentDashboardExporter {
         // finger session from a low-variance pencil session.
         // `recognition_confidence_raw` is the pre-calibration softmax
         // probability, used to quantify the calibrator's effect.
-        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice"].joined(separator: sep))
+        // `audioCondition` (pilot audio arm) is appended last so the
+        // legacy column order is preserved for existing consumers.
+        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition"].joined(separator: sep))
         for rec in snapshot.phaseSessionRecords {
             // Discard rows from before enrolment so pilot/sandbox
             // activity isn't attributed to the assigned arm. Also
@@ -150,7 +152,8 @@ struct ParentDashboardExporter {
                 rec.condition.rawValue, recordedAtField,
                 recLabel, recConf, recConfRaw, recRight,
                 dimForm, dimTempo, dimPress, dimRhythm,
-                rec.inputDevice ?? ""
+                rec.inputDevice ?? "",
+                rec.audioCondition.rawValue
             ].joined(separator: sep))
         }
         lines.append("")
@@ -219,6 +222,33 @@ struct ParentDashboardExporter {
                 let n = group.count
                 let avg = group.map(\.score).reduce(0, +) / Double(n)
                 lines.append(["letterByArm", letter, arm.rawValue, "\(n)", String(format: "%.4f", avg)].joined(separator: sep))
+            }
+        }
+        // Pilot audio axis — the PRIMARY between-subjects IV (the
+        // pedagogical axis above is held constant across pilot arms, D1).
+        // Stratified ALONGSIDE the pedagogical axis, not instead of it, so
+        // both the pilot's audio contrast and the larger study's
+        // pedagogical contrast stay exportable from one file.
+        for arm in PilotAudioCondition.allCases {
+            let armRecords = snapshot.phaseSessionRecords.filter { $0.audioCondition == arm }
+            let freeWrite = armRecords.filter { $0.phase == "freeWrite" && $0.completed }.map(\.score)
+            if !freeWrite.isEmpty {
+                let avg = freeWrite.reduce(0, +) / Double(freeWrite.count)
+                lines.append(["averageFreeWriteScore_audio_\(arm.rawValue)", String(format: "%.4f", avg)].joined(separator: sep))
+            }
+        }
+        // Per-letter accuracy split by audio arm — the audio-axis twin of
+        // `letterByArm`. Format:
+        // `letterByAudioArm,letter,audioArm,sampleCount,averageScore`.
+        lines.append(["letterByAudioArm","letter","audioArm","sampleCount","averageScore"].joined(separator: sep))
+        let phaseByAudioArm = Dictionary(grouping: snapshot.phaseSessionRecords.filter(\.completed), by: { $0.audioCondition })
+        for arm in PilotAudioCondition.allCases {
+            guard let records = phaseByAudioArm[arm] else { continue }
+            let byLetter = Dictionary(grouping: records, by: { $0.letter })
+            for (letter, group) in byLetter.sorted(by: { $0.key < $1.key }) {
+                let n = group.count
+                let avg = group.map(\.score).reduce(0, +) / Double(n)
+                lines.append(["letterByAudioArm", letter, arm.rawValue, "\(n)", String(format: "%.4f", avg)].joined(separator: sep))
             }
         }
         // Aggregate Schreibmotorik dimensions across all completed

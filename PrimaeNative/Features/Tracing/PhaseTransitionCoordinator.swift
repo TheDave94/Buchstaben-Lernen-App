@@ -209,6 +209,7 @@ final class PhaseTransitionCoordinator {
                 score: phaseScore,
                 schedulerPriority: vm.lastScheduledLetterPriority,
                 condition: vm.thesisCondition,
+                audioCondition: vm.audioCondition,
                 assessment: phase == "freeWrite" ? vm.lastWritingAssessment : nil,
                 recognition: phase == "freeWrite" ? freeWriteRecognition : nil,
                 inputDevice: device

@@ -72,6 +72,7 @@ enum ParticipantStore {
     /// activity doesn't pollute the `.threePhase` arm.
     private static let enrolledAtKey = "de.flamingistan.primae.thesisEnrolledAt"
     private static let conditionOverrideKey = "de.flamingistan.primae.thesisConditionOverride"
+    private static let audioConditionOverrideKey = "de.flamingistan.primae.audioConditionOverride"
 
     /// Researcher-set thesis arm. When non-nil, `defaultForInstall`
     /// returns this verbatim, bypassing the byte-modulo assignment.
@@ -85,6 +86,25 @@ enum ParticipantStore {
                 UserDefaults.standard.set(value.rawValue, forKey: conditionOverrideKey)
             } else {
                 UserDefaults.standard.removeObject(forKey: conditionOverrideKey)
+            }
+        }
+    }
+
+    /// Researcher-set pilot audio arm. When non-nil,
+    /// `PilotAudioCondition.defaultForInstall` returns this verbatim,
+    /// bypassing the byte-modulo assignment. Independent of
+    /// `conditionOverride` (the pedagogical axis) — the two override keys
+    /// can be set separately.
+    static var audioConditionOverride: PilotAudioCondition? {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: audioConditionOverrideKey) else { return nil }
+            return PilotAudioCondition(rawValue: raw)
+        }
+        set {
+            if let value = newValue {
+                UserDefaults.standard.set(value.rawValue, forKey: audioConditionOverrideKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: audioConditionOverrideKey)
             }
         }
     }

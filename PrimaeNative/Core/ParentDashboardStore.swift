@@ -15,6 +15,11 @@ struct PhaseSessionRecord: Codable, Equatable {
     /// post-launch; custom decoder defaults pre-migration records to
     /// `.threePhase`.
     let condition: ThesisCondition
+    /// Pilot audio arm in effect for this session (phoneme /
+    /// arbitrary-sound / silent). Orthogonal to `condition`. Added for
+    /// the pilot; custom decoder defaults pre-migration records to
+    /// `.phoneme`.
+    let audioCondition: PilotAudioCondition
     /// Wall-clock timestamp when this row was recorded. Drives dated
     /// learning curves and pre-enrollment filtering. Optional because
     /// legacy records on disk don't carry it.
@@ -40,6 +45,7 @@ struct PhaseSessionRecord: Codable, Equatable {
 
     init(letter: String, phase: String, completed: Bool, score: Double,
          schedulerPriority: Double, condition: ThesisCondition = .threePhase,
+         audioCondition: PilotAudioCondition = .phoneme,
          recordedAt: Date = Date(),
          assessment: WritingAssessment? = nil,
          recognition: RecognitionSample? = nil,
@@ -50,6 +56,7 @@ struct PhaseSessionRecord: Codable, Equatable {
         self.score = max(0, min(1, score))
         self.schedulerPriority = schedulerPriority
         self.condition = condition
+        self.audioCondition = audioCondition
         self.recordedAt = recordedAt
         self.formAccuracy     = assessment.map { Double($0.formAccuracy) }
         self.tempoConsistency = assessment.map { Double($0.tempoConsistency) }
@@ -70,6 +77,13 @@ struct PhaseSessionRecord: Codable, Equatable {
         score = try c.decode(Double.self, forKey: .score)
         schedulerPriority = try c.decode(Double.self, forKey: .schedulerPriority)
         condition = (try? c.decode(ThesisCondition.self, forKey: .condition)) ?? .threePhase
+        // Pre-pilot records carry no audioCondition. Default to `.phoneme`:
+        // the app has always played meaningful letter/phoneme sound (never
+        // arbitrary, never silent), so it's the honest historical match.
+        // Such legacy rows are pre-enrolment and the exporter filters them
+        // from arm attribution anyway, so this default can't inflate a
+        // pilot arm's counts.
+        audioCondition = (try? c.decode(PilotAudioCondition.self, forKey: .audioCondition)) ?? .phoneme
         recordedAt = try? c.decode(Date.self, forKey: .recordedAt)
         formAccuracy     = try? c.decode(Double.self, forKey: .formAccuracy)
         tempoConsistency = try? c.decode(Double.self, forKey: .tempoConsistency)
@@ -329,25 +343,28 @@ protocol ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?)
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?)
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?)
     func reset()
     /// Await any pending background write. See ProgressStoring.flush().
     func flush() async
 }
 
 extension ParentDashboardStoring {
-    /// Backward-compatible overload for call sites that don't supply an assessment / recognition / inputDevice.
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition) {
+    /// Backward-compatible overloads for call sites that don't supply an
+    /// assessment / recognition / inputDevice. `audioCondition` defaults
+    /// to `.phoneme`; the live VM path uses the full method and stamps the
+    /// participant's assigned arm explicitly.
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, assessment: nil, recognition: nil, inputDevice: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: nil, recognition: nil, inputDevice: nil)
     }
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, assessment: WritingAssessment?) {
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, assessment: assessment, recognition: nil, inputDevice: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: nil, inputDevice: nil)
     }
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, assessment: WritingAssessment?, recognition: RecognitionSample?) {
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, assessment: assessment, recognition: recognition, inputDevice: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: nil)
     }
     /// Backward-compatible recordSession overload — new fields populate as nil.
     func recordSession(letter: String, accuracy: Double,
@@ -453,7 +470,7 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
         persist()
     }
 
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil) {
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil) {
         let record = PhaseSessionRecord(
             letter: LetterProgress.canonicalKey(letter),
             phase: phase,
@@ -461,6 +478,7 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
             score: score,
             schedulerPriority: schedulerPriority,
             condition: condition,
+            audioCondition: audioCondition,
             assessment: assessment,
             recognition: recognition,
             inputDevice: inputDevice

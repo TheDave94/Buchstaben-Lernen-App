@@ -20,6 +20,10 @@ struct TracingDependencies {
     var onboardingStore: OnboardingStoring
     var notificationScheduler: LocalNotificationScheduler
     var thesisCondition: ThesisCondition
+    /// Pilot audio arm (phoneme / arbitrary-sound / silent). Orthogonal
+    /// to `thesisCondition`; assigned at the same point. H1 carries it
+    /// onto every recorded session — per-arm audio playback routing is H2.
+    var audioCondition: PilotAudioCondition
     var schriftArt: SchriftArt
     var letterOrdering: LetterOrderingStrategy
     var enablePaperTransfer: Bool
@@ -81,6 +85,9 @@ struct TracingDependencies {
         // into the thesis A/B study; gate lives on ThesisCondition for
         // testability.
         thesisCondition: ThesisCondition = .defaultForInstall,
+        // Assigned the same way as `thesisCondition`, but on an
+        // independent UUID byte so the two axes don't correlate.
+        audioCondition: PilotAudioCondition = .defaultForInstall,
         schriftArt: SchriftArt = {
             if let raw = UserDefaults.standard.string(forKey: "de.flamingistan.primae.selectedSchriftArt")
                 ?? UserDefaults.standard.string(forKey: "selectedSchriftArt") {
@@ -143,6 +150,7 @@ struct TracingDependencies {
         self.onboardingStore = onboardingStore
         self.notificationScheduler = notificationScheduler
         self.thesisCondition = thesisCondition
+        self.audioCondition = audioCondition
         self.schriftArt = schriftArt
         self.letterOrdering = letterOrdering
         self.enablePaperTransfer = enablePaperTransfer

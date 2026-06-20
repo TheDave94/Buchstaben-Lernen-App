@@ -112,7 +112,7 @@ final class StubDashboardStore: ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?) {}
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?) {}
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?) {}
     func reset() {}
 }
 
@@ -178,6 +178,9 @@ extension TracingDependencies {
             onboardingStore:      StubOnboardingStore(),
             notificationScheduler: LocalNotificationScheduler(center: StubNotificationCenter()),
             thesisCondition:      .guidedOnly,
+            // Pin the audio arm too so tests don't depend on global
+            // ParticipantStore enrolment state (mirrors thesisCondition).
+            audioCondition:       .phoneme,
             letterRecognizer:     StubLetterRecognizer(),
             speech:               NullSpeechSynthesizer(),
             // Real AVAudioPlayer.play() in PromptPlayer adds enough
@@ -210,5 +213,8 @@ extension TracingDependencies {
     }
     func with(thesisCondition: ThesisCondition) -> TracingDependencies {
         var copy = self; copy.thesisCondition = thesisCondition; return copy
+    }
+    func with(audioCondition: PilotAudioCondition) -> TracingDependencies {
+        var copy = self; copy.audioCondition = audioCondition; return copy
     }
 }
