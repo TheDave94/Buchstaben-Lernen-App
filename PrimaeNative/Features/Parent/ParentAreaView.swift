@@ -125,7 +125,8 @@ private struct ExportCenterView: View {
             shareURL = try ParentDashboardExporter.exportFileURL(
                 from: vm.dashboardSnapshot,
                 format: format,
-                progress: vm.allProgress
+                progress: vm.allProgress,
+                rawTraces: vm.rawTraces
             )
         } catch {
             showError = true

@@ -17,6 +17,10 @@ struct TracingDependencies {
     var repo: LetterRepository
     var streakStore: StreakStoring
     var dashboardStore: ParentDashboardStoring
+    /// Cold, export-only per-trial raw freeWrite traces (re-analysis
+    /// insurance). Separate from `dashboardStore` to keep its hot
+    /// <100 KB persist path lean.
+    var rawTraceStore: RawTraceStoring
     var onboardingStore: OnboardingStoring
     var notificationScheduler: LocalNotificationScheduler
     var thesisCondition: ThesisCondition
@@ -79,6 +83,7 @@ struct TracingDependencies {
         repo: LetterRepository = LetterRepository(),
         streakStore: StreakStoring = JSONStreakStore(),
         dashboardStore: ParentDashboardStoring = JSONParentDashboardStore(),
+        rawTraceStore: RawTraceStoring = JSONRawTraceStore(),
         onboardingStore: OnboardingStoring = JSONOnboardingStore(),
         notificationScheduler: LocalNotificationScheduler = LocalNotificationScheduler(),
         // Default to the full four-phase flow unless the install opted
@@ -147,6 +152,7 @@ struct TracingDependencies {
         self.repo = repo
         self.streakStore = streakStore
         self.dashboardStore = dashboardStore
+        self.rawTraceStore = rawTraceStore
         self.onboardingStore = onboardingStore
         self.notificationScheduler = notificationScheduler
         self.thesisCondition = thesisCondition

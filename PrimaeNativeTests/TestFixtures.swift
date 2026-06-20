@@ -112,8 +112,16 @@ final class StubDashboardStore: ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?) {}
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?) {}
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?) {}
     func reset() {}
+}
+
+// MARK: - In-memory raw-trace store (records appends + reset for assertions)
+final class StubRawTraceStore: RawTraceStoring {
+    private(set) var traces: [RawTrace] = []
+    private(set) var resetCount = 0
+    func append(_ trace: RawTrace) { traces.append(trace) }
+    func reset() { traces.removeAll(); resetCount += 1 }
 }
 
 // MARK: - No-op onboarding store
@@ -175,6 +183,7 @@ extension TracingDependencies {
                                                    cache: NullLetterCache()),
             streakStore:          streakStore,
             dashboardStore:       StubDashboardStore(),
+            rawTraceStore:        StubRawTraceStore(),
             onboardingStore:      StubOnboardingStore(),
             notificationScheduler: LocalNotificationScheduler(center: StubNotificationCenter()),
             thesisCondition:      .guidedOnly,
@@ -207,6 +216,9 @@ extension TracingDependencies {
     }
     func with(dashboardStore: ParentDashboardStoring) -> TracingDependencies {
         var copy = self; copy.dashboardStore = dashboardStore; return copy
+    }
+    func with(rawTraceStore: RawTraceStoring) -> TracingDependencies {
+        var copy = self; copy.rawTraceStore = rawTraceStore; return copy
     }
     func with(onboardingStore: OnboardingStoring) -> TracingDependencies {
         var copy = self; copy.onboardingStore = onboardingStore; return copy

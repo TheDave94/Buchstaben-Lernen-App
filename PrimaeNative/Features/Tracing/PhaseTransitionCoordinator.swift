@@ -201,6 +201,12 @@ final class PhaseTransitionCoordinator {
         // session's pressureControl == 1.0 (no force data) from a
         // low-variance pencil session.
         let device = vm.detector.effectiveKind.rawValue
+        // Capture the raw freeWrite trace BEFORE writing the records (so a
+        // crash can't leave a record linked to a missing trace) and BEFORE
+        // the buffer clears on the next letter load. freeWrite-only; nil if
+        // no freeWrite phase ran or the buffer is empty.
+        let freeWriteTraceID: UUID? = scores.keys.contains("freeWrite")
+            ? vm.captureFreeWriteTrace() : nil
         for (phase, phaseScore) in scores {
             vm.dashboardStore.recordPhaseSession(
                 letter: vm.currentLetterName,
@@ -212,7 +218,8 @@ final class PhaseTransitionCoordinator {
                 audioCondition: vm.audioCondition,
                 assessment: phase == "freeWrite" ? vm.lastWritingAssessment : nil,
                 recognition: phase == "freeWrite" ? freeWriteRecognition : nil,
-                inputDevice: device
+                inputDevice: device,
+                rawTraceID: phase == "freeWrite" ? freeWriteTraceID : nil
             )
         }
         commitCompletion(letter: vm.currentLetterName,

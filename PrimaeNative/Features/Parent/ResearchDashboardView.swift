@@ -109,7 +109,11 @@ struct ResearchDashboardView: View {
                     newParticipantShareURL = try ParentDashboardExporter.exportFileURL(
                         from: vm.dashboardSnapshot,
                         format: .json,
-                        progress: vm.allProgress)
+                        progress: vm.allProgress,
+                        // The pre-wipe archive MUST carry the traces too —
+                        // otherwise the saved records' rawTraceIDs dangle
+                        // after rawTraceStore.reset() wipes the traces.
+                        rawTraces: vm.rawTraces)
                 } catch {
                     showExportError = true
                 }

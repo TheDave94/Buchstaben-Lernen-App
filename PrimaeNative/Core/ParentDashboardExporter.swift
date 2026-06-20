@@ -269,7 +269,8 @@ struct ParentDashboardExporter {
     /// `participantId`, and per-letter progress entries.
     static func jsonData(from snapshot: DashboardSnapshot,
                           participantId: UUID = ParticipantStore.participantId,
-                          progress: [String: LetterProgress] = [:]) throws(ExportError) -> Data {
+                          progress: [String: LetterProgress] = [:],
+                          rawTraces: [RawTrace] = []) throws(ExportError) -> Data {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting    = [.prettyPrinted, .sortedKeys]
@@ -277,7 +278,8 @@ struct ParentDashboardExporter {
             let export = SnapshotWithMetrics(
                 snapshot: snapshot,
                 participantId: participantId,
-                progress: progress
+                progress: progress,
+                rawTraces: rawTraces
             )
             return try encoder.encode(export)
         } catch {
@@ -293,16 +295,22 @@ struct ParentDashboardExporter {
         let sessionDurations: [SessionDurationRecord]
         let phaseSessionRecords: [PhaseSessionRecord]
         let letterProgress: [String: LetterProgress]
+        /// Lossless per-trial raw freeWrite traces, linked to their
+        /// records by `PhaseSessionRecord.rawTraceID`. The JSON archive is
+        /// the ONLY export that carries them (the CSV stays derived-only).
+        let rawTraces: [RawTrace]
         let thesisMetrics: ThesisMetrics
 
         init(snapshot: DashboardSnapshot,
              participantId: UUID,
-             progress: [String: LetterProgress]) {
+             progress: [String: LetterProgress],
+             rawTraces: [RawTrace]) {
             self.participantId = participantId.uuidString
             letterStats = snapshot.letterStats
             sessionDurations = snapshot.sessionDurations
             phaseSessionRecords = snapshot.phaseSessionRecords
             letterProgress = progress
+            self.rawTraces = rawTraces
             let dims = snapshot.averageWritingDimensions
             thesisMetrics = ThesisMetrics(
                 phaseCompletionRates: snapshot.phaseCompletionRates,
@@ -335,20 +343,23 @@ struct ParentDashboardExporter {
         from snapshot: DashboardSnapshot,
         format: DashboardExportFormat,
         tempDirectory: URL = FileManager.default.temporaryDirectory,
-        progress: [String: LetterProgress] = [:]
+        progress: [String: LetterProgress] = [:],
+        rawTraces: [RawTrace] = []
     ) throws(ExportError) -> URL {
         let data: Data
         let filename: String
         let dateTag = Self.dateTag()
         switch format {
         case .csv:
+            // CSV stays derived-scalars only — raw traces are too large
+            // and the wrong shape for a flat row; they ride the JSON.
             data     = csvData(from: snapshot, progress: progress)
             filename = "primae_progress_\(dateTag).csv"
         case .tsv:
             data     = tsvData(from: snapshot, progress: progress)
             filename = "primae_progress_\(dateTag).tsv"
         case .json:
-            data     = try jsonData(from: snapshot, progress: progress)
+            data     = try jsonData(from: snapshot, progress: progress, rawTraces: rawTraces)
             filename = "primae_progress_\(dateTag).json"
         }
         let url = tempDirectory.appendingPathComponent(filename)

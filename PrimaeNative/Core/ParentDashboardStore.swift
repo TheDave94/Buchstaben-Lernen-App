@@ -42,6 +42,10 @@ struct PhaseSessionRecord: Codable, Equatable {
     /// real finger session is distinguishable from a low-variance
     /// pencil session.
     let inputDevice: String?
+    /// Link to the raw freeWrite trace in `RawTraceStore` (re-analysis
+    /// insurance). Non-nil only on freeWrite rows that captured a trace;
+    /// nil for other phases and for legacy records (decode-default).
+    let rawTraceID: UUID?
 
     init(letter: String, phase: String, completed: Bool, score: Double,
          schedulerPriority: Double, condition: ThesisCondition = .threePhase,
@@ -49,7 +53,8 @@ struct PhaseSessionRecord: Codable, Equatable {
          recordedAt: Date = Date(),
          assessment: WritingAssessment? = nil,
          recognition: RecognitionSample? = nil,
-         inputDevice: String? = nil) {
+         inputDevice: String? = nil,
+         rawTraceID: UUID? = nil) {
         self.letter = letter
         self.phase = phase
         self.completed = completed
@@ -67,6 +72,7 @@ struct PhaseSessionRecord: Codable, Equatable {
         self.recognitionConfidenceRaw = recognition?.rawConfidence
         self.recognitionCorrect      = recognition?.isCorrect
         self.inputDevice             = inputDevice
+        self.rawTraceID              = rawTraceID
     }
 
     init(from decoder: Decoder) throws {
@@ -94,6 +100,9 @@ struct PhaseSessionRecord: Codable, Equatable {
         recognitionConfidenceRaw = try? c.decode(Double.self, forKey: .recognitionConfidenceRaw)
         recognitionCorrect       = try? c.decode(Bool.self, forKey: .recognitionCorrect)
         inputDevice              = try? c.decode(String.self, forKey: .inputDevice)
+        // Added with raw-trace capture; nil for legacy rows and non-trace
+        // phases.
+        rawTraceID               = try? c.decode(UUID.self, forKey: .rawTraceID)
     }
 }
 
@@ -343,7 +352,7 @@ protocol ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?)
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?)
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?)
     func reset()
     /// Await any pending background write. See ProgressStoring.flush().
     func flush() async
@@ -356,15 +365,15 @@ extension ParentDashboardStoring {
     /// participant's assigned arm explicitly.
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: nil, recognition: nil, inputDevice: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: nil, recognition: nil, inputDevice: nil, rawTraceID: nil)
     }
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: nil, inputDevice: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: nil, inputDevice: nil, rawTraceID: nil)
     }
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: nil, rawTraceID: nil)
     }
     /// Backward-compatible recordSession overload — new fields populate as nil.
     func recordSession(letter: String, accuracy: Double,
@@ -470,7 +479,7 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
         persist()
     }
 
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil) {
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil, rawTraceID: UUID? = nil) {
         let record = PhaseSessionRecord(
             letter: LetterProgress.canonicalKey(letter),
             phase: phase,
@@ -481,7 +490,8 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
             audioCondition: audioCondition,
             assessment: assessment,
             recognition: recognition,
-            inputDevice: inputDevice
+            inputDevice: inputDevice,
+            rawTraceID: rawTraceID
         )
         snapshot.phaseSessionRecords.append(record)
         if snapshot.phaseSessionRecords.count > Self.phaseSessionRecordsCap {

@@ -359,6 +359,33 @@ public final class TracingViewModel {
     /// Stroke-start indices so the KP overlay can break the polyline
     /// at lifts instead of bridging gaps with phantom diagonals.
     var freeWriteStrokeStartIndices: [Int] { freeWriteRecorder.strokeStartIndices }
+
+    /// All captured raw freeWrite traces — read by the exporter so the
+    /// JSON archive carries the lossless traces alongside the records.
+    var rawTraces: [RawTrace] { rawTraceStore.traces }
+
+    /// Snapshot the current freeWrite buffer as a raw trace and persist
+    /// it (re-analysis insurance), returning its id — or nil if there's
+    /// nothing to capture. Called at phase exit BEFORE the buffer clears
+    /// on the next letter load. Writing the trace FIRST (then the linking
+    /// record) means a crash leaves at most an orphan trace, never a
+    /// record pointing at a missing trace.
+    func captureFreeWriteTrace() -> UUID? {
+        guard !freeWritePoints.isEmpty else { return nil }
+        let trace = RawTrace(
+            id: UUID(),
+            letter: currentLetterName,
+            recordedAt: Date(),
+            points: freeWritePoints,
+            timestamps: freeWriteTimestamps,
+            forces: freeWriteForces,
+            strokeStartIndices: freeWriteStrokeStartIndices,
+            canvasSize: canvasSize
+        )
+        rawTraceStore.append(trace)
+        return trace.id
+    }
+
     /// Whether the user is tracing the variant stroke form.
     var showingVariant: Bool = false
     /// Paper-transfer phase enabled (thesis setting).
@@ -560,6 +587,8 @@ public final class TracingViewModel {
     }
     let streakStore: StreakStoring
     let dashboardStore: ParentDashboardStoring
+    /// Cold per-trial raw freeWrite traces (re-analysis insurance).
+    private let rawTraceStore: RawTraceStoring
     let thesisCondition: ThesisCondition
     /// Pilot audio arm for this participant. Stamped onto every recorded
     /// session (H1); per-arm audio playback routing is H2.
@@ -636,6 +665,7 @@ public final class TracingViewModel {
         self.repo                   = deps.repo
         self.streakStore            = deps.streakStore
         self.dashboardStore         = deps.dashboardStore
+        self.rawTraceStore          = deps.rawTraceStore
         self.onboardingStore        = deps.onboardingStore
         self.notificationScheduler  = deps.notificationScheduler
         self.thesisCondition        = deps.thesisCondition
@@ -1732,6 +1762,7 @@ public final class TracingViewModel {
         dashboardStore.reset()          // PhaseSessionRecords, letterStats, durations
         progressStore.resetAll()        // all LetterProgress
         streakStore.reset()             // streak + stars
+        rawTraceStore.reset()           // cold raw freeWrite traces
         clearAllCalibrations()          // on-device stroke overrides (active SchriftArt)
         let newID = ParticipantStore.startNewParticipant()  // new UUID + arms + enrolment
         refreshProgressMirror()         // clear the SwiftUI progress mirror
