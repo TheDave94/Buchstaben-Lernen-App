@@ -128,7 +128,7 @@ html[data-theme="dark"] {
   --ink-stroke:     #34D399;  /* emerald-400 */
   --ink-stroke-deep:#10B981;
   --guide:          #FBBF24;  /* amber-400 */
-  --guide-soft:     rgba(251, 191, 36, 0.22);
+  --guide-soft:     rgba(251, 191, 36, 0.20);
   --start-dot:      #F8FAFC;  /* invert: light dot on dark canvas */
 
   --brand:          #3B82F6;  /* blue-500 — same family as light, slightly lifted */
@@ -176,7 +176,7 @@ html[data-theme="dark"] {
     --ink-stroke:   #34D399;
     --ink-stroke-deep:#10B981;
     --guide:        #FBBF24;
-    --guide-soft:   rgba(251, 191, 36, 0.22);
+    --guide-soft:   rgba(251, 191, 36, 0.20);
     --start-dot:    #F8FAFC;
     --brand:        #3B82F6;
     --brand-deep:   #2563EB;
@@ -202,7 +202,15 @@ html[data-theme="dark"] {
     --adult-ink:    #F8FAFC;
     --adult-ink-soft:#CBD5E1;
   }
+}
 
+/* ==========================================================================
+   Non-color tokens — type, spacing, radii, borders, shadows, motion.
+   Theme-independent, so they live in :root. (They previously sat stranded
+   inside the prefers-color-scheme media block as bare declarations —
+   invalid CSS that never applied.)
+   ========================================================================== */
+:root {
   /* ----- Type: families ----- */
   --font-display:   "Primae", -apple-system, system-ui, sans-serif;
   --font-text:      "PrimaeText", "Primae", -apple-system, system-ui, sans-serif;

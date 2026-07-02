@@ -37,7 +37,7 @@ by the doc, the choice is annotated inline in `colors_and_type.css`.
 |---|---|
 | `README.md` | This file — content & visual fundamentals, iconography, manifest |
 | `colors_and_type.css` | All design tokens (CSS vars) + semantic type classes |
-| `fonts/` | Webfonts (Playwrite AT bundled; Primae substituted with Nunito — see Caveats) |
+| `fonts/` | Webfonts (Primae + PrimaeText OTFs and Playwrite AT all bundled) |
 | `assets/` | Logos, world icons, illustrations, app glyph |
 | `preview/` | One small HTML card per token cluster — populates the Design System tab |
 | `ui_kits/ipad-app/` | React/JSX recreation of the four‑phase tracing flow + worlds + parent area |
@@ -93,16 +93,19 @@ rendered only inside the parent‑gated dashboards.
 
 ### Surface system — "paper, not glass"
 
-The app is staged on a single surface metaphor: a warm cream **paper**.
+The app is staged on a single surface metaphor: a clean white **paper**.
 Cards are paper cut‑outs over a slightly recessed paper backing,
 outlined with a 3 px ink border so they read as physical objects rather
 than translucent sheets.
 
-- **`--paper`** `#FDF8EE` — main canvas background (the page).
-- **`--paper-deep`** `#F6EFDD` — subordinate surface behind cards.
-- **`--paper-edge`** `#ECE2C8` — borders, tooltip surfaces, dividers.
-- **`--canvas-paper`** `#FFFCF4` — the writing canvas itself, slightly
-  whiter so the child's green ink and the blue ghost stroke pop.
+- **`--paper`** `#FFFFFF` — main app surface (the page).
+- **`--paper-deep`** `#F8FAFC` — subordinate surface behind cards (slate‑50).
+- **`--paper-edge`** `#E2E8F0` — borders, tooltip surfaces, dividers (slate‑200).
+- **`--canvas-paper`** `#F8FAFC` — the writing canvas itself, gently
+  recessed so the child's green ink and the blue ghost stroke pop.
+
+(Hexes here are the light scheme; the dark-scheme values live beside
+them in `colors_and_type.css`.)
 
 There is **no glass blur, no translucency, no gradient backgrounds**.
 The paper has no texture image either — flat fills only, with
@@ -113,13 +116,13 @@ work that an illustration would otherwise do.
 
 Locked by the spec; everything else hangs off these:
 
-- **Ghost / reference stroke** — `--ghost` `#4A86C7`, opacity 0.40,
+- **Ghost / reference stroke** — `--ghost` `#2563EB`, opacity 0.40,
   line width 8.
-- **Child ink** — `--ink-stroke` `#3FA060`, line width 4 (inside KP
+- **Child ink** — `--ink-stroke` `#10B981`, line width 4 (inside KP
   overlay) / 8 (active stroke). Reads as "your writing".
-- **Animation guide dot (observe phase)** — `--guide` `#F08A2A`,
+- **Animation guide dot (observe phase)** — `--guide` `#F59E0B`,
   pulses across the stroke at the canonical pace.
-- **Numbered start dot** — `--start-dot` `#2A241A` (warm near‑black);
+- **Numbered start dot** — `--start-dot` `#0F172A` (slate near‑black);
   the next‑expected dot pulses with a `--guide-soft` halo.
 
 ### Brand colour & world tints
@@ -130,13 +133,13 @@ header band on the world's hero screen.
 
 | World | Tint | Soft tint | Icon | Use |
 |---|---|---|---|---|
-| **Schule** | `#4A86C7` (`--schule`) | `#DCE9F5` | book.fill | Guided 4‑phase tracing |
-| **Werkstatt** | `#E0A234` (`--werkstatt`) | `#F8EBCC` | pencil.tip | Freeform writing |
-| **Fortschritte** | `#C24A2C` (`--fortschritte`) | `#F5D8CC` | star.fill | Progress, stars, streak |
+| **Schule** | `#2563EB` (`--schule`) | `#DBEAFE` | book.fill | Guided 4‑phase tracing |
+| **Werkstatt** | `#F59E0B` (`--werkstatt`) | `#FEF3C7` | pencil.tip | Freeform writing |
+| **Fortschritte** | `#EC4899` (`--fortschritte`) | `#FCE7F3` | star.fill | Progress, stars, streak |
 
-The brand‑level red (`--brand` `#C24A2C`) is the same hue as the
-Fortschritte world — celebration red, also used as primary CTA.
-Together with the schoolbook‑blue and the workshop‑yellow this gives
+The brand‑level blue (`--brand` `#2563EB`) is the same hue as the
+Schule world — schoolbook blue, also used as primary CTA.
+Together with the workshop‑amber and the celebration‑pink this gives
 us a primary triad that maps cleanly onto pedagogy (calm/effort/
 celebration).
 
@@ -144,15 +147,15 @@ celebration).
 
 Two voices map to two families:
 
-1. **Primae** (Druckschrift / print). The bundled OTF is not
-   redistributable, so this design system substitutes **Nunito** as
-   the placeholder until the real font files are dropped into
-   `fonts/`. Nunito's rounded humanist forms approximate Primae's
-   "child‑readable" intent (unambiguous a/g/q, balanced stroke
-   widths). **Flag this substitution to the user — see Caveats.**
-2. **Playwrite AT** — Austrian school cursive (SIL OFL 1.1, variable
-   TTF). Loaded from Google Fonts and used wherever the app would
-   render Schreibschrift. This is the *real* bundled font.
+1. **Primae** (Druckschrift / print) + **PrimaeText** (text-grade
+   companion). The real OTFs are bundled in `fonts/` (CC BY-NC-SA 4.0,
+   Nemeth/Tiefenthaler) and registered via `@font-face` in
+   `colors_and_type.css` — display family for large titles/glyphs,
+   text family for body/labels. Child‑readable by design (unambiguous
+   a/g/q, balanced stroke widths).
+2. **Playwrite AT** — Austrian school cursive (SIL OFL 1.1, TTF).
+   Bundled in `fonts/` and used wherever the app would render
+   Schreibschrift.
 
 Type scale runs from 13 px caption to 96 px display, with one extra
 "glyph" size (220 px) for the giant traceable letter on the canvas.

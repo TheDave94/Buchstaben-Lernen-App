@@ -12,15 +12,18 @@ so iOS resolves them per the active trait collection — no
 closures, no actor-isolation concerns (the renderer reads a
 compiled .car at trait change, not Swift code).
 
-Light + dark hexes come from `design-system/colors_and_type.css`
-(`:root` block + `html[data-theme="dark"]` block respectively).
+Light + dark hexes mirror `design-system/colors_and_type.css`
+(`:root` block + `html[data-theme="dark"]` block respectively). They
+are hand-maintained in the TOKENS table below, NOT parsed from the
+CSS — `scripts/tests/test_design_tokens_sync.py` cross-checks the
+two (and the written colorsets) so drift fails a test instead of
+shipping silently.
 """
 import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASE = REPO_ROOT / "Primae/Primae/Assets.xcassets/Colors"
-BASE.mkdir(parents=True, exist_ok=True)
 
 # (name, light_hex, dark_hex, alpha)
 TOKENS = [
@@ -103,18 +106,23 @@ def build_colorset(name: str, light: int, dark: int, alpha: float) -> dict:
         "info": {"author": "primae", "version": 1},
     }
 
-# Top-level Colors group needs its own Contents.json so Xcode
-# treats it as a folder (not a synced subset).
-(BASE / "Contents.json").write_text(json.dumps({
-    "info": {"author": "primae", "version": 1},
-    "properties": {"provides-namespace": False},
-}, indent=2) + "\n")
+def main() -> None:
+    BASE.mkdir(parents=True, exist_ok=True)
+    # Top-level Colors group needs its own Contents.json so Xcode
+    # treats it as a folder (not a synced subset).
+    (BASE / "Contents.json").write_text(json.dumps({
+        "info": {"author": "primae", "version": 1},
+        "properties": {"provides-namespace": False},
+    }, indent=2) + "\n")
 
-for name, light, dark, alpha in TOKENS:
-    cs_dir = BASE / f"{name}.colorset"
-    cs_dir.mkdir(parents=True, exist_ok=True)
-    payload = build_colorset(name, light, dark, alpha)
-    (cs_dir / "Contents.json").write_text(json.dumps(payload, indent=2) + "\n")
-    print(f"  {name:25}  light=0x{light:06X}  dark=0x{dark:06X}  alpha={alpha}")
+    for name, light, dark, alpha in TOKENS:
+        cs_dir = BASE / f"{name}.colorset"
+        cs_dir.mkdir(parents=True, exist_ok=True)
+        payload = build_colorset(name, light, dark, alpha)
+        (cs_dir / "Contents.json").write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"  {name:25}  light=0x{light:06X}  dark=0x{dark:06X}  alpha={alpha}")
 
-print(f"\nWrote {len(TOKENS)} colorsets to {BASE}")
+    print(f"\nWrote {len(TOKENS)} colorsets to {BASE}")
+
+if __name__ == "__main__":
+    main()
