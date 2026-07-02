@@ -188,7 +188,11 @@ Carried forward from the now-removed `docs/RENDERING.md` "Open questions for ren
 
 ---
 
-### D10 — Self-hosted CI runner: `xcrun` can't find `simctl` — RESOLVED 2026-06-19
+### D10 — Self-hosted CI runner toolchain drift — RE-BROKEN 2026-07-02 (was RESOLVED 2026-06-19)
+
+**Re-break (2026-07-02, run 28597659598, commit `ae1884f` — docs/design-system-only, no Swift).** The predicted failure mode arrived, in a new costume: `Device Test (MacBook self-hosted)` now dies at xcodebuild startup with `CoreSimulator is out of date. Current version (1155.4.0) is older than build version (1166.0.0)` (DVTCoreSimulatorAdditionsErrorDomain code 3). Xcode-beta updated but the Mac's CoreSimulator framework didn't — exactly the caveat below. The hosted macos-26 job on the same SHA is green, so this is **runner-infra, not code**. Local op for David: install pending macOS/Xcode-beta component updates on the MacBook (or `sudo xcodebuild -runFirstLaunch`), then re-run the job.
+
+**Original 2026-06-19 incident (`simctl` not found) — resolved; kept as history:**
 **Effort:** S (a couple of local commands on the runner machine) · **Priority:** P2 — precondition for on-device golden-test work
 
 **Symptom.** The `Device Test (MacBook self-hosted)` CI job fails at its first step, "List available iPad simulators", with `xcrun: error: unable to find utility "simctl", not a developer tool or in PATH`. It dies before compilation. The hosted `Build & Test — iPad Simulator (macos-26 / Xcode 26)` job builds and runs the full suite on the same SHA and is green — so a red overall badge from this is **runner-infra, not code** (first observed on the docs-only commit `3f9cda3`, 2026-06-19).
