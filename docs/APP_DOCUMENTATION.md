@@ -1816,7 +1816,7 @@ behavioral emphasis* (4th ed.). Human Kinetics.
 Thibon, L. S., Gerber, S., & Kandel, S. (2018). The elaboration of
 motor programs for the automation of letter production. *Acta
 Psychologica*, 182, 200–211.
-https://doi.org/10.1016/j.actpsy.2017.11.014
+https://doi.org/10.1016/j.actpsy.2017.12.001
 
 Vygotsky, L. S. (1978). *Mind in society: The development of higher
 psychological processes* (M. Cole, V. John-Steiner, S. Scribner, & E.
