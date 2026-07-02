@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-PACKAGE_DIR="$REPO_ROOT/BuchstabenNative"
-CHANGED=$(git diff --cached --name-only | grep -E "^BuchstabenNative/.*\.swift$|^BuchstabenNative/Package\.swift" || true)
+PACKAGE_DIR="$REPO_ROOT"
+CHANGED=$(git diff --cached --name-only | grep -E "^(PrimaeNative|PrimaeNativeTests)/.*\.swift$|^Package\.swift$" || true)
 if [ -z "$CHANGED" ]; then exit 0; fi
+# swift build/test needs the Apple toolchain (SwiftUI et al. don't exist on
+# Linux — claudebox can't run this gate; CI on the Mac runner is the gate there).
+if [ "$(uname)" != "Darwin" ]; then
+    echo "⏭  Swift files changed, but not on macOS — skipping local build/test gate (CI covers it)."
+    exit 0
+fi
 echo "🔍 Swift files changed — running pre-commit tests..."
 cd "$PACKAGE_DIR"
 if ! swift build --build-tests -Xswiftc -strict-concurrency=complete 2>&1; then

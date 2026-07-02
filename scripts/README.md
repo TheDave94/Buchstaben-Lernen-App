@@ -24,11 +24,15 @@ is documented in `docs/APP_DOCUMENTATION.md` §13. Coordinates are
 bbox-relative 0–1.
 
 ```bash
-python3 scripts/generate_strokes_auto.py            # all 59 letters
+python3 scripts/generate_strokes_auto.py            # every LETTERS entry
 python3 scripts/generate_strokes_auto.py M N B      # subset
 ```
 
 Output: `PrimaeNative/Resources/Letters/<X>/strokes.json`.
+
+Letters in `SHIPPED_AS_STATIC_ARTIFACT` (all of Druckschrift Regular)
+are skipped — they ship hand-calibrated verbatim; the bake is retained
+for future fonts and as the b-firewall regression guard.
 
 ### `skeleton_audit.py`
 Per-letter and global diagnostics on the rendered skeletons —
@@ -79,7 +83,7 @@ Codifies the two release-blocking properties of the bake pipeline
    (the b firewall is a special case).
 
 ```bash
-./scripts/verify_bake.sh            # all 18 letters in LETTERS dict
+./scripts/verify_bake.sh            # every letter in the LETTERS dict
 ./scripts/verify_bake.sh M N V W b  # subset
 ```
 
@@ -96,7 +100,7 @@ phoneme (Anlaut) set is RECORDED by a human voice, not synthesised
 `docs/SOUND_PRODUCTION_SPEC.md`.
 
 ```bash
-export ELEVENLABS_API_KEY=...                    # never commit; .env is gitignored
+read -s -p "ELEVENLABS_API_KEY: " ELEVENLABS_API_KEY && export ELEVENLABS_API_KEY   # no bash-history leak
 pip install requests
 python3 scripts/generate_letter_audio.py --letter M   # audition mode (one letter, all voices)
 python3 scripts/generate_letter_audio.py             # full inventory
@@ -123,7 +127,7 @@ letter audio. The shipped MP3s live at
 falls back to `AVSpeechSynthesizer`.
 
 ```bash
-export ELEVENLABS_API_KEY=...
+read -s -p "ELEVENLABS_API_KEY: " ELEVENLABS_API_KEY && export ELEVENLABS_API_KEY
 python3 scripts/generate_prompts.py                              # full inventory
 python3 scripts/generate_prompts.py --prompt phase_freewrite     # audition one
 ```
@@ -145,7 +149,10 @@ Output: `Primae/Primae/Assets.xcassets/Colors/<token>.colorset/Contents.json`.
 The runtime side reads these via `Color("name")` from
 `PrimaeNative/Theme/Colors.swift`. Do **not** hand-edit the
 generated JSON — re-run the script after a design-system update so
-hexes stay in sync.
+hexes stay in sync. The TOKENS table is hand-mirrored from the CSS
+(nothing parses anything); `scripts/tests/test_design_tokens_sync.py`
+cross-checks CSS ↔ TOKENS ↔ committed colorsets ↔ preview hex labels,
+so run `python3 -m pytest scripts/tests/` after touching any layer.
 
 ### `gen_appicon.py`
 Render the app-icon PNG set (light / dark / monochrome) into the Xcode
@@ -185,8 +192,10 @@ executable. Run **once** after every fresh clone.
 
 ### `pre-commit`
 Pre-commit gate that runs `swift build --build-tests` and
-`swift test --parallel` whenever a `PrimaeNative/*.swift` file is
-staged. Blocks the commit on a build or test failure.
+`swift test --parallel` whenever a `PrimaeNative/`, `PrimaeNativeTests/`
+Swift file or `Package.swift` is staged. Blocks the commit on a build
+or test failure. On non-macOS machines (claudebox) it skips with a
+notice — the Apple toolchain isn't available there; CI is the gate.
 
 Emergency bypass:
 ```bash
