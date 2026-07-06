@@ -58,14 +58,18 @@ fileprivate final class RecordingDashboardStore: ParentDashboardStoring {
 
 @Suite(.serialized) @MainActor struct StudyCleanConfigTests {
 
-    private func studyDeps(spySpeech: SpySpeech = SpySpeech(),
-                           spyPrompts: SpyPromptPlayer = SpyPromptPlayer(),
-                           spyHaptics: SpyHaptics = SpyHaptics()) -> TracingDependencies {
+    // Nil defaults (not `= SpySpeech()`): default-argument expressions
+    // evaluate in a nonisolated context, which can't call the spies'
+    // @MainActor inits under the test target's Swift 5 mode.
+    private func studyDeps(spySpeech: SpySpeech? = nil,
+                           spyPrompts: SpyPromptPlayer? = nil,
+                           spyHaptics: SpyHaptics? = nil) -> TracingDependencies {
         var deps = TracingDependencies.stub
         deps.studyMode = true
-        deps.speech = spySpeech
-        deps.makePromptPlayer = { _ in spyPrompts }
-        deps.haptics = spyHaptics
+        deps.speech = spySpeech ?? SpySpeech()
+        let prompts = spyPrompts ?? SpyPromptPlayer()
+        deps.makePromptPlayer = { _ in prompts }
+        deps.haptics = spyHaptics ?? SpyHaptics()
         return deps
     }
 
