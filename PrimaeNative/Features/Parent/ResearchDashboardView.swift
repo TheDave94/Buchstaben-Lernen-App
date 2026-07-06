@@ -65,7 +65,7 @@ struct ResearchDashboardView: View {
 
     private var headphoneWarning: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Keine Kopfhörer verbunden", systemImage: "headphones.slash")
+            Label("Keine Kopfhörer verbunden", systemImage: "exclamationmark.triangle.fill")
                 .font(.body(FontSize.md, weight: .semibold))
                 .foregroundStyle(.red)
             Text("Dieses Gerät ist dem Raumklang-Arm zugeordnet. Ohne Kopfhörer ist das Stereo-Panning (horizontale Stiftposition → links/rechts) über die iPad-Lautsprecher wirkungslos — eine so durchgeführte Session ist ungültige Studien-Daten. Vor der Session Kopfhörer verbinden.")
