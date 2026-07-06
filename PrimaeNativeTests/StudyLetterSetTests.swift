@@ -1,7 +1,9 @@
-// Pins the 5-letter pilot stimulus set: `studyMode` restricts
-// `visibleLetterNames` to A, F, I, L, M — UPPERCASE only — regardless of
+// Pins the study letter pool: `studyMode` restricts
+// `visibleLetterNames` to the participant's TRAINED 3 of the 5 study
+// letters (A F I L M) — UPPERCASE only — regardless of
 // `showAllLetters`, while non-study sessions keep the full alphabet.
-// (Letter-set decision 2026-07-06; case decision: uppercase.)
+// (5-letter set + uppercase decided 2026-07-06; 3-of-5 trained-subset
+// design added the same day. The stub deps pin the subset to "AFI".)
 
 import Testing
 import Foundation
@@ -40,10 +42,24 @@ import CoreGraphics
         return vm
     }
 
-    @Test("studyMode ON → exactly the 5 uppercase study letters")
-    func studyMode_pinsFiveUppercase() {
+    @Test("studyMode ON → exactly the trained 3 uppercase letters (stub subset AFI)")
+    func studyMode_pinsTrainedThreeUppercase() {
         let vm = makeVM(studyMode: true)
-        #expect(Set(vm.visibleLetterNames) == ["A", "F", "I", "L", "M"])
+        #expect(Set(vm.visibleLetterNames) == ["A", "F", "I"])
+    }
+
+    @Test("studyMode ON: pool follows the assigned trained subset")
+    func studyMode_poolFollowsSubset() {
+        for subset in TrainedLetterSubset.allSubsets {
+            var deps = TracingDependencies.stub.with(trainedSubset: subset)
+            deps.studyMode = true
+            let vm = TracingViewModel(deps)
+            vm.letters = TrainedLetterSubset.studyLetters.map {
+                makeAsset($0, base: $0, letterCase: .upper)
+            }
+            #expect(Set(vm.visibleLetterNames) == subset.letters,
+                    "subset \(subset.rawValue) must define the practice pool")
+        }
     }
 
     @Test("studyMode ON excludes lowercase variants of study letters")
@@ -65,7 +81,7 @@ import CoreGraphics
     func studyMode_overridesShowAll() {
         let vm = makeVM(studyMode: true)
         vm.showAllLetters = true
-        #expect(Set(vm.visibleLetterNames) == ["A", "F", "I", "L", "M"])
+        #expect(Set(vm.visibleLetterNames) == ["A", "F", "I"])
     }
 
     @Test("studyMode OFF + showAllLetters → full pool, both cases (app unchanged outside study)")

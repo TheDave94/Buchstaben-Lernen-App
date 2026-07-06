@@ -101,14 +101,19 @@ struct ParentDashboardExporter {
         // analysis recover time-of-day signal. wallClockSeconds covers
         // backgrounded intervals so engagement-vs-practice is
         // recoverable. Legacy rows emit empty strings for new columns.
-        lines.append(["date","recordedAt","durationSeconds","wallClockSeconds","condition","inputDevice"].joined(separator: sep))
+        // `letter` (appended last for legacy column order) ties the
+        // duration to the practised letter directly — the pilot's
+        // per-letter time-to-complete no longer needs a `recordedAt`
+        // join against the per-phase rows. Empty for legacy records.
+        lines.append(["date","recordedAt","durationSeconds","wallClockSeconds","condition","inputDevice","letter"].joined(separator: sep))
         for rec in snapshot.sessionDurations.sorted(by: { $0.dateString < $1.dateString }) {
             let recordedAtField = rec.recordedAt.map { isoFormatter.string(from: $0) } ?? ""
             let wallField = rec.wallClockSeconds.map { String(format: "%.3f", $0) } ?? ""
             lines.append([rec.dateString, recordedAtField,
                           String(format: "%.3f", rec.durationSeconds),
                           wallField, rec.condition.rawValue,
-                          rec.inputDevice ?? ""].joined(separator: sep))
+                          rec.inputDevice ?? "",
+                          rec.letter ?? ""].joined(separator: sep))
         }
         lines.append("")
 
@@ -120,9 +125,14 @@ struct ParentDashboardExporter {
         // finger session from a low-variance pencil session.
         // `recognition_confidence_raw` is the pre-calibration softmax
         // probability, used to quantify the calibrator's effect.
-        // `audioCondition` (pilot audio arm) is appended last so the
-        // legacy column order is preserved for existing consumers.
-        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition"].joined(separator: sep))
+        // `audioCondition` (pilot audio arm), `trainedSubset` (the
+        // participant's trained 3-of-5 letters, e.g. "AFI" — partition
+        // trained vs untrained per row), and `phaseDurationSeconds`
+        // (freeWrite measured-phase time: first-to-last raw sample,
+        // excluding the trailing 2.0 s quiet-window auto-advance) are
+        // appended last, newest-last, so the legacy column order is
+        // preserved for existing consumers.
+        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds"].joined(separator: sep))
         for rec in snapshot.phaseSessionRecords {
             // Discard rows from before enrolment so pilot/sandbox
             // activity isn't attributed to the assigned arm. Also
@@ -153,7 +163,9 @@ struct ParentDashboardExporter {
                 recLabel, recConf, recConfRaw, recRight,
                 dimForm, dimTempo, dimPress, dimRhythm,
                 rec.inputDevice ?? "",
-                rec.audioCondition.rawValue
+                rec.audioCondition.rawValue,
+                rec.trainedSubset ?? "",
+                rec.phaseDurationSeconds.map { String(format: "%.3f", $0) } ?? ""
             ].joined(separator: sep))
         }
         lines.append("")

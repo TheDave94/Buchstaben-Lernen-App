@@ -73,6 +73,7 @@ enum ParticipantStore {
     private static let enrolledAtKey = "de.flamingistan.primae.thesisEnrolledAt"
     private static let conditionOverrideKey = "de.flamingistan.primae.thesisConditionOverride"
     private static let audioConditionOverrideKey = "de.flamingistan.primae.audioConditionOverride"
+    private static let trainedSubsetOverrideKey = "de.flamingistan.primae.trainedSubsetOverride"
 
     /// Researcher-set thesis arm. When non-nil, `defaultForInstall`
     /// returns this verbatim, bypassing the byte-modulo assignment.
@@ -105,6 +106,24 @@ enum ParticipantStore {
                 UserDefaults.standard.set(value.rawValue, forKey: audioConditionOverrideKey)
             } else {
                 UserDefaults.standard.removeObject(forKey: audioConditionOverrideKey)
+            }
+        }
+    }
+
+    /// Researcher-set trained 3-of-5 letter subset. When non-nil,
+    /// `TrainedLetterSubset.defaultForInstall` returns this verbatim,
+    /// bypassing the byte-modulo assignment. Independent of both arm
+    /// overrides — the three axes have separate keys.
+    static var trainedSubsetOverride: TrainedLetterSubset? {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: trainedSubsetOverrideKey) else { return nil }
+            return TrainedLetterSubset(rawValue: raw)
+        }
+        set {
+            if let value = newValue {
+                UserDefaults.standard.set(value.rawValue, forKey: trainedSubsetOverrideKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: trainedSubsetOverrideKey)
             }
         }
     }
@@ -170,9 +189,11 @@ enum ParticipantStore {
     static func startNewParticipant() -> UUID {
         let new = UUID()
         UserDefaults.standard.set(new.uuidString, forKey: key)
-        // Clear arm pins so the fresh UUID re-randomises both axes.
+        // Clear all axis pins so the fresh UUID re-randomises every
+        // axis (both arms + the trained letter subset).
         UserDefaults.standard.removeObject(forKey: conditionOverrideKey)
         UserDefaults.standard.removeObject(forKey: audioConditionOverrideKey)
+        UserDefaults.standard.removeObject(forKey: trainedSubsetOverrideKey)
         // Re-enrol with a fresh timestamp at the reset instant.
         UserDefaults.standard.set(true, forKey: enrolledKey)
         UserDefaults.standard.set(Date(), forKey: enrolledAtKey)

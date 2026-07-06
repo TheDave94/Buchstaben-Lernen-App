@@ -46,6 +46,16 @@ struct PhaseSessionRecord: Codable, Equatable {
     /// insurance). Non-nil only on freeWrite rows that captured a trace;
     /// nil for other phases and for legacy records (decode-default).
     let rawTraceID: UUID?
+    /// The participant's trained 3-of-5 study-letter subset
+    /// (`TrainedLetterSubset.rawValue`, e.g. "AFI") so analysis can
+    /// partition trained vs untrained letters per row. Nil for legacy
+    /// records.
+    let trainedSubset: String?
+    /// Measured-phase duration in seconds — for freeWrite rows, the
+    /// first-to-last raw-trace sample span (excludes the trailing 2.0 s
+    /// quiet-window auto-advance by construction). Nil for other phases
+    /// and legacy records.
+    let phaseDurationSeconds: Double?
 
     init(letter: String, phase: String, completed: Bool, score: Double,
          schedulerPriority: Double, condition: ThesisCondition = .threePhase,
@@ -54,7 +64,9 @@ struct PhaseSessionRecord: Codable, Equatable {
          assessment: WritingAssessment? = nil,
          recognition: RecognitionSample? = nil,
          inputDevice: String? = nil,
-         rawTraceID: UUID? = nil) {
+         rawTraceID: UUID? = nil,
+         trainedSubset: String? = nil,
+         phaseDurationSeconds: Double? = nil) {
         self.letter = letter
         self.phase = phase
         self.completed = completed
@@ -73,6 +85,8 @@ struct PhaseSessionRecord: Codable, Equatable {
         self.recognitionCorrect      = recognition?.isCorrect
         self.inputDevice             = inputDevice
         self.rawTraceID              = rawTraceID
+        self.trainedSubset           = trainedSubset
+        self.phaseDurationSeconds    = phaseDurationSeconds
     }
 
     init(from decoder: Decoder) throws {
@@ -106,6 +120,9 @@ struct PhaseSessionRecord: Codable, Equatable {
         // Added with raw-trace capture; nil for legacy rows and non-trace
         // phases.
         rawTraceID               = try? c.decode(UUID.self, forKey: .rawTraceID)
+        // Added with the 3-of-5 trained-subset design; nil for legacy rows.
+        trainedSubset            = try? c.decode(String.self, forKey: .trainedSubset)
+        phaseDurationSeconds     = try? c.decode(Double.self, forKey: .phaseDurationSeconds)
     }
 }
 
@@ -169,18 +186,26 @@ struct SessionDurationRecord: Codable, Equatable {
     /// Input device ("finger" / "pencil") so "minutes practised by
     /// device" can be aggregated without joining across record types.
     let inputDevice: String?
+    /// The letter (or word label) this session practised. Added for the
+    /// pilot's per-letter time-to-complete outcome — before this, the
+    /// letter identity was dropped at storage and recoverable only via
+    /// a fragile `recordedAt` join against the per-phase rows. Nil for
+    /// legacy records.
+    let letter: String?
 
     init(dateString: String, durationSeconds: TimeInterval,
          wallClockSeconds: TimeInterval? = nil,
          condition: ThesisCondition = .threePhase,
          recordedAt: Date? = Date(),
-         inputDevice: String? = nil) {
+         inputDevice: String? = nil,
+         letter: String? = nil) {
         self.dateString = dateString
         self.durationSeconds = durationSeconds
         self.wallClockSeconds = wallClockSeconds
         self.condition = condition
         self.recordedAt = recordedAt
         self.inputDevice = inputDevice
+        self.letter = letter
     }
 
     init(from decoder: Decoder) throws {
@@ -191,6 +216,7 @@ struct SessionDurationRecord: Codable, Equatable {
         condition = (try? c.decode(ThesisCondition.self, forKey: .condition)) ?? .threePhase
         recordedAt = try? c.decode(Date.self, forKey: .recordedAt)
         inputDevice = try? c.decode(String.self, forKey: .inputDevice)
+        letter = try? c.decode(String.self, forKey: .letter)
     }
 }
 
@@ -355,7 +381,7 @@ protocol ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?)
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?)
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?)
     func reset()
     /// Await any pending background write. See ProgressStoring.flush().
     func flush() async
@@ -368,15 +394,21 @@ extension ParentDashboardStoring {
     /// participant's assigned arm explicitly.
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: nil, recognition: nil, inputDevice: nil, rawTraceID: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: nil, recognition: nil, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil)
     }
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: nil, inputDevice: nil, rawTraceID: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: nil, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil)
     }
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: nil, rawTraceID: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil)
+    }
+    /// Pre-3-of-5 full signature — forwards with no subset/duration so
+    /// existing call sites and tests compile unchanged.
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?) {
+        recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: inputDevice, rawTraceID: rawTraceID, trainedSubset: nil, phaseDurationSeconds: nil)
     }
     /// Backward-compatible recordSession overload — new fields populate as nil.
     func recordSession(letter: String, accuracy: Double,
@@ -471,7 +503,8 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
                                        wallClockSeconds: wallClockSeconds,
                                        condition: condition,
                                        recordedAt: date,
-                                       inputDevice: inputDevice)
+                                       inputDevice: inputDevice,
+                                       letter: letter)
             )
             if snapshot.sessionDurations.count > Self.sessionDurationsCap {
                 snapshot.sessionDurations.removeFirst(
@@ -482,7 +515,7 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
         persist()
     }
 
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil, rawTraceID: UUID? = nil) {
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil, rawTraceID: UUID? = nil, trainedSubset: String? = nil, phaseDurationSeconds: Double? = nil) {
         let record = PhaseSessionRecord(
             letter: LetterProgress.canonicalKey(letter),
             phase: phase,
@@ -494,7 +527,9 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
             assessment: assessment,
             recognition: recognition,
             inputDevice: inputDevice,
-            rawTraceID: rawTraceID
+            rawTraceID: rawTraceID,
+            trainedSubset: trainedSubset,
+            phaseDurationSeconds: phaseDurationSeconds
         )
         snapshot.phaseSessionRecords.append(record)
         if snapshot.phaseSessionRecords.count > Self.phaseSessionRecordsCap {

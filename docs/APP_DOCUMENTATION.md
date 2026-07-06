@@ -2198,6 +2198,7 @@ One row per letter the child has practised.
 | `wallClockSeconds` | float / blank | `SessionDurationRecord.wallClockSeconds` | T4: total time including backgrounded intervals. |
 | `condition` | string | `SessionDurationRecord.condition` | `threePhase` / `guidedOnly` / `control`. |
 | `inputDevice` | string / blank | `SessionDurationRecord.inputDevice` | T7: `finger` / `pencil` / blank. |
+| `letter` | string / blank | `SessionDurationRecord.letter` | The practised letter (or word label) — per-letter time-to-complete without a `recordedAt` join. Blank for legacy records. |
 
 `condition == threePhase` does not imply four phases ran — the case label predates the `direct` phase.
 
@@ -2223,7 +2224,9 @@ One row per phase × letter session, chronological order. Filtered by `enrolledA
 | `pressureControl` | `PhaseSessionRecord.pressureControl` | dim 3 (force variance, weight 0.15). |
 | `rhythmScore` | `PhaseSessionRecord.rhythmScore` | dim 4 (active-time ratio, weight 0.20). |
 | `inputDevice` | `PhaseSessionRecord.inputDevice` | D-6: disambiguates `pressureControl == 1.0`. |
-| `audioCondition` | `PhaseSessionRecord.audioCondition` | Pilot audio arm: `phoneme` / `spatial` / `silent`. Appended as the LAST column (after `inputDevice`) so pre-pilot CSV parsers stay positionally compatible. |
+| `audioCondition` | `PhaseSessionRecord.audioCondition` | Pilot audio arm: `phoneme` / `spatial` / `silent`. Appended after `inputDevice` so pre-pilot CSV parsers stay positionally compatible. |
+| `trainedSubset` | `PhaseSessionRecord.trainedSubset` | The participant's trained 3-of-5 study letters (e.g. `AIM`) — partition trained vs untrained rows. Blank for legacy records. |
+| `phaseDurationSeconds` | `PhaseSessionRecord.phaseDurationSeconds` | freeWrite rows only: measured-phase time = first-to-last raw-trace sample. Excludes the trailing 2.0 s quiet-window auto-advance (`freeWriteQuietSeconds`) by construction; that constant is identical across arms. Blank otherwise. |
 
 ## Section 4 — Aggregate metrics (`metric,value`)
 

@@ -117,7 +117,11 @@ final class PhaseTransitionCoordinator {
         guard let vm else { return }
         _ = vm  // silence unused warning while only `result` is read here
         let triggerRetry: Bool
-        if let r = result {
+        if let r = result, !vm.studyMode {
+            // Study sessions never retry: the recognizer forcing extra
+            // freeWrite attempts would manipulate the time-to-complete
+            // outcome and vary trial counts between children. The
+            // recognition sample is still recorded (passive data).
             triggerRetry = !r.isCorrect && r.confidence > 0.7
         } else {
             triggerRetry = false
@@ -132,17 +136,22 @@ final class PhaseTransitionCoordinator {
     private func celebrateFreeWrite(score: CGFloat,
                                     result: RecognitionResult?) {
         guard let vm else { return }
-        vm.overlayQueue.enqueue(.kpOverlay)
-        if let r = result, r.confidence >= 0.4 {
-            vm.overlayQueue.enqueueBeforeCelebration(.recognitionBadge(r))
-        }
-        // Schule freeWrite uses a generic "Gut gemacht!" — letter-naming
-        // feedback ("Du hast ein K geschrieben!") belongs in Werkstatt
-        // where naming what the model saw is the point. Celebration
-        // "Super gemacht!" follows from `recordSessionCompletion`.
-        vm.speech.speak("Gut gemacht!")
-        if vm.enablePaperTransfer {
-            vm.overlayQueue.enqueue(.paperTransfer(letter: vm.currentLetterName))
+        // Study sessions: no KP reference-line overlay (a learning
+        // intervention), no recognition badge, no praise — all arms end
+        // freeWrite identically with no post-trial feedback (audit C2).
+        if !vm.studyMode {
+            vm.overlayQueue.enqueue(.kpOverlay)
+            if let r = result, r.confidence >= 0.4 {
+                vm.overlayQueue.enqueueBeforeCelebration(.recognitionBadge(r))
+            }
+            // Schule freeWrite uses a generic "Gut gemacht!" — letter-naming
+            // feedback ("Du hast ein K geschrieben!") belongs in Werkstatt
+            // where naming what the model saw is the point. Celebration
+            // "Super gemacht!" follows from `recordSessionCompletion`.
+            vm.speech.speak("Gut gemacht!")
+            if vm.enablePaperTransfer {
+                vm.overlayQueue.enqueue(.paperTransfer(letter: vm.currentLetterName))
+            }
         }
         // Final-phase advance — sets isLetterSessionComplete but
         // leaves currentPhase at .freeWrite; returns false.
@@ -174,12 +183,18 @@ final class PhaseTransitionCoordinator {
 
     private func recordSessionCompletion() {
         guard let vm else { return }
-        vm.overlayQueue.enqueue(.celebration(stars: vm.phaseController.starsEarned))
-        // Same chime + "Super gemacht!" regardless of star count so a
-        // 1-star child still hears genuine encouragement.
-        vm.prompts.playSuccessChime()
-        vm.prompts.play(.celebration,
-                        fallbackText: ChildSpeechLibrary.celebration)
+        // Study sessions: no celebration overlay, chime, or phrase —
+        // the proctor advances via the nav arrows (audit C1/C2). The
+        // chime/prompt calls are doubly dead under studyMode (prompts
+        // is NullPromptPlayer), but the overlay gate is load-bearing.
+        if !vm.studyMode {
+            vm.overlayQueue.enqueue(.celebration(stars: vm.phaseController.starsEarned))
+            // Same chime + "Super gemacht!" regardless of star count so a
+            // 1-star child still hears genuine encouragement.
+            vm.prompts.playSuccessChime()
+            vm.prompts.play(.celebration,
+                            fallbackText: ChildSpeechLibrary.celebration)
+        }
         let accuracy = Double(vm.phaseController.overallScore)
         let now = CACurrentMediaTime()
         let liveSlice = vm.letterLoadTime.map { now - $0 } ?? 0
@@ -207,6 +222,15 @@ final class PhaseTransitionCoordinator {
         // no freeWrite phase ran or the buffer is empty.
         let freeWriteTraceID: UUID? = scores.keys.contains("freeWrite")
             ? vm.captureFreeWriteTrace() : nil
+        // Measured-phase time: first-to-last raw freeWrite sample
+        // (CACurrentMediaTime deltas). Excludes the trailing 2.0 s
+        // quiet-window auto-advance (`freeWriteQuietSeconds`) by
+        // construction — the window starts after the last sample.
+        let freeWriteDuration: Double? = {
+            guard let first = vm.freeWriteTimestamps.first,
+                  let last = vm.freeWriteTimestamps.last, last > first else { return nil }
+            return last - first
+        }()
         for (phase, phaseScore) in scores {
             vm.dashboardStore.recordPhaseSession(
                 letter: vm.currentLetterName,
@@ -219,7 +243,9 @@ final class PhaseTransitionCoordinator {
                 assessment: phase == "freeWrite" ? vm.lastWritingAssessment : nil,
                 recognition: phase == "freeWrite" ? freeWriteRecognition : nil,
                 inputDevice: device,
-                rawTraceID: phase == "freeWrite" ? freeWriteTraceID : nil
+                rawTraceID: phase == "freeWrite" ? freeWriteTraceID : nil,
+                trainedSubset: vm.trainedSubset.rawValue,
+                phaseDurationSeconds: phase == "freeWrite" ? freeWriteDuration : nil
             )
         }
         commitCompletion(letter: vm.currentLetterName,
@@ -271,15 +297,19 @@ final class PhaseTransitionCoordinator {
         }
         // The store isn't @Observable; this mirror is the SwiftUI bridge.
         vm.refreshProgressMirror()
-        let newRewards = vm.streakStore.recordSession(
-            date: Date(),
-            lettersCompleted: lettersToRecord,
-            accuracy: accuracy
-        )
-        // Slot freshly-unlocked badges ahead of the celebration the
-        // child is already expecting.
-        for event in newRewards {
-            vm.overlayQueue.enqueueBeforeCelebration(.rewardCelebration(event))
+        // Study sessions: no streak accrual, no badge unlock overlays —
+        // reward systems are off so all arms are identical (audit C2).
+        if !vm.studyMode {
+            let newRewards = vm.streakStore.recordSession(
+                date: Date(),
+                lettersCompleted: lettersToRecord,
+                accuracy: accuracy
+            )
+            // Slot freshly-unlocked badges ahead of the celebration the
+            // child is already expecting.
+            for event in newRewards {
+                vm.overlayQueue.enqueueBeforeCelebration(.rewardCelebration(event))
+            }
         }
         // `wallClock` includes backgrounded time; `duration` excludes it.
         let wallClock = vm.letterLoadedDate.map { Date().timeIntervalSince($0) }

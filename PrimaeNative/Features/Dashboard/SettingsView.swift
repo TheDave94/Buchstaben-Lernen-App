@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var thesisEnrolled: Bool = ParticipantStore.isEnrolled
     @State private var conditionOverride: ThesisCondition? = ParticipantStore.conditionOverride
     @State private var audioConditionOverride: PilotAudioCondition? = ParticipantStore.audioConditionOverride
+    @State private var trainedSubsetOverride: TrainedLetterSubset? = ParticipantStore.trainedSubsetOverride
     @State private var speechRate: Float = {
         let stored = UserDefaults.standard.float(forKey: "de.flamingistan.primae.speechRate")
         return stored > 0 ? stored : 0.42
@@ -171,6 +172,23 @@ struct SettingsView: View {
                         }
                     }
                     .accessibilityHint("Nur für Studienleitung. Ordnet das Gerät einem bestimmten Audio-Arm zu (Phonem, Raumklang oder Ohne Ton), anstatt die automatische Zuweisung zu verwenden. Änderung wird beim nächsten App-Start wirksam.")
+
+                    // Third axis: which 3 of the 5 study letters this
+                    // participant trains. Same override pattern; the
+                    // post-test covers all 5 regardless.
+                    Picker("Trainierte Buchstaben überschreiben",
+                           selection: Binding(
+                            get: { trainedSubsetOverride },
+                            set: {
+                                trainedSubsetOverride = $0
+                                ParticipantStore.trainedSubsetOverride = $0
+                            })) {
+                        Text("Automatisch").tag(TrainedLetterSubset?.none)
+                        ForEach(TrainedLetterSubset.allSubsets, id: \.self) { subset in
+                            Text(subset.displayName).tag(TrainedLetterSubset?.some(subset))
+                        }
+                    }
+                    .accessibilityHint("Nur für Studienleitung. Legt fest, welche 3 der 5 Studienbuchstaben dieses Kind übt, anstatt die automatische Zuweisung zu verwenden — für ausgewogenes Counterbalancing. Änderung wird beim nächsten App-Start wirksam.")
                 }
             }
             Section("Werkzeuge") {
@@ -214,6 +232,7 @@ struct SettingsView: View {
             thesisEnrolled = ParticipantStore.isEnrolled
             conditionOverride = ParticipantStore.conditionOverride
             audioConditionOverride = ParticipantStore.audioConditionOverride
+            trainedSubsetOverride = ParticipantStore.trainedSubsetOverride
             let storedRate = UserDefaults.standard.float(forKey: Self.speechRateKey)
             speechRate = storedRate > 0 ? storedRate : 0.42
             vm.speech.setRate(speechRate)

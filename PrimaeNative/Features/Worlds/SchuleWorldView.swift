@@ -50,14 +50,16 @@ struct SchuleWorldView: View {
 
             VStack {
                 topRow
+                // Feedback cards are reward-class UI — off in study
+                // sessions so all arms end trials identically (audit C2).
                 if let guided = vm.lastGuidedScore,
-                   vm.learningPhase == .freeWrite {
+                   vm.learningPhase == .freeWrite, !vm.studyMode {
                     guidedFeedbackCard(score: guided)
                         .padding(.top, 8)
                         .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                 }
                 if let assessment = vm.lastWritingAssessment,
-                   vm.learningPhase == .freeWrite,
+                   vm.learningPhase == .freeWrite, !vm.studyMode,
                    !isQueueShowingKPOverlay {
                     // Form-accuracy row between KP-overlay dismiss and
                     // the celebration. The opaque celebration modal
@@ -94,7 +96,8 @@ struct SchuleWorldView: View {
                         // Read via `vm.allProgress` (the @Observable
                         // mirror) so the chip refreshes after a fresh
                         // completion without reopening the picker.
-                        LetterStars.stars(
+                        // Study sessions hide star chips (reward-class).
+                        vm.studyMode ? 0 : LetterStars.stars(
                             for: (vm.allProgress[name] ?? LetterProgress()).phaseScores)
                     },
                     onSelect: { letter in
@@ -264,7 +267,8 @@ struct SchuleWorldView: View {
                 variantToggle
             }
             Spacer()
-            if totalStars > 0 {
+            // Persistent star badge is reward-class — off in study mode.
+            if !vm.studyMode, totalStars > 0 {
                 starCountBadge(count: totalStars)
             }
         }

@@ -112,7 +112,7 @@ final class StubDashboardStore: ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?) {}
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?) {}
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?) {}
     func reset() {}
 }
 
@@ -190,6 +190,9 @@ extension TracingDependencies {
             // Pin the audio arm too so tests don't depend on global
             // ParticipantStore enrolment state (mirrors thesisCondition).
             audioCondition:       .phoneme,
+            // Pin the trained subset for the same reason (the default
+            // reads ParticipantStore). "AFI" = allSubsets[0].
+            trainedSubset:        TrainedLetterSubset.allSubsets[0],
             letterRecognizer:     StubLetterRecognizer(),
             speech:               NullSpeechSynthesizer(),
             // Real AVAudioPlayer.play() in PromptPlayer adds enough
@@ -228,5 +231,8 @@ extension TracingDependencies {
     }
     func with(audioCondition: PilotAudioCondition) -> TracingDependencies {
         var copy = self; copy.audioCondition = audioCondition; return copy
+    }
+    func with(trainedSubset: TrainedLetterSubset) -> TracingDependencies {
+        var copy = self; copy.trainedSubset = trainedSubset; return copy
     }
 }

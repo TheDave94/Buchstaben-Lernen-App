@@ -310,7 +310,10 @@ public final class TracingViewModel {
     /// button stays hidden in Schreibschrift to avoid rendering a
     /// print path over a cursive glyph.
     var currentLetterHasVariants: Bool {
-        guard !letters.isEmpty, letterIndex < letters.count,
+        // Study sessions pin the standard stroke form: a child-reachable
+        // variant toggle would swap F's scorer reference geometry
+        // mid-study (different checkpoint count + radius).
+        guard !studyMode, !letters.isEmpty, letterIndex < letters.count,
               schriftArt == .druckschrift else { return false }
         return !(letters[letterIndex].variants?.isEmpty ?? true)
     }
@@ -593,6 +596,11 @@ public final class TracingViewModel {
     /// Pilot audio arm for this participant. Stamped onto every recorded
     /// session (H1); per-arm audio playback routing is H2.
     let audioCondition: PilotAudioCondition
+    /// Trained 3-of-5 study-letter subset for this participant (third
+    /// assignment axis). Filters the practice pool under `studyMode`;
+    /// stamped onto every recorded session for trained/untrained
+    /// partitioning in analysis.
+    let trainedSubset: TrainedLetterSubset
     private let onboardingStore: OnboardingStoring
     private let notificationScheduler: LocalNotificationScheduler
     var adaptationPolicy: any AdaptationPolicy
@@ -661,7 +669,13 @@ public final class TracingViewModel {
     init(_ deps: TracingDependencies = .live) {
         self.audio                  = deps.audio
         self.progressStore          = deps.progressStore
-        self.haptics                = deps.haptics
+        // Study sessions: the ONLY audio is the arm's designated sound.
+        // Silencing at the injection seam kills every other feedback
+        // channel at once — TTS (phase cues, praise, retry lines),
+        // prompt MP3s, the celebration chime, tap/buzz/tick effects,
+        // and haptics — in ALL arms, so the silent arm is actually
+        // silent and the sound arms carry no uncontrolled audio.
+        self.haptics                = deps.studyMode ? NullHapticEngine() : deps.haptics
         self.repo                   = deps.repo
         self.streakStore            = deps.streakStore
         self.dashboardStore         = deps.dashboardStore
@@ -670,6 +684,7 @@ public final class TracingViewModel {
         self.notificationScheduler  = deps.notificationScheduler
         self.thesisCondition        = deps.thesisCondition
         self.audioCondition         = deps.audioCondition
+        self.trainedSubset          = deps.trainedSubset
         self.enablePaperTransfer    = deps.enablePaperTransfer
         self.enableFreeformMode     = deps.enableFreeformMode
         self.enablePhonemeMode      = deps.enablePhonemeMode
@@ -677,12 +692,16 @@ public final class TracingViewModel {
         self.enableRetrievalPrompts = deps.enableRetrievalPrompts
         self.enableBackwardChaining = deps.enableBackwardChaining
         self.letterRecognizer       = deps.letterRecognizer
-        self.speech                 = deps.speech
-        self.prompts                = deps.makePromptPlayer(deps.speech)
+        // Same studyMode silencing rationale as `haptics` above.
+        self.speech                 = deps.studyMode ? NullSpeechSynthesizer() : deps.speech
+        self.prompts                = deps.studyMode ? NullPromptPlayer() : deps.makePromptPlayer(deps.speech)
         // Control condition uses fixed difficulty so the manipulation
-        // can't confound the phase-progression IV.
+        // can't confound the phase-progression IV. Study devices pin
+        // difficulty at the standard tier for the same reason — the
+        // pilot's IV is the audio arm, and an adapting checkpoint
+        // radius would vary the guided task between children.
         self.adaptationPolicy       = deps.adaptationPolicy ?? (
-            deps.thesisCondition == .control
+            deps.thesisCondition == .control || deps.studyMode
                 ? FixedAdaptationPolicy(currentTier: .standard)
                 : MovingAverageAdaptationPolicy()
         )
@@ -704,8 +723,13 @@ public final class TracingViewModel {
         self.onboardingStep        = coordinator.currentStep
         self.isOnboardingComplete  = deps.onboardingStore.hasCompletedOnboarding
         self.phaseController = LearningPhaseController(condition: deps.thesisCondition)
-        self.schriftArt = deps.schriftArt
-        self.letterOrdering = deps.letterOrdering
+        // Study pins: the pilot is Druckschrift-only and its letter
+        // order must be identical across children/devices — a stray
+        // device setting must not swap the stimulus geometry or the
+        // sequence. Session-only (init assignment skips the didSets,
+        // so the stored parent settings survive studyMode).
+        self.schriftArt = deps.studyMode ? .druckschrift : deps.schriftArt
+        self.letterOrdering = deps.studyMode ? .motorSimilarity : deps.letterOrdering
 
         // Per-VM controllers from factories so tests can swap any one
         // without subclassing.
@@ -1281,6 +1305,14 @@ public final class TracingViewModel {
 
     /// Load the spaced-repetition-recommended letter.
     func loadRecommendedLetter() {
+        // Study sessions use a fixed deterministic order, never the
+        // spaced-repetition scheduler (letter order must not diverge
+        // with performance). Defensive: the celebration overlay that
+        // normally triggers this is itself gated off under studyMode.
+        if studyMode {
+            nextLetter()
+            return
+        }
         // Confirmation haptic on celebration "Weiter".
         haptics.fire(.letterCompleted)
         let available = visibleLetterNames
@@ -1354,8 +1386,15 @@ public final class TracingViewModel {
     var visibleLetterNames: [String] {
         let pool: [String]
         if studyMode {
+            // Practice pool = the participant's trained 3 of the 5
+            // study letters (uppercase). The H6 post-test covers all 5;
+            // the untrained 2 are the within-child baseline.
             pool = letters
-                .filter { studyBaseLetters.contains($0.baseLetter) && $0.letterCase == .upper }
+                .filter {
+                    studyBaseLetters.contains($0.baseLetter)
+                    && trainedSubset.letters.contains($0.baseLetter)
+                    && $0.letterCase == .upper
+                }
                 .map(\.name)
         } else if showAllLetters {
             pool = letters.map(\.name)
@@ -1548,8 +1587,12 @@ public final class TracingViewModel {
         // pattern formation without repeated near-miss failure on
         // novel letters (Skinner 1958; Terrace 1963). From session 4
         // the policy tier drives the radius again.
+        // Errorless-learning ramp — suppressed in study sessions: the
+        // radius must be identical for every child regardless of prior
+        // exposure (guided difficulty is held constant, like the
+        // adaptation policy).
         let priorCompletions = progressStore.progress(for: letter.name).completionCount
-        if priorCompletions < 3 {
+        if !studyMode, priorCompletions < 3 {
             strokeTracker.radiusMultiplier = max(
                 strokeTracker.radiusMultiplier,
                 DifficultyTier.easy.radiusMultiplier
@@ -1635,6 +1678,8 @@ public final class TracingViewModel {
     }
 
     func showCompletionHUD() {
+        // Reward-class feedback — off in study sessions (audit C2).
+        guard !studyMode else { return }
         messages.show(completion: "🎉 \(currentLetterName) geschafft!")
     }
 

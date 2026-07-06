@@ -28,6 +28,10 @@ struct TracingDependencies {
     /// to `thesisCondition`; assigned at the same point. H1 carries it
     /// onto every recorded session — per-arm audio playback routing is H2.
     var audioCondition: PilotAudioCondition
+    /// Trained 3-of-5 study-letter subset (third assignment axis, UUID
+    /// byte 8). Filters the practice pool under `studyMode` only; the
+    /// H6 post-test covers all 5 letters regardless.
+    var trainedSubset: TrainedLetterSubset
     var schriftArt: SchriftArt
     var letterOrdering: LetterOrderingStrategy
     var enablePaperTransfer: Bool
@@ -93,6 +97,8 @@ struct TracingDependencies {
         // Assigned the same way as `thesisCondition`, but on an
         // independent UUID byte so the two axes don't correlate.
         audioCondition: PilotAudioCondition = .defaultForInstall,
+        // Third axis, same assignment shape (independent UUID byte).
+        trainedSubset: TrainedLetterSubset = .defaultForInstall,
         schriftArt: SchriftArt = {
             if let raw = UserDefaults.standard.string(forKey: "de.flamingistan.primae.selectedSchriftArt")
                 ?? UserDefaults.standard.string(forKey: "selectedSchriftArt") {
@@ -157,6 +163,7 @@ struct TracingDependencies {
         self.notificationScheduler = notificationScheduler
         self.thesisCondition = thesisCondition
         self.audioCondition = audioCondition
+        self.trainedSubset = trainedSubset
         self.schriftArt = schriftArt
         self.letterOrdering = letterOrdering
         self.enablePaperTransfer = enablePaperTransfer

@@ -98,6 +98,11 @@ struct ResearchDashboardView: View {
             Text("\(vm.audioCondition.displayName) · \(vm.thesisCondition.displayName)")
                 .font(.callout.weight(.medium))
                 .foregroundStyle(Color.inkSoft)
+            // Third axis, for proctor handoff checks: which 3 of the 5
+            // study letters this participant trains.
+            Text("Trainiert: \(vm.trainedSubset.displayName)")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Color.inkSoft)
             Text(ParticipantStore.participantId.uuidString)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(Color.inkSoft)
