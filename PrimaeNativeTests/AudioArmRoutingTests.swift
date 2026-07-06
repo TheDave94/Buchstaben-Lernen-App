@@ -17,6 +17,8 @@ fileprivate final class RecordingAudio: AudioControlling {
     var initializationError: String? { nil }
     private(set) var loadedFiles: [String] = []
     private(set) var setAdaptiveCount = 0
+    /// Every cents value the spatial pitch drive emitted, in order.
+    private(set) var spatialPitches: [Float] = []
     private(set) var isPlaying = false
     func loadAudioFile(named: String, autoplay: Bool) { loadedFiles.append(named) }
     func play()    { isPlaying = true }
@@ -26,6 +28,7 @@ fileprivate final class RecordingAudio: AudioControlling {
     func resumeAfterLifecycle()       {}
     func cancelPendingLifecycleWork() {}
     func setAdaptivePlayback(speed: Float, horizontalBias: Float) { setAdaptiveCount += 1 }
+    func setSpatialPitch(cents: Float) { spatialPitches.append(cents) }
 }
 
 @Suite(.serialized) @MainActor struct AudioArmRoutingTests {
@@ -42,13 +45,12 @@ fileprivate final class RecordingAudio: AudioControlling {
                 StrokeDefinition(id: 1, checkpoints: [Checkpoint(x: 0.1, y: 0.1),
                                                       Checkpoint(x: 0.9, y: 0.9)])
             ]),
-            phonemeAudioFiles: ["\(name)_phoneme1.mp3"],
-            arbitraryAudioFiles: ["\(name)_arb1.mp3"]
+            phonemeAudioFiles: ["\(name)_phoneme1.mp3"]
         )
     }
 
     /// An asset with name audio but NO phoneme recording — the H5/P6
-    /// coverage gap. `arbitraryAudioFiles` left empty too.
+    /// coverage gap.
     private func assetNoPhoneme(_ name: String = "Q") -> LetterAsset {
         LetterAsset(
             id: name, name: name,
@@ -84,20 +86,18 @@ fileprivate final class RecordingAudio: AudioControlling {
         #expect(vm.activeAudioFiles(for: asset()) == ["A_name.mp3"])
     }
 
-    @Test("arbitrarySound arm → arbitrary slot (placeholder, no name fallback)")
-    func arbitrary_returnsArbitrarySlot() {
-        let vm = makeVM(arm: .arbitrarySound, phonemeToggle: true)
-        #expect(vm.activeAudioFiles(for: asset()) == ["A_arb1.mp3"])
+    @Test("spatial arm → the shared carrier tone, never per-letter audio")
+    func spatial_returnsCarrier() {
+        let vm = makeVM(arm: .spatial, phonemeToggle: true)
+        #expect(vm.activeAudioFiles(for: asset()) == [SpatialSonification.carrierToneFile])
     }
 
-    @Test("arbitrarySound arm with empty slot → [] (does NOT leak name audio)")
-    func arbitrary_emptySlot_returnsEmpty() {
-        let vm = makeVM(arm: .arbitrarySound, phonemeToggle: false)
-        let bare = LetterAsset(id: "B", name: "B",
-                               audioFiles: ["B_name.mp3"],
-                               strokes: LetterStrokes(letter: "B", checkpointRadius: 0.1, strokes: []),
-                               phonemeAudioFiles: ["B_phoneme1.mp3"])  // no arbitrary slot
-        #expect(vm.activeAudioFiles(for: bare).isEmpty)
+    @Test("spatial arm ignores letter assets entirely (no name-audio leak)")
+    func spatial_letterIndependent() {
+        let vm = makeVM(arm: .spatial, phonemeToggle: false)
+        // Same carrier whether the letter is asset-rich or bare.
+        #expect(vm.activeAudioFiles(for: asset()) == [SpatialSonification.carrierToneFile])
+        #expect(vm.activeAudioFiles(for: assetNoPhoneme()) == [SpatialSonification.carrierToneFile])
     }
 
     @Test("silent arm → [] regardless of toggle or bundled files")
@@ -136,12 +136,12 @@ fileprivate final class RecordingAudio: AudioControlling {
         #expect(off.activeAudioFiles(for: asset()) == ["A_name.mp3"])
     }
 
-    @Test("studyMode does not override the silent or arbitrary arms")
+    @Test("studyMode does not override the silent or spatial arms")
     func studyMode_doesNotLeakAcrossArms() {
-        let silent = makeVM(arm: .silent, phonemeToggle: true, studyMode: true)
-        let arb    = makeVM(arm: .arbitrarySound, phonemeToggle: true, studyMode: true)
+        let silent  = makeVM(arm: .silent, phonemeToggle: true, studyMode: true)
+        let spatial = makeVM(arm: .spatial, phonemeToggle: true, studyMode: true)
         #expect(silent.activeAudioFiles(for: asset()).isEmpty)
-        #expect(arb.activeAudioFiles(for: asset()) == ["A_arb1.mp3"])
+        #expect(spatial.activeAudioFiles(for: asset()) == [SpatialSonification.carrierToneFile])
     }
 
     // MARK: - Silent gates content AND coupling
@@ -170,13 +170,70 @@ fileprivate final class RecordingAudio: AudioControlling {
                 "phoneme arm must keep the adaptive-playback coupling")
     }
 
+    // MARK: - Spatial pitch drive (Y → cents; the arm's defining coupling)
+
+    /// The spatial arm must drive pitch from pen Y on the per-tick path.
+    /// Canvas is 400×400; a horizontal drag at y=100 (normalized 0.25)
+    /// must emit +600 cents on every tick (220–880 Hz linear-in-cents,
+    /// top = high, carrier at 440 Hz).
+    @Test("spatial arm: a touch drives pitch from pen Y")
+    func spatial_touchDrivesPitch() {
+        let audio = RecordingAudio()
+        let vm = TracingViewModel(.stub.with(audioCondition: .spatial).with(audio: audio))
+        driveTouch(vm, y: 100)
+        #expect(!audio.spatialPitches.isEmpty,
+                "spatial arm must drive setSpatialPitch on the touch path")
+        #expect(audio.spatialPitches.allSatisfy { abs($0 - 600) < 0.001 },
+                "y=0.25 must map to +600 cents — got \(audio.spatialPitches)")
+    }
+
+    /// Matching discipline (reframed): the phoneme arm is matched on
+    /// rate + pan but must NEVER drive pitch — pitch-drive is the spatial
+    /// arm's treatment, and a stray pitch call would contaminate the
+    /// phoneme arm's stimulus.
+    @Test("phoneme arm: a touch never drives pitch")
+    func phoneme_neverDrivesPitch() {
+        let audio = RecordingAudio()
+        let vm = TracingViewModel(.stub.with(audioCondition: .phoneme).with(audio: audio))
+        driveTouch(vm)
+        #expect(audio.setAdaptiveCount > 0)                 // coupling ran…
+        #expect(audio.spatialPitches.isEmpty,               // …but no pitch
+                "phoneme arm must not drive pitch — got \(audio.spatialPitches)")
+    }
+
+    @Test("silent arm: a touch never drives pitch either")
+    func silent_neverDrivesPitch() {
+        let audio = RecordingAudio()
+        let vm = TracingViewModel(.stub.with(audioCondition: .silent).with(audio: audio))
+        driveTouch(vm)
+        #expect(audio.spatialPitches.isEmpty)
+    }
+
+    // MARK: - Pitch mapping (pure)
+
+    @Test("Y→cents mapping: linear-in-cents across 220–880 Hz, top = high")
+    func pitchMapping_endpointsAndLinearity() {
+        #expect(SpatialSonification.pitchCents(forNormalizedY: 0.0)  ==  1200)  // top    = 880 Hz
+        #expect(SpatialSonification.pitchCents(forNormalizedY: 0.5)  ==     0)  // middle = 440 Hz
+        #expect(SpatialSonification.pitchCents(forNormalizedY: 1.0)  == -1200)  // bottom = 220 Hz
+        #expect(SpatialSonification.pitchCents(forNormalizedY: 0.25) ==   600)  // linear in cents
+        #expect(SpatialSonification.pitchCents(forNormalizedY: 0.75) ==  -600)
+    }
+
+    @Test("Y→cents mapping clamps out-of-canvas input")
+    func pitchMapping_clamps() {
+        #expect(SpatialSonification.pitchCents(forNormalizedY: -0.5) ==  1200)
+        #expect(SpatialSonification.pitchCents(forNormalizedY:  1.5) == -1200)
+    }
+
     /// Mirrors EndToEndTracingSessionTests.simulateFastTouch: a fast
-    /// in-bounds drag so updateAdaptivePlayback is reached.
-    private func driveTouch(_ vm: TracingViewModel) {
+    /// in-bounds drag so updateAdaptivePlayback is reached. Horizontal
+    /// drag at a fixed `y` so the pitch expectation is single-valued.
+    private func driveTouch(_ vm: TracingViewModel, y: CGFloat = 200) {
         let t0: CFTimeInterval = 1000
-        vm.beginTouch(at: CGPoint(x: 50, y: 200), t: t0)
+        vm.beginTouch(at: CGPoint(x: 50, y: y), t: t0)
         var t = t0
-        var p = CGPoint(x: 50, y: 200)
+        var p = CGPoint(x: 50, y: y)
         for _ in 0..<15 { t += 0.001; p.x += 10; vm.updateTouch(at: p, t: t, canvasSize: canvas) }
     }
 }

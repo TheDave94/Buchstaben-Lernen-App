@@ -50,13 +50,13 @@ import Testing
     @Test("Known-byte UUIDs map deterministically off the LAST byte")
     func deterministic_by_last_byte() {
         // Audio assignment keys on uuid.15 (the last byte), not uuid.0.
-        // A UUID with last byte 0 → phoneme; 1 → arbitrarySound; 2 → silent.
+        // A UUID with last byte 0 → phoneme; 1 → spatial; 2 → silent.
         let lastByteZero = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0,
                                        0, 0, 0, 0, 0, 0, 0, 0))
         #expect(PilotAudioCondition.assign(participantId: lastByteZero) == .phoneme)
         let lastByteOne = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0,
                                       0, 0, 0, 0, 0, 0, 0, 1))
-        #expect(PilotAudioCondition.assign(participantId: lastByteOne) == .arbitrarySound)
+        #expect(PilotAudioCondition.assign(participantId: lastByteOne) == .spatial)
         let lastByteTwo = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0,
                                       0, 0, 0, 0, 0, 0, 0, 2))
         #expect(PilotAudioCondition.assign(participantId: lastByteTwo) == .silent)

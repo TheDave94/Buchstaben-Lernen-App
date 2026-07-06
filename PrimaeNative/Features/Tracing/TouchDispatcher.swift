@@ -301,6 +301,16 @@ final class TouchDispatcher {
         let hBias = Float(max(-1.0, min(1.0, (canvasNormalized.x * 2.0 - 1.0) + azimuthBias)))
         vm.audio.setAdaptivePlayback(speed: speed, horizontalBias: hBias)
 
+        // Spatial arm only: pen Y additionally drives the carrier pitch
+        // (220–880 Hz linear-in-cents, top = high — SpatialSonification).
+        // The phoneme arm never reaches this, so its pitch stays at the
+        // engine default 0 — the arms are matched on rate + pan and
+        // differ in pitch-drive + sound identity (reframed §2.6).
+        if vm.audioCondition == .spatial {
+            vm.audio.setSpatialPitch(
+                cents: SpatialSonification.pitchCents(forNormalizedY: canvasNormalized.y))
+        }
+
         // No feedbackIntensity gate here: the letter sound is the
         // phonemic anchor for the glyph, not Schmidt & Lee guidance
         // feedback. Haptics + ticks that DO fade are gated separately.

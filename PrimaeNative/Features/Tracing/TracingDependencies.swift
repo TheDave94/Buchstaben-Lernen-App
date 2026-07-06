@@ -24,7 +24,7 @@ struct TracingDependencies {
     var onboardingStore: OnboardingStoring
     var notificationScheduler: LocalNotificationScheduler
     var thesisCondition: ThesisCondition
-    /// Pilot audio arm (phoneme / arbitrary-sound / silent). Orthogonal
+    /// Pilot audio arm (phoneme / spatial-sonification / silent). Orthogonal
     /// to `thesisCondition`; assigned at the same point. H1 carries it
     /// onto every recorded session — per-arm audio playback routing is H2.
     var audioCondition: PilotAudioCondition

@@ -6,10 +6,14 @@
 // recognition predictions, condition assignments, scheduler proxy.
 
 import SwiftUI
+import AVFoundation
 
 struct ResearchDashboardView: View {
     @Environment(TracingViewModel.self) private var vm
     @State private var showClearCalibrationConfirm = false
+    /// Live headphone-route check for the spatial arm (read-only session
+    /// query — never touches AudioEngine). Refreshed on route changes.
+    @State private var headphonesConnected = ResearchDashboardView.headphoneRouteActive()
     /// New-participant flow: export-then-wipe. The share URL drives the
     /// export sheet; on its dismiss the destructive wipe confirm appears.
     @State private var newParticipantShareURL: URL?
@@ -21,6 +25,12 @@ struct ResearchDashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 participantHeader
+                // Spatial-arm validity guard: stereo pan is void on the
+                // iPad speakers, so a speaker-run spatial session is
+                // invalid data. Researcher-facing only (parent-gated).
+                if vm.audioCondition == .spatial && !headphonesConnected {
+                    headphoneWarning
+                }
                 schreibmotorikSection
                 recognitionSection
                 conditionSection
@@ -34,6 +44,37 @@ struct ResearchDashboardView: View {
             .padding(.vertical, 24)
         }
         .navigationTitle("Forschungs-Daten")
+        .onReceive(NotificationCenter.default
+            .publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: RunLoop.main)) { _ in
+            headphonesConnected = Self.headphoneRouteActive()
+        }
+    }
+
+    // MARK: - Headphone route (spatial arm)
+
+    /// Whether the active output route is headphone-class (wired,
+    /// Bluetooth, USB). The spatial arm's stereo-pan axis requires it.
+    private static func headphoneRouteActive() -> Bool {
+        let headphonePorts: Set<AVAudioSession.Port> = [
+            .headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .usbAudio
+        ]
+        return AVAudioSession.sharedInstance().currentRoute.outputs
+            .contains { headphonePorts.contains($0.portType) }
+    }
+
+    private var headphoneWarning: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Keine Kopfhörer verbunden", systemImage: "headphones.slash")
+                .font(.body(FontSize.md, weight: .semibold))
+                .foregroundStyle(.red)
+            Text("Dieses Gerät ist dem Raumklang-Arm zugeordnet. Ohne Kopfhörer ist das Stereo-Panning (horizontale Stiftposition → links/rechts) über die iPad-Lautsprecher wirkungslos — eine so durchgeführte Session ist ungültige Studien-Daten. Vor der Session Kopfhörer verbinden.")
+                .font(.caption)
+                .foregroundStyle(Color.inkSoft)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Participant header
@@ -306,6 +347,29 @@ struct ResearchDashboardView: View {
                         Text(conditionLabel(condition))
                         Spacer()
                         Text("\(counts[condition] ?? 0) Sessions")
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(Color.inkSoft)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground),
+                                in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+
+            // Audio axis (the pilot's primary between-subjects factor) —
+            // counted separately; the two axes are orthogonal.
+            sectionHeader(title: "Audio-Arm",
+                          subtitle: "Verteilung über alle Phasen-Sessions")
+            let audioCounts = Dictionary(grouping: vm.dashboardSnapshot.phaseSessionRecords,
+                                          by: { $0.audioCondition })
+                .mapValues(\.count)
+            VStack(spacing: 6) {
+                ForEach(PilotAudioCondition.allCases, id: \.self) { arm in
+                    HStack {
+                        Text("\(arm.displayName) (\(arm.rawValue))")
+                        Spacer()
+                        Text("\(audioCounts[arm] ?? 0) Sessions")
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(Color.inkSoft)
                     }

@@ -6,7 +6,7 @@
 // Orthogonal to `ThesisCondition` (the pedagogical-flow axis): this enum
 // is the AUDIO axis. Per pilot decision D1 the pedagogical flow is held
 // constant and only the audio varies across arms (phoneme /
-// arbitrary-sound / silent). It is modelled as a SEPARATE axis so a
+// spatial-sonification / silent). It is modelled as a SEPARATE axis so a
 // future crossed (pedagogical × audio) design isn't precluded.
 //
 // H1 scope: assignment + persistence + export only. Per-arm playback
@@ -38,12 +38,14 @@ enum PilotAudioCondition: String, Codable, CaseIterable, Sendable {
     /// meaningful sonification.
     case phoneme
 
-    /// Engagement-matched, coupling-matched non-phonemic control sound.
-    /// Named by its ROLE, not its content: what the sound actually is
-    /// remains open (pilot decision D2). Whatever it becomes, it runs the
-    /// identical coupling path as `phoneme` so the only difference is
-    /// phonemic content (the §2.6 matching discipline).
-    case arbitrarySound
+    /// Spatial 2D sonification: a neutral looped carrier tone whose PITCH
+    /// tracks the pen's vertical canvas position (top = 880 Hz, bottom =
+    /// 220 Hz, linear-in-cents — see `SpatialSonification`) while stereo
+    /// pan tracks the horizontal position, same as the phoneme arm.
+    /// Headphone delivery. Supersedes the former `arbitrarySound`
+    /// (engagement-matched control) arm — decision superseding D2; the
+    /// arms are matched on pan and differ in pitch-drive + sound identity.
+    case spatial
 
     /// No audio at all — the silent control arm.
     case silent
@@ -53,9 +55,9 @@ enum PilotAudioCondition: String, Codable, CaseIterable, Sendable {
     /// this string, so wording can change without touching the data.
     var displayName: String {
         switch self {
-        case .phoneme:        return "Phonem"
-        case .arbitrarySound: return "Kontrollklang"
-        case .silent:         return "Ohne Ton"
+        case .phoneme: return "Phonem"
+        case .spatial: return "Raumklang"
+        case .silent:  return "Ohne Ton"
         }
     }
 
@@ -91,7 +93,7 @@ enum PilotAudioCondition: String, Codable, CaseIterable, Sendable {
         let byte = participantId.uuid.15
         switch Int(byte) % PilotAudioCondition.allCases.count {
         case 0:  return .phoneme
-        case 1:  return .arbitrarySound
+        case 1:  return .spatial
         default: return .silent
         }
     }

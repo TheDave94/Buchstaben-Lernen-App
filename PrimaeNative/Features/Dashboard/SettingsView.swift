@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var selectedOrdering: LetterOrderingStrategy = .motorSimilarity
     @State private var thesisEnrolled: Bool = ParticipantStore.isEnrolled
     @State private var conditionOverride: ThesisCondition? = ParticipantStore.conditionOverride
+    @State private var audioConditionOverride: PilotAudioCondition? = ParticipantStore.audioConditionOverride
     @State private var speechRate: Float = {
         let stored = UserDefaults.standard.float(forKey: "de.flamingistan.primae.speechRate")
         return stored > 0 ? stored : 0.42
@@ -153,6 +154,23 @@ struct SettingsView: View {
                         }
                     }
                     .accessibilityHint("Nur für Studienleitung. Ordnet das Gerät einer bestimmten Studienbedingung zu, anstatt die automatische Zuweisung zu verwenden — für ausgewogene Stichproben.")
+
+                    // Same researcher-override pattern for the AUDIO axis
+                    // (phoneme / spatial / silent) — the two axes are
+                    // independent (`ParticipantStore` keeps separate keys).
+                    Picker("Audio-Arm überschreiben",
+                           selection: Binding(
+                            get: { audioConditionOverride },
+                            set: {
+                                audioConditionOverride = $0
+                                ParticipantStore.audioConditionOverride = $0
+                            })) {
+                        Text("Automatisch").tag(PilotAudioCondition?.none)
+                        ForEach(PilotAudioCondition.allCases, id: \.self) { arm in
+                            Text(arm.displayName).tag(PilotAudioCondition?.some(arm))
+                        }
+                    }
+                    .accessibilityHint("Nur für Studienleitung. Ordnet das Gerät einem bestimmten Audio-Arm zu (Phonem, Raumklang oder Ohne Ton), anstatt die automatische Zuweisung zu verwenden. Änderung wird beim nächsten App-Start wirksam.")
                 }
             }
             Section("Werkzeuge") {
@@ -195,6 +213,7 @@ struct SettingsView: View {
             selectedOrdering = vm.letterOrdering
             thesisEnrolled = ParticipantStore.isEnrolled
             conditionOverride = ParticipantStore.conditionOverride
+            audioConditionOverride = ParticipantStore.audioConditionOverride
             let storedRate = UserDefaults.standard.float(forKey: Self.speechRateKey)
             speechRate = storedRate > 0 ? storedRate : 0.42
             vm.speech.setRate(speechRate)

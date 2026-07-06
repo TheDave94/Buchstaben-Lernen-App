@@ -3,7 +3,8 @@ import SwiftUI
 struct LetterPickerBar: View {
     @Environment(TracingViewModel.self) private var vm
 
-    private let demoLetters: Set<String> = ["A", "F", "I", "K", "L", "M", "O"]
+    /// Mirror of `TracingViewModel.studyBaseLetters` — keep in sync.
+    private let demoLetters: Set<String> = ["A", "F", "I", "L", "M"]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {

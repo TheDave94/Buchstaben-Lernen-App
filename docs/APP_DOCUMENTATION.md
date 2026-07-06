@@ -2223,6 +2223,7 @@ One row per phase × letter session, chronological order. Filtered by `enrolledA
 | `pressureControl` | `PhaseSessionRecord.pressureControl` | dim 3 (force variance, weight 0.15). |
 | `rhythmScore` | `PhaseSessionRecord.rhythmScore` | dim 4 (active-time ratio, weight 0.20). |
 | `inputDevice` | `PhaseSessionRecord.inputDevice` | D-6: disambiguates `pressureControl == 1.0`. |
+| `audioCondition` | `PhaseSessionRecord.audioCondition` | Pilot audio arm: `phoneme` / `spatial` / `silent`. Appended as the LAST column (after `inputDevice`) so pre-pilot CSV parsers stay positionally compatible. |
 
 ## Section 4 — Aggregate metrics (`metric,value`)
 
@@ -2230,11 +2231,14 @@ One row per phase × letter session, chronological order. Filtered by `enrolledA
 - `averageFreeWriteScore` (cross-arm).
 - `schedulerEffectivenessProxy` (cross-arm Pearson r — interpret with caution; `.control` priorities don't share scale with the other arms).
 - Per-arm: `averageFreeWriteScore_<arm>`, `schedulerEffectivenessProxy_<arm>` (D-7 / D-10).
+- Per-AUDIO-arm: `averageFreeWriteScore_audio_<audioArm>` — the pilot's primary between-subjects IV, stratified alongside (not instead of) the pedagogical axis.
 - Schreibmotorik dimension means: `averageFormAccuracy`, `averageTempoConsistency`, `averagePressureControl`, `averageRhythmScore` (when ≥ 1 freeWrite session has dimensions).
 
 ## Section 5 — Per-arm letter aggregates (D-5)
 
 `letterByArm,<letter>,<arm>,<sampleCount>,<averageScore>` — derived from `phaseSessionRecords` so between-arm letter-level analyses have a clean source.
+
+Audio-axis twin: `letterByAudioArm,<letter>,<audioArm>,<sampleCount>,<averageScore>` (own sub-header row), same derivation keyed on `audioCondition`.
 
 ## JSON export
 

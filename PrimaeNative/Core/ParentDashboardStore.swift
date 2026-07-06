@@ -16,8 +16,8 @@ struct PhaseSessionRecord: Codable, Equatable {
     /// `.threePhase`.
     let condition: ThesisCondition
     /// Pilot audio arm in effect for this session (phoneme /
-    /// arbitrary-sound / silent). Orthogonal to `condition`. Added for
-    /// the pilot; custom decoder defaults pre-migration records to
+    /// spatial-sonification / silent). Orthogonal to `condition`. Added
+    /// for the pilot; custom decoder defaults pre-migration records to
     /// `.phoneme`.
     let audioCondition: PilotAudioCondition
     /// Wall-clock timestamp when this row was recorded. Drives dated
@@ -88,7 +88,10 @@ struct PhaseSessionRecord: Codable, Equatable {
         // arbitrary, never silent), so it's the honest historical match.
         // Such legacy rows are pre-enrolment and the exporter filters them
         // from arm attribution anyway, so this default can't inflate a
-        // pilot arm's counts.
+        // pilot arm's counts. Rows written under the short-lived
+        // `arbitrarySound` raw value (pre-`.spatial` rename; test devices
+        // only — no study ran) fail the enum decode and take the same
+        // `.phoneme` fallback.
         audioCondition = (try? c.decode(PilotAudioCondition.self, forKey: .audioCondition)) ?? .phoneme
         recordedAt = try? c.decode(Date.self, forKey: .recordedAt)
         formAccuracy     = try? c.decode(Double.self, forKey: .formAccuracy)

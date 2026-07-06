@@ -12,12 +12,10 @@ struct LetterAsset: Identifiable, Equatable {
     /// enables "Lautwert wiedergeben"; falls back to `audioFiles` when
     /// empty. Filename convention `<base>_phoneme<n>.mp3`.
     let phonemeAudioFiles: [String]
-    /// Engagement-matched, coupling-matched non-phonemic control sounds
-    /// for the pilot's arbitrary-sound arm (`PilotAudioCondition`). Empty
-    /// until H4/D2 designs and sources them; `.arbitrarySound` routes
-    /// here. Plays through the identical adaptive-playback coupling as
-    /// phoneme/name audio — only the file list differs (§2.6 matching).
-    let arbitraryAudioFiles: [String]
+    // NOTE: the former `arbitraryAudioFiles` slot (pilot arbitrary-sound
+    // arm, H4/D2) was removed when that arm became `.spatial`: the
+    // spatial arm plays one shared, letter-independent carrier tone
+    // (`SpatialSonification.carrierToneFile`), so no per-letter slot.
     let strokes: LetterStrokes
     /// Variant IDs for which a strokes_{id}.json exists alongside
     /// strokes.json (e.g. Austrian Schulschrift 1995).
@@ -30,15 +28,13 @@ struct LetterAsset: Identifiable, Equatable {
     /// Convenience init preserving backward compatibility (defaults to .upper, no variants).
     init(id: String, name: String,
          audioFiles: [String], strokes: LetterStrokes,
-         phonemeAudioFiles: [String] = [],
-         arbitraryAudioFiles: [String] = []) {
+         phonemeAudioFiles: [String] = []) {
         self.id = id
         self.name = name
         self.baseLetter = name.uppercased()
         self.letterCase = .upper
         self.audioFiles = audioFiles
         self.phonemeAudioFiles = phonemeAudioFiles
-        self.arbitraryAudioFiles = arbitraryAudioFiles
         self.strokes = strokes
         self.variants = nil
     }
@@ -48,15 +44,13 @@ struct LetterAsset: Identifiable, Equatable {
          letterCase: LetterCase,
          audioFiles: [String], strokes: LetterStrokes,
          variants: [String]? = nil,
-         phonemeAudioFiles: [String] = [],
-         arbitraryAudioFiles: [String] = []) {
+         phonemeAudioFiles: [String] = []) {
         self.id = id
         self.name = name
         self.baseLetter = baseLetter
         self.letterCase = letterCase
         self.audioFiles = audioFiles
         self.phonemeAudioFiles = phonemeAudioFiles
-        self.arbitraryAudioFiles = arbitraryAudioFiles
         self.strokes = strokes
         self.variants = variants
     }

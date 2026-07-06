@@ -827,12 +827,14 @@ public final class TracingViewModel {
         switch audioCondition {
         case .silent:
             return []
-        case .arbitrarySound:
-            // Placeholder slot — empty until H4/D2 sources the
-            // engagement-matched control sounds. No fallback to name
-            // audio: that would leak letter-name content into the
-            // non-phonemic arm and confound the contrast.
-            return asset.arbitraryAudioFiles
+        case .spatial:
+            // One shared, letter-independent carrier tone: the arm's
+            // information channel is pen position (Y→pitch, X→pan), not
+            // sound identity. No fallback to name audio: that would leak
+            // letter-name content into the non-phonemic arm and confound
+            // the contrast. `studyMode` is irrelevant here — the carrier
+            // is bundled, so there is nothing to force or degrade to.
+            return [SpatialSonification.carrierToneFile]
         case .phoneme:
             // H2.1 — study devices force phoneme content. A phoneme-arm
             // participant must hear the phoneme, never the letter name,
@@ -1339,14 +1341,27 @@ public final class TracingViewModel {
         }
     }
 
-    /// 7 demo letters for thesis scope.
-    private let demoBaseLetters: Set<String> = ["A", "F", "I", "K", "L", "M", "O"]
+    /// The 5-letter pilot stimulus set (uppercase-only in study
+    /// sessions). Duplicated in `LetterPickerBar.demoLetters` — keep in
+    /// sync. Anlaut phonemes /a/ /ɪ/ /m/ /f/ /l/ are all vowels or
+    /// continuants, so every study letter is loopable (moots D6).
+    private let studyBaseLetters: Set<String> = ["A", "F", "I", "L", "M"]
 
-    /// Visible letters per `showAllLetters`, sorted by `letterOrdering`.
+    /// Visible letters, sorted by `letterOrdering`. `studyMode` pins the
+    /// pool to the 5-letter UPPERCASE pilot stimulus set regardless of
+    /// `showAllLetters`; outside study sessions the app stays
+    /// full-alphabet (`showAllLetters` defaults true and is not flipped).
     var visibleLetterNames: [String] {
-        let pool = showAllLetters
-            ? letters.map(\.name)
-            : letters.filter { demoBaseLetters.contains($0.baseLetter) }.map(\.name)
+        let pool: [String]
+        if studyMode {
+            pool = letters
+                .filter { studyBaseLetters.contains($0.baseLetter) && $0.letterCase == .upper }
+                .map(\.name)
+        } else if showAllLetters {
+            pool = letters.map(\.name)
+        } else {
+            pool = letters.filter { studyBaseLetters.contains($0.baseLetter) }.map(\.name)
+        }
         let order = letterOrdering.orderedLetters()
         let rankMap = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
         return pool.sorted { a, b in
