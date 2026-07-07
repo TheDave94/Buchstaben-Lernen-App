@@ -12,6 +12,21 @@
                 <string>CA92.1</string>
             </array>
         </dict>
+        <dict>
+            <!--
+                File-timestamp APIs via FileManager: app-container writes
+                to Application Support (ProgressStore, CalibrationStore,
+                ParentDashboardStore, RawTraceStore) and Documents
+                (CalibrationSessionLogger). C617.1 = timestamps of files
+                inside the app's own container only.
+            -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
     </array>
     <key>NSPrivacyCollectedDataTypes</key>
     <array/>

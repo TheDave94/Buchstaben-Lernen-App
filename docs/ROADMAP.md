@@ -219,7 +219,7 @@ These are worthwhile additions once the thesis ships. None of them is a thesis-b
 ### F1 — App Store readiness pass
 **Effort:** L · **Priority:** P1 (post-thesis)
 
-Privacy Manifest (`PrivacyInfo.xcprivacy`) declaring `UserDefaults`, `Application Support` writes, on-device CoreML usage. App icon set at every required size. iPad screenshots (5–7 stills covering Schule / Werkstatt / Fortschritte / Eltern-Dashboard). Marketing copy in German + English. App Store Connect "Privacy Practices" section: "Daten werden auf dem Gerät gespeichert; keine Übertragung." TestFlight build with crash-reporting opt-in.
+Privacy Manifest shipped 2026-07-07 (`UserDefaults` CA92.1 + file-timestamp C617.1 for the container writes; CoreML has no required-reason category, so nothing to declare there). `ITSAppUsesNonExemptEncryption=NO` shipped the same day. Remaining: app icon set at every required size. iPad screenshots (5–7 stills covering Schule / Werkstatt / Fortschritte / Eltern-Dashboard). Marketing copy in German + English. App Store Connect "Privacy Practices" section: "Daten werden auf dem Gerät gespeichert; keine Übertragung." TestFlight build with crash-reporting opt-in.
 
 ### F2 — Lowercase letters + diacritics complete
 **Effort:** XL (subsumes T1's full-alphabet scope) · **Priority:** P1 (post-thesis if T1 ships demo set only)
@@ -266,6 +266,14 @@ Architecture is German-only by design (curriculum-specific). For German-speaking
 
 For motor-impaired children, expose the direct-phase dot tap as a Switch Control target and render a parallel "Switch Control hint" overlay that highlights the next-expected dot in high contrast.
 
+### F11 — iOS 27 SDK move
+**Effort:** S–M · **Priority:** P1 (post-pilot; hard deadline if the App Store mandates the iOS 27 SDK, projected ~April 2027 — unconfirmed as of 2026-07-07)
+
+Per the 2026-07-07 readiness audit the app already satisfies both mandatory iOS 27 migrations (never used `UIDesignRequiresCompatibility`; pure SwiftUI App lifecycle), uses none of the reported deprecations (`UIScreen.main`, SceneKit), and no AVAudioSession / AVSpeechSynthesizer deprecations surfaced — `AudioEngine.swift` is unthreatened. The move is therefore a toolchain bump, gated on:
+- **Xcode 27 stability** — early betas crash the compiler; there is a known inliner crash with exactly our configuration, `-default-isolation MainActor` + `-O` (swiftlang/swift#88173). **Verify a Release build, not just Debug CI, before adopting.**
+- **CI availability** — no `macos-27` hosted runner and no Xcode 27 on the `macos-26` image yet.
+- Optional modernization to fold in: Icon Composer layered `.icon` (current icon is the classic PNG light/dark/tinted set — still works) and a String Catalog if F9 localization happens.
+
 ---
 
 ## Recommended ordering for the next sprint
@@ -275,7 +283,7 @@ The at-a-glance table at the top of this file is the authoritative version. Repe
 1. **P6 phoneme recordings** — studio recording (human voice) per `docs/SOUND_PRODUCTION_SPEC.md` + drop-into-bundle; no device needed.
 2. **U5 + U10 device validation** — single iPad session: 30 minutes for the Pencil 2 squeeze check, 2–3 hours for the VoiceOver walkthrough. Get these out of the way before a thesis reviewer ever opens the app.
 
-**D8 canvas redraw profile** is post-thesis polish — schedule once there's classroom-data evidence of a need (or an Instruments hint of a problem). **F1–F10** are post-thesis full features.
+**D8 canvas redraw profile** is post-thesis polish — schedule once there's classroom-data evidence of a need (or an Instruments hint of a problem). **F1–F11** are post-thesis full features.
 
 ---
 
