@@ -1,6 +1,6 @@
 # CLAUDE.md — Primae (Letter Learning App)
 
-> Brand: **Primae** (formerly "Buchstaben-Lernen-App"). Everything carries the new name: the GitHub repo (`TheDave94/Primae`), Xcode project, scheme, host app, host folder (`Primae/`), Swift Package target (`PrimaeNative`), test target (`PrimaeNativeTests`), bundle identifier (`de.flamingistan.primae`), and the SPM relative path (`../../Primae`). Pre-rebrand UserDefaults keys (`de.flamingistan.buchstaben.*`) moved to `de.flamingistan.primae.*` — the app is in alpha so existing test-device state is intentionally reset. The local working-tree directory is still `Buchstaben-Lernen-App` on this machine (the SPM ref expects `Primae`, so a fresh `git clone https://github.com/TheDave94/Primae.git` is the cleanest way to land in the right path).
+> Brand: **Primae** (formerly "Buchstaben-Lernen-App"). Everything carries the new name: the GitHub repo (`TheDave94/Primae`), Xcode project, scheme, host app, host folder (`Primae/`), Swift Package target (`PrimaeNative`), test target (`PrimaeNativeTests`), bundle identifier (`de.flamingistan.primae`), and the SPM relative path (`../../Primae`). Pre-rebrand UserDefaults keys (`de.flamingistan.buchstaben.*`) moved to `de.flamingistan.primae.*` — the app is in alpha so existing test-device state is intentionally reset. The local working tree is `/opt/repos/Primae`, matching the SPM relative path.
 
 ## Project Overview
 iPad app for teaching German children (ages 5-6) to trace letters. Built with SwiftUI, Swift 6.3, targeting iOS 26+ (the SPM manifest targets iOS 26.0). Academic thesis project.
@@ -29,7 +29,7 @@ This is a thesis project: David is the primary author, Claude Code is reviewer +
 
 ## Two-repo working setup
 
-This Primae code repo (`/opt/repos/Buchstaben-Lernen-App`) has a sibling thesis repo at `/opt/repos/primae-thesis` (https://github.com/TheDave94/master-thesis). Each repo has a different working mode — do not mix them.
+This Primae code repo (`/opt/repos/Primae`) has a sibling thesis repo at `/opt/repos/master-thesis` (remote on Forgejo: https://git.flamingistan.com/David/master-thesis — NOT GitHub). Each repo has a different working mode — do not mix them.
 
 **Primae (this repo): spec-then-execute mode.** Claude Code commits autonomously within agreed scope. Standard workflow as described in the Bounded autonomy section above.
 
@@ -51,18 +51,18 @@ David's stated thesis-AI workflow: baseline drafting + reference legwork + final
 
 ## Session boundaries — code work vs thesis prose
 
-This repo and `primae-thesis` share working sessions today, and that's the primary context-pressure source — recent sessions have pegged the 1M-token ceiling and `/compact`ed 13–19 times. Split deliberately:
+This repo and `master-thesis` share working sessions today, and that's the primary context-pressure source — recent sessions have pegged the 1M-token ceiling and `/compact`ed 13–19 times. Split deliberately:
 
 - **One axis per session.** A session is either Swift code work (feature impl, sweep cycles, baking, CI watching) **or** thesis prose work (drafting `content/*.typ`, citation hunting, bibliography curation). Not both in one session. The two-repo working setup is also a two-session setup.
 - **Phase / milestone = session boundary.** When a sweep cycle, a feature, or a chapter section wraps, summarise the outcome into `~/.claude/projects/-opt-repos-Primae/memory/project_primae.md` and start a fresh session for the next phase.
-- **For thesis-only sessions, start CC from `/opt/repos/primae-thesis`** rather than this tree. CC creates a separate project workspace and memory namespace there; you get a clean context budget per side.
+- **For thesis-only sessions, start CC from `/opt/repos/master-thesis`** rather than this tree. CC creates a separate project workspace and memory namespace there; you get a clean context budget per side.
 
 User-level `~/.claude/CLAUDE.md` has the general output discipline (Bash caps, ranged Reads, test-output verbatim) — it applies here.
 
 ## Architecture
 - **Main target**: Uses `.defaultIsolation(MainActor.self)` — all types are implicitly @MainActor
 - **Test target**: Uses `.swiftLanguageMode(.v5)` — do NOT change this
-- **CI**: GitHub Actions on macos-26 runner with Xcode 26.4, self-hosted MacBook
+- **CI**: GitHub Actions on hosted macos-26 runners with Xcode 26.4 (simulator matrix: iPad Pro 13-inch (M5) + iPad (A16))
 - **Learning phases**: observe → direct → guided → freeWrite (managed by PhaseController)
 - **Stroke data**: JSON files in `Resources/Letters/{letter}/strokes.json` with normalized coordinates
 - **Audio**: Proximity-triggered playback via AudioEngine + StrokeTracker
@@ -107,8 +107,11 @@ xcodebuild test -project Primae.xcodeproj -scheme Primae \
 ## Test Infrastructure
 
 > **Note:** `xcodebuild` is NOT available on claudebox (Linux). Only Swift syntax
-> checking works locally. Full build/test runs on the self-hosted MacBook CI runner
-> via GitHub Actions. Always verify CI passes after pushing.
+> checking works locally. Full build/test runs on hosted macos-26 GitHub Actions
+> runners. Always verify CI passes after pushing.
+> Physical-iPad testing is a deliberate LOCAL act on the Mac: it requires
+> `-allowProvisioningUpdates` and an unlocked, connected iPad. It is NOT automated
+> and never was.
 
 1. **Swift compilation check** (claudebox Linux — basic syntax check only, SwiftUI/QuartzCore won't link):
    ```bash

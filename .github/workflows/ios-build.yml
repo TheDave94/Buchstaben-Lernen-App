@@ -53,8 +53,12 @@ jobs:
           PY
 
   xcode_test:
-    name: "Build & Test — iPad Simulator (macos-26 / Xcode 26)"
+    name: "Build & Test — ${{ matrix.simulator }} (macos-26 / Xcode 26)"
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        simulator: ["iPad Pro 13-inch (M5)", "iPad (A16)"]
     # D9 (ROADMAP_V5): hard cap on the simulator job so a hung
     # xcodebuild can't sit at "in_progress" until GitHub's 6-hour
     # default kills it. Typical completion is 4–7 minutes; 20 is
@@ -86,10 +90,11 @@ jobs:
           xcodebuild test \
             -project Primae/Primae.xcodeproj \
             -scheme Primae \
-            -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=latest' \
+            -destination 'platform=iOS Simulator,name=${{ matrix.simulator }},OS=latest' \
             -configuration Debug \
             -enableCodeCoverage NO \
             CODE_SIGNING_ALLOWED=NO \
+            ENABLE_DEBUG_DYLIB=NO \
             -resultBundlePath /tmp/TestResults.xcresult \
             2>&1 | tee /tmp/xcode-test.log
 
@@ -110,40 +115,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: xcode-test-results
+          name: xcode-test-results-${{ strategy.job-index }}
           if-no-files-found: warn
           path: |
             /tmp/xcode-test.log
             /tmp/TestResults.xcresult
-
-  device_test:
-    name: "Device Test (MacBook self-hosted)"
-    runs-on: self-hosted
-    needs: xcode_test
-    # D9 (ROADMAP_V5): hard cap on the self-hosted device test. Has
-    # occasionally sat at "in_progress" for 30+ minutes when the
-    # MacBook is loaded; 25 minutes is comfortable headroom over the
-    # typical 10–15 minute completion.
-    timeout-minutes: 25
-    steps:
-      - name: Clean runner diagnostics
-        run: rm -f ~/actions-runner/_diag/pages/*.log ~/actions-runner/_diag/*.log || true
-      - uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: List available iPad simulators
-        run: xcrun simctl list devices available | grep -i ipad
-      - name: Build & Test (local simulator)
-        run: |
-          set -o pipefail
-          xcodebuild test \
-            -project Primae/Primae.xcodeproj \
-            -scheme Primae \
-            -destination 'platform=iOS Simulator,name=iPad (A16)' \
-            -configuration Debug \
-            -enableCodeCoverage NO \
-            -derivedDataPath /Users/musicbox/DerivedData-CI \
-            CODE_SIGNING_ALLOWED=NO \
-            ENABLE_DEBUG_DYLIB=NO \
-            2>&1 | tee /tmp/test-device.log
 
