@@ -171,6 +171,7 @@ python3 scripts/generate_letter_audio.py …
 - Do NOT modify the strokes.json coordinate format
 - Do NOT modify `StrokeTracker.swift` unless the task explicitly targets it
 - Do NOT use `UIColor(dynamicProvider:)` for design tokens — under Swift 6 default isolation the closure inherits MainActor and traps when SwiftUI samples it from `com.apple.SwiftUI.AsyncRenderer`. Design tokens go through Asset-Catalog colorsets (see `Primae/Primae/Assets.xcassets/Colors/` + `scripts/gen_colorsets.py`), which iOS resolves per trait collection without invoking any Swift code.
+- Do NOT register an Xcode MCP bridge while the study configuration is frozen — see ROADMAP F12 for the reasoning and the conditions for revisiting it post-pilot.
 
 ## Conventions
 - All new views go in `Features/Tracing/` unless they're core infrastructure
@@ -180,6 +181,7 @@ python3 scripts/generate_letter_audio.py …
 - German UI text (the app is for German-speaking children)
 - Child-facing screens (Schule / Werkstatt / Fortschritte / Onboarding / overlays during practice) must work via icons + animation + TTS, not text — the target audience is 5–6 yr-old Volksschule 1. Klasse children who can't or barely read. Text is fine for parent-area screens (Settings, ParentDashboard, ResearchDashboard, Datenexport).
 - Design tokens: read from `PrimaeNative/Theme/{Colors, Spacing, Radii, Fonts}.swift`. Color values are auto-flipping light/dark via `Color("name")` (Asset-Catalog colorsets); fonts via `Font.display(_:weight:)` / `Font.body(_:weight:)` / `Font.cursive(_:)`. The picker for the appearance override lives in the parent area as "Erscheinungsbild" (System / Hell / Dunkel).
+- Run `git config core.quotePath false` in every fresh clone. 35 of the ~500 tracked paths carry umlauts (`PrimaeNative/Resources/Letters/F/Föhn.mp3`, `.../Regular/Ä/strokes.json`, …); under git's default `quotePath=true` those come back octal-escaped and double-quoted (`"…/F\303\266hn.mp3"`), so any instrument that greps or diffs tracked paths silently drops exactly the letter assets that matter. This setting lives in `.git/config`, which is untracked — a fresh clone does NOT inherit it, which is why it is written down here.
 
 ## Visual sweep workflow
 

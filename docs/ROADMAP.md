@@ -274,6 +274,18 @@ Per the 2026-07-07 readiness audit the app already satisfies both mandatory iOS 
 - **CI availability** — no `macos-27` hosted runner and no Xcode 27 on the `macos-26` image yet.
 - Optional modernization to fold in: Icon Composer layered `.icon` (current icon is the classic PNG light/dark/tinted set — still works) and a String Catalog if F9 localization happens.
 
+### F12 — Xcode MCP bridge *(declined 2026-08-15; revisit post-pilot)*
+**Effort:** S to adopt · **Priority:** P3 (post-pilot only)
+
+An Xcode MCP bridge would let a session drive builds / tests / simulators directly instead of shelling out to `xcodebuild`. **Declined for now**, and the reason is structural rather than a matter of taste: this project exposes **two build surfaces** — the SPM package (`Package.swift` → `PrimaeNative`, where `PrimaeNativeTests` actually lives) and `Primae/Primae.xcodeproj` (three schemes) — and a bridge binds to one workspace at a time. A bridge pointed at the wrong surface reports green for a target nobody meant to validate, and that failure is silent: a green is a green. Not an acceptable risk while the study configuration is frozen and heading into device validation, where a false green propagates straight into the pilot.
+
+Conditions for revisiting, after the pilot has run:
+- The bridge can be pinned explicitly to a named workspace **and** scheme, and that pin is checked in — not inferred per session.
+- It reports which surface it built, in its output, on every invocation.
+- The `xcodebuild` invocations in this file and CLAUDE.md remain the documented fallback, so a bridge failure degrades to the known-good path.
+
+**If adopted, it must be declared in a tracked `.mcp.json` at the repo root — never in `~/.claude.json`.** A user-level registration is invisible to the repo, unreviewable in a diff, and would not travel with a fresh clone: two sessions on the same commit could then be validating different targets with no record of the difference.
+
 ---
 
 ## Recommended ordering for the next sprint
