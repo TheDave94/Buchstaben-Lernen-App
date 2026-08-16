@@ -1023,6 +1023,110 @@ discrete variant which is sufficient for digitised polylines. The
 flat-array vs 2D array choice is a cache-locality optimisation that
 doesn't change the algorithm's behaviour.
 
+#### 4.12.1 `frechetDistance` — the study's primary accuracy outcome
+
+The exported `frechetDistance` column is the **raw** discrete-Fréchet
+distance for one freeWrite trial. It is the same number
+`formAccuracy` is derived from, recorded before that derivation
+throws information away. State it in the thesis exactly as follows.
+
+**What is compared.**
+
+| | Source | Coordinate frame |
+|---|---|---|
+| Trace | Every freeWrite touch sample accepted by `TouchDispatcher.updateTouch` (canvas-space, in temporal order) | Mapped to the reference's frame by `(p − frame.origin) / frame.size`, where `frame` is the active cell's frame, or the whole canvas when there is a single cell |
+| Reference | `LetterStrokes.strokes[*].checkpoints`, concatenated across strokes in definition order into **one** polyline (`referencePolyline`) | Already normalised 0–1 as stored in `strokes.json` |
+
+Both therefore live in the same normalised **0–1 letter box**, and the
+distance is reported in those units — not points, not pixels, and not
+device-dependent.
+
+**Resampling.** Both polylines are resampled by `FreeWriteScorer.resample`
+to the *same* count of arc-length-equidistant points,
+`targetCount = max(total reference checkpoint count, 20)`. This is what
+makes a 400-sample trace comparable to a 40-checkpoint reference: the
+discrete Fréchet distance is sensitive to point density, so an
+unresampled comparison would confound writing speed with shape error.
+The first and last points of each polyline are preserved exactly; the
+interior points are linearly interpolated along the original segments.
+
+**Granularity: whole letter, not per stroke.** One distance per
+freeWrite trial. The reference is concatenated across pen-lifts, so
+each lift gap is bridged by a phantom segment; this was investigated
+and found Fréchet-safe (≤1.4 % effect on real letters, always toward
+*higher* scores) because the coupling matches the trace's own gap
+bridge to the reference's at the same arc-length fraction — see the
+cross-pen-lift note on `FreeWriteScorer.formAccuracy`. Word / multi-cell
+sessions record the **mean** of the per-cell whole-letter distances,
+which is legitimate because each cell's trace is normalised into its
+own cell-local box; the pilot practises single letters and never
+reaches that path.
+
+**What the measure is and is not invariant to.**
+* **Not** translation- or scale-invariant beyond the cell-frame
+  mapping. A correctly-shaped letter written in the wrong part of the
+  box scores worse. (The unit-bbox-normalised, order-independent
+  Hausdorff variant `formAccuracyShape` *is* — but that is the
+  Werkstatt/freeform measure, not this one.)
+* **Not** stroke-order invariant. Fréchet is a parameterised-curve
+  metric, so writing the strokes in the wrong order raises the
+  distance. This is intended: stroke order is part of what the app
+  teaches.
+* Lower is better; `0` is a perfect overlay. Unbounded above in
+  principle, bounded in practice by the box diagonal (≈ 1.41) for
+  traces that stay on the canvas.
+
+**Why raw rather than `formAccuracy`.** `formAccuracy` is
+`clamp₀₁(1 − d / (3 · checkpointRadius))`. With the shipped Druckschrift
+`checkpointRadius = 0.1` that clamp bites at `d ≥ 0.3`: every trial
+worse than that reports exactly `0` and the differences between them
+are destroyed. The raw distance has no floor and no ceiling, which is
+what a continuous outcome variable for a between-arms comparison
+requires. `formAccuracy` is retained unchanged as the child-facing and
+weighted-Schreibmotorik input.
+
+#### 4.12.2 `checkpointCoverage` — the secondary accuracy outcome
+
+`StrokeTracker.overallProgress`: reached checkpoints ÷ total
+checkpoints, in `[0, 1]`, captured at freeWrite exit.
+`resetForPhaseTransition` resets the tracker on entry to freeWrite, so
+the recorded value describes the freeWrite pass alone and not the
+guided pass before it.
+
+A checkpoint counts as reached only when the live touch point comes
+within `checkpointRadius × radiusMultiplier` of it **and** every earlier
+checkpoint in that stroke has already been reached — it is a strictly
+sequential gate, and strokes advance in definition order.
+
+It is kept as a secondary column for continuity with earlier pilot
+rounds, but it **saturates**: any trace that passes within tolerance of
+every checkpoint reports `1.0` no matter how badly it wanders between
+them. `MeasurementLayerTests.coverageSaturatesWhereFrechetDiscriminates`
+pins exactly that case — two traces, identical coverage, clearly
+different Fréchet distances. Report Fréchet as the accuracy outcome and
+coverage as a descriptive companion.
+
+#### 4.12.3 Per-letter analysis is mandatory — M is a structural outlier
+
+The five study letters are **not** structurally comparable, so time and
+accuracy must be analysed **per letter and never pooled**:
+
+| Letter | Strokes | Checkpoints (Regular) |
+|--------|---------|-----------------------|
+| A | 3 | 40 + 40 + 40 = 120 |
+| F | 3 | 40 + 40 + 40 = 120 |
+| I | 1 | 40 |
+| L | 2 | 40 + 40 = 80 |
+| **M** | **1** | **200** |
+
+M is the outlier on both axes at once: it is the only letter that packs
+200 sequential checkpoint gates into a **single** stroke, with no
+pen-lift at which the tracker re-syncs to a fresh stroke. Coverage
+therefore climbs differently for M than for any other letter, and its
+trial time is not on the same scale as a 40-checkpoint I. Pooling M with
+the rest — or comparing raw seconds across letters — is invalid. Fit
+per-letter, or include letter as a factor.
+
 ### 4.13 CoreML Letter Recognition
 
 **Description.** A 40 × 40 grayscale CNN trained to classify a stroke
@@ -1297,9 +1401,17 @@ share a row builder so they stay in lock-step.
 **CSV / TSV header row (per-phase section):**
 ```
 letter,phase,completed,score,schedulerPriority,condition,recordedAt,
-recognition_predicted,recognition_confidence,recognition_correct,
-formAccuracy,tempoConsistency,pressureControl,rhythmScore,inputDevice
+recognition_predicted,recognition_confidence,recognition_confidence_raw,
+recognition_correct,formAccuracy,tempoConsistency,pressureControl,
+rhythmScore,inputDevice,audioCondition,trainedSubset,
+phaseDurationSeconds,frechetDistance,checkpointCoverage
 ```
+
+New columns are always appended **last**, so existing consumers keep
+their column offsets. Legacy rows decode absent fields as nil and emit
+empty strings — never a defaulted `0`, which for `frechetDistance`
+would read as a perfect overlay and for `checkpointCoverage` as a blank
+page.
 
 **Column → thesis-analysis purpose:**
 | Column | Purpose |
@@ -1313,20 +1425,72 @@ formAccuracy,tempoConsistency,pressureControl,rhythmScore,inputDevice
 | `recordedAt` | ISO-8601 wall-clock timestamp (D-3). Required for time-of-day and dated learning-curve analyses. Empty on legacy pre-D-3 rows. |
 | `recognition_predicted` | Letter the CoreML model predicted for the freeWrite session. Populated on freeWrite rows since D-2 (was blank under the W-2 workaround); empty on observe / direct / guided rows. |
 | `recognition_confidence` | CoreML softmax confidence after `ConfidenceCalibrator` adjustments. Same population rule. |
+| `recognition_confidence_raw` | Pre-calibration softmax probability, so the calibrator's effect can be quantified. Same population rule. |
 | `recognition_correct` | Whether the prediction matched the expected letter. Same population rule. |
-| `formAccuracy` | Schreibmotorik Form dimension (Fréchet, weight 0.40). |
+| `formAccuracy` | Schreibmotorik Form dimension (weight 0.40) — the *clamped, rescaled* transform of `frechetDistance`. Child-facing / weighted-score input, **not** the analysis outcome (§4.12.1). |
 | `tempoConsistency` | Schreibmotorik Tempo dimension (CV², weight 0.25). |
 | `pressureControl` | Schreibmotorik Druck dimension (force variance, weight 0.15). |
 | `rhythmScore` | Schreibmotorik Rhythmus dimension (active-time ratio, weight 0.20). |
 | `inputDevice` | "finger" or "pencil" — disambiguates `pressureControl == 1.0` between a real finger session (no force data) and a low-variance pencil session (D-6). |
+| `audioCondition` | Pilot audio arm (phoneme / spatial / silent) in effect for the row — the pilot's primary between-subjects IV. |
+| `trainedSubset` | The participant's trained 3-of-5 study letters (e.g. `"AFI"`), so trained vs untrained can be partitioned per row without a join. |
+| `phaseDurationSeconds` | **Time outcome.** freeWrite measured-phase span, first sample → last sample, end-inclusive (§6.4.1). freeWrite rows only. |
+| `frechetDistance` | **Primary accuracy outcome.** Raw discrete-Fréchet distance in normalised 0–1 letter-box units; lower is better; unclamped, so it does not saturate. freeWrite rows only. Defined precisely in §4.12.1. |
+| `checkpointCoverage` | **Secondary accuracy outcome.** Fraction of reference checkpoints reached during the freeWrite pass (0–1). Saturates at ceiling — see §4.12.2. freeWrite rows only. |
+
+> **Analyse per letter.** The five study letters differ structurally
+> (M alone is one stroke of 200 checkpoints). Pooling `frechetDistance`,
+> `checkpointCoverage`, or `phaseDurationSeconds` across letters is
+> invalid — see §4.12.3.
+
+#### 6.4.1 `phaseDurationSeconds` is end-inclusive
+
+The freeWrite span runs from the **first** touch sample to the **last**
+touch sample of the measured phase (`FreeWritePhaseRecorder.measuredSpanSeconds`),
+using `CACurrentMediaTime()` deltas.
+
+It deliberately does *not* end at the final stroke's start. Every
+accepted touch sample appends a timestamp, so `timestamps.last` is the
+last instant the child was writing; ending the span at the last stroke's
+*onset* would discard that whole stroke — and for the single-stroke
+study letters I and M, that is the entire trial. `MeasurementLayerTests`
+pins both the multi-stroke and the single-stroke case.
+
+The trailing 2.0 s quiet window that auto-advances the phase
+(`TouchDispatcher.freeWriteQuietSeconds`) is excluded by construction,
+because that window only opens after the last sample. Nil when fewer
+than two distinct sample instants exist — a span needs two endpoints.
+
+#### 6.4.2 Raw traces make every measure re-derivable
+
+`RawTraceStore` persists each freeWrite trial's full trace — canvas-space
+`points`, per-point `timestamps` and `forces`, `strokeStartIndices`, and
+the `canvasSize` needed to re-normalise them — and the JSON export
+carries them alongside the derived rows, linked by
+`PhaseSessionRecord.rawTraceID`. The CSV stays derived-scalars only.
+
+This is the load-bearing property of the whole measurement layer: **any
+measure not yet thought of can be computed offline from the archive,
+without re-running a single participant.** Every scalar in the per-phase
+section — including `frechetDistance` and `phaseDurationSeconds` — is
+reproducible from the trace it links to, so a scoring bug found after
+data collection is a re-analysis, not a lost cohort.
+
+Capture order is trace-first, then the linking record, so a crash can
+leave an orphan trace but never a record pointing at a missing trace.
+The store caps at 500 traces and the new-participant reset wipes it
+between children; the pilot's ~40 children × 3 trained letters sits far
+inside that bound.
 
 Additional sections in the export:
 * Per-letter aggregates (`letter,sessionCount,averageAccuracy,trend,
   recognitionSamples,recognitionAvg,speedTrend,freeformCompletionCount`)
   — `speedTrend` is a semicolon-joined trajectory; `freeformCompletionCount`
   surfaces blank-canvas usage that was previously collected but never exported.
-* Per-day session durations (`date,recordedAt,durationSeconds,condition`) —
-  `recordedAt` is the full ISO-8601 timestamp (D-9).
+* Per-day session durations (`date,recordedAt,durationSeconds,
+  wallClockSeconds,condition,inputDevice,letter`) — `recordedAt` is the
+  full ISO-8601 timestamp (D-9); `letter` names the practised letter (or
+  word label) so per-letter time-to-complete needs no `recordedAt` join.
 * Phase-completion rates (one row per phase).
 * Aggregate `averageFreeWriteScore`, plus per-arm `averageFreeWriteScore_<arm>`
   rows (D-7).
@@ -2219,14 +2383,37 @@ One row per phase × letter session, chronological order. Filtered by `enrolledA
 | `recognition_confidence` | `PhaseSessionRecord.recognitionConfidence` | **Post**-calibration softmax. |
 | `recognition_confidence_raw` | `PhaseSessionRecord.recognitionConfidenceRaw` | T5: **pre**-calibration softmax. |
 | `recognition_correct` | `PhaseSessionRecord.recognitionCorrect` | Match expectation? |
-| `formAccuracy` | `PhaseSessionRecord.formAccuracy` | Schreibmotorik dim 1 (Fréchet, weight 0.40). |
+| `formAccuracy` | `PhaseSessionRecord.formAccuracy` | Schreibmotorik dim 1 (weight 0.40) — the clamped, rescaled transform of `frechetDistance`. Child-facing input, not the analysis outcome. |
 | `tempoConsistency` | `PhaseSessionRecord.tempoConsistency` | dim 2 (CV², weight 0.25). |
 | `pressureControl` | `PhaseSessionRecord.pressureControl` | dim 3 (force variance, weight 0.15). |
 | `rhythmScore` | `PhaseSessionRecord.rhythmScore` | dim 4 (active-time ratio, weight 0.20). |
 | `inputDevice` | `PhaseSessionRecord.inputDevice` | D-6: disambiguates `pressureControl == 1.0`. |
 | `audioCondition` | `PhaseSessionRecord.audioCondition` | Pilot audio arm: `phoneme` / `spatial` / `silent`. Appended after `inputDevice` so pre-pilot CSV parsers stay positionally compatible. |
 | `trainedSubset` | `PhaseSessionRecord.trainedSubset` | The participant's trained 3-of-5 study letters (e.g. `AIM`) — partition trained vs untrained rows. Blank for legacy records. |
-| `phaseDurationSeconds` | `PhaseSessionRecord.phaseDurationSeconds` | freeWrite rows only: measured-phase time = first-to-last raw-trace sample. Excludes the trailing 2.0 s quiet-window auto-advance (`freeWriteQuietSeconds`) by construction; that constant is identical across arms. Blank otherwise. |
+| `phaseDurationSeconds` | `PhaseSessionRecord.phaseDurationSeconds` | **Time outcome.** freeWrite rows only: measured-phase time = first sample → last sample, end-inclusive (§6.4.1). Excludes the trailing 2.0 s quiet-window auto-advance (`freeWriteQuietSeconds`) by construction; that constant is identical across arms. Blank otherwise. |
+| `frechetDistance` | `PhaseSessionRecord.frechetDistance` | **Primary accuracy outcome.** Raw discrete-Fréchet distance, normalised 0–1 letter-box units, 6 dp, lower = better, unclamped. freeWrite rows only; blank otherwise and for legacy rows. Full definition in §4.12.1. |
+| `checkpointCoverage` | `PhaseSessionRecord.checkpointCoverage` | **Secondary accuracy outcome.** Reached ÷ total reference checkpoints for the freeWrite pass (0–1, 4 dp). Saturates at ceiling — §4.12.2. freeWrite rows only; blank otherwise and for legacy rows. |
+
+> Blank ≠ 0 in this section. A `0` in `frechetDistance` means a perfect
+> overlay and a `0` in `checkpointCoverage` means no checkpoint was
+> reached; rows that never measured the quantity are empty.
+
+**Analyse per letter.** A, F, I, L, M are not structurally comparable —
+M alone is a single stroke of 200 checkpoints. Do not pool
+`frechetDistance`, `checkpointCoverage`, or `phaseDurationSeconds`
+across letters (§4.12.3).
+
+## Section 3b — Raw traces (JSON export only)
+
+The JSON archive carries a `rawTraces` array the CSV/TSV omit. Each
+entry is one freeWrite trial: `id`, `letter`, `recordedAt`, `points`
+(canvas-space), `timestamps`, `forces`, `strokeStartIndices`, and
+`canvasSize`. Join to Section 3 on `PhaseSessionRecord.rawTraceID`.
+
+Normalised coordinates are recovered losslessly as
+`points[i] / canvasSize`; the normalised path is not stored because it
+would be redundant. This archive is what makes every scalar above
+re-derivable offline — see §6.4.2.
 
 ## Section 4 — Aggregate metrics (`metric,value`)
 

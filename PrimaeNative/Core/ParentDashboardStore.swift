@@ -56,6 +56,24 @@ struct PhaseSessionRecord: Codable, Equatable {
     /// quiet-window auto-advance by construction). Nil for other phases
     /// and legacy records.
     let phaseDurationSeconds: Double?
+    /// **Primary accuracy outcome.** Raw discrete-Fréchet distance
+    /// (Eiter & Mannila 1994) between the freeWrite trace and the
+    /// reference glyph, both arc-length resampled to a common point
+    /// count, in reference-normalised 0–1 units. Lower is better; 0 is a
+    /// perfect overlay. Unbounded above and never clamped, so unlike
+    /// `formAccuracy` (a rescaled, clamped transform of the same
+    /// distance) and `checkpointCoverage` it does not saturate at
+    /// ceiling. Nil for non-freeWrite phases, legacy records, and traces
+    /// too short to compare. See APP_DOCUMENTATION §4.12.
+    let frechetDistance: Double?
+    /// **Secondary accuracy outcome.** Fraction of the reference's
+    /// checkpoints reached during the measured freeWrite phase (0–1),
+    /// from `StrokeTracker.overallProgress`. Retained alongside the
+    /// Fréchet distance because it is the measure the app's own UI and
+    /// the earlier pilot rounds used — but it is bounded and saturates
+    /// at 1.0, which is why it is not the primary. Nil for non-freeWrite
+    /// phases and legacy records.
+    let checkpointCoverage: Double?
 
     init(letter: String, phase: String, completed: Bool, score: Double,
          schedulerPriority: Double, condition: ThesisCondition = .threePhase,
@@ -66,7 +84,9 @@ struct PhaseSessionRecord: Codable, Equatable {
          inputDevice: String? = nil,
          rawTraceID: UUID? = nil,
          trainedSubset: String? = nil,
-         phaseDurationSeconds: Double? = nil) {
+         phaseDurationSeconds: Double? = nil,
+         frechetDistance: Double? = nil,
+         checkpointCoverage: Double? = nil) {
         self.letter = letter
         self.phase = phase
         self.completed = completed
@@ -87,6 +107,8 @@ struct PhaseSessionRecord: Codable, Equatable {
         self.rawTraceID              = rawTraceID
         self.trainedSubset           = trainedSubset
         self.phaseDurationSeconds    = phaseDurationSeconds
+        self.frechetDistance         = frechetDistance
+        self.checkpointCoverage      = checkpointCoverage
     }
 
     init(from decoder: Decoder) throws {
@@ -123,6 +145,10 @@ struct PhaseSessionRecord: Codable, Equatable {
         // Added with the 3-of-5 trained-subset design; nil for legacy rows.
         trainedSubset            = try? c.decode(String.self, forKey: .trainedSubset)
         phaseDurationSeconds     = try? c.decode(Double.self, forKey: .phaseDurationSeconds)
+        // Added with the measurement layer; nil for legacy rows, which
+        // is the honest value — those sessions never measured it.
+        frechetDistance          = try? c.decode(Double.self, forKey: .frechetDistance)
+        checkpointCoverage       = try? c.decode(Double.self, forKey: .checkpointCoverage)
     }
 }
 
@@ -381,7 +407,7 @@ protocol ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?)
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?)
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?, frechetDistance: Double?, checkpointCoverage: Double?)
     func reset()
     /// Await any pending background write. See ProgressStoring.flush().
     func flush() async
@@ -394,21 +420,28 @@ extension ParentDashboardStoring {
     /// participant's assigned arm explicitly.
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: nil, recognition: nil, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: nil, recognition: nil, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil, frechetDistance: nil, checkpointCoverage: nil)
     }
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: nil, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: nil, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil, frechetDistance: nil, checkpointCoverage: nil)
     }
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: nil, rawTraceID: nil, trainedSubset: nil, phaseDurationSeconds: nil, frechetDistance: nil, checkpointCoverage: nil)
     }
     /// Pre-3-of-5 full signature — forwards with no subset/duration so
     /// existing call sites and tests compile unchanged.
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?) {
         recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
-                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: inputDevice, rawTraceID: rawTraceID, trainedSubset: nil, phaseDurationSeconds: nil)
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: inputDevice, rawTraceID: rawTraceID, trainedSubset: nil, phaseDurationSeconds: nil, frechetDistance: nil, checkpointCoverage: nil)
+    }
+    /// Pre-measurement-layer full signature — forwards with no Fréchet
+    /// distance / checkpoint coverage so existing call sites and tests
+    /// compile unchanged.
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?) {
+        recordPhaseSession(letter: letter, phase: phase, completed: completed, score: score,
+                           schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: inputDevice, rawTraceID: rawTraceID, trainedSubset: trainedSubset, phaseDurationSeconds: phaseDurationSeconds, frechetDistance: nil, checkpointCoverage: nil)
     }
     /// Backward-compatible recordSession overload — new fields populate as nil.
     func recordSession(letter: String, accuracy: Double,
@@ -515,7 +548,7 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
         persist()
     }
 
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil, rawTraceID: UUID? = nil, trainedSubset: String? = nil, phaseDurationSeconds: Double? = nil) {
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition = .phoneme, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String? = nil, rawTraceID: UUID? = nil, trainedSubset: String? = nil, phaseDurationSeconds: Double? = nil, frechetDistance: Double? = nil, checkpointCoverage: Double? = nil) {
         let record = PhaseSessionRecord(
             letter: LetterProgress.canonicalKey(letter),
             phase: phase,
@@ -529,7 +562,9 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
             inputDevice: inputDevice,
             rawTraceID: rawTraceID,
             trainedSubset: trainedSubset,
-            phaseDurationSeconds: phaseDurationSeconds
+            phaseDurationSeconds: phaseDurationSeconds,
+            frechetDistance: frechetDistance,
+            checkpointCoverage: checkpointCoverage
         )
         snapshot.phaseSessionRecords.append(record)
         if snapshot.phaseSessionRecords.count > Self.phaseSessionRecordsCap {

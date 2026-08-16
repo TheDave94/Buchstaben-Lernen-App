@@ -38,14 +38,48 @@ final class FreeWritePhaseRecorder {
     private(set) var activePhaseStart: CFTimeInterval = 0
     /// Live checkpoints-per-second figure surfaced on the dashboard.
     private(set) var checkpointsPerSecond: CGFloat = 0
-    /// Last raw Fréchet distance (0 = perfect). Debug overlay only.
-    private(set) var lastDistance: CGFloat = 0
+    /// Last raw discrete-Fréchet distance in reference-normalised
+    /// (cell-local 0–1) units, or nil when no assessment has produced a
+    /// finite one this session. This is the study's PRIMARY accuracy
+    /// outcome — unlike `WritingAssessment.formAccuracy` it is neither
+    /// clamped nor rescaled, so it keeps discriminating above and below
+    /// the `checkpointRadius * 3` band where formAccuracy saturates at
+    /// 1 / 0. Lower is better. `PhaseTransitionCoordinator` records it
+    /// onto the freeWrite row.
+    private(set) var lastFrechetDistance: CGFloat?
+    /// Non-optional mirror of `lastFrechetDistance` for the debug
+    /// overlay, which wants a displayable number rather than a
+    /// "not measured" state. 0 reads as "perfect" — never record this;
+    /// record `lastFrechetDistance`.
+    var lastDistance: CGFloat { lastFrechetDistance ?? 0 }
     /// Latest 4-dimension Schreibmotorik assessment. Set by `assess`.
     private(set) var lastAssessment: WritingAssessment? = nil
     /// Captured guided-phase score so the freeWrite chrome can show a
     /// "Nachspuren fertig" feedback band during the transition. Cleared
     /// on `clearAll()`.
     var lastGuidedScore: CGFloat? = nil
+
+    // MARK: - Derived measures
+
+    /// Measured freeWrite span in seconds: **first sample to last
+    /// sample**, end-inclusive.
+    ///
+    /// `record(...)` appends one timestamp per accepted touch sample, so
+    /// `timestamps.last` is the last moment the child was writing — not
+    /// the moment their final stroke *began*. A stroke-start-based span
+    /// would drop the whole final stroke, which for the single-stroke
+    /// study letters (I, and M as baked) is the entire trial.
+    ///
+    /// Excludes the trailing 2.0 s quiet-window auto-advance
+    /// (`TouchDispatcher.freeWriteQuietSeconds`) by construction — that
+    /// window opens after the last sample. Nil when fewer than two
+    /// distinct samples exist, because a span needs two endpoints.
+    var measuredSpanSeconds: Double? {
+        guard let first = timestamps.first,
+              let last = timestamps.last,
+              last > first else { return nil }
+        return last - first
+    }
 
     // MARK: - Mutation API
 
@@ -59,7 +93,7 @@ final class FreeWritePhaseRecorder {
         sessionStart = now
         activePhaseStart = now
         checkpointsPerSecond = 0
-        lastDistance = 0
+        lastFrechetDistance = nil
         lastAssessment = nil
     }
 
@@ -127,6 +161,7 @@ final class FreeWritePhaseRecorder {
             return empty
         }
         var perCell: [WritingAssessment] = []
+        var perCellDistance: [CGFloat] = []
         for cell in cellReferences {
             var pts: [CGPoint] = []
             var ts: [CFTimeInterval] = []
@@ -145,6 +180,9 @@ final class FreeWritePhaseRecorder {
                 tracedPoints: pts, reference: cell.reference,
                 timestamps: ts, forces: fs,
                 sessionStart: sessionStart, sessionEnd: now))
+            if let d = Self.measuredDistance(pts, cell.reference) {
+                perCellDistance.append(d)
+            }
         }
         guard !perCell.isEmpty else {
             return assess(reference: lastCell.reference,
@@ -159,6 +197,14 @@ final class FreeWritePhaseRecorder {
             rhythmScore:      perCell.map(\.rhythmScore).reduce(0, +) / n
         )
         lastAssessment = avg
+        // Word / multi-cell rows carry the mean per-cell Fréchet
+        // distance. Averaging is legitimate here because every cell's
+        // trace is normalised into its own cell-local 0–1 box, so the
+        // per-cell distances share one scale. The pilot practises single
+        // letters and never reaches this path.
+        lastFrechetDistance = perCellDistance.isEmpty
+            ? nil
+            : perCellDistance.reduce(0, +) / CGFloat(perCellDistance.count)
         return avg
     }
 
@@ -185,9 +231,20 @@ final class FreeWritePhaseRecorder {
             sessionEnd: now
         )
         lastAssessment = assessment
-        lastDistance = FreeWriteScorer.rawDistance(
-            tracedPoints: normalised, reference: reference)
+        lastFrechetDistance = Self.measuredDistance(normalised, reference)
         return assessment
+    }
+
+    /// Raw discrete-Fréchet distance, or nil when the pair isn't
+    /// comparable. `FreeWriteScorer.rawDistance` signals that case with a
+    /// `.greatestFiniteMagnitude` sentinel (fewer than two points on
+    /// either polyline) — which is `isFinite`, so it would sail into the
+    /// export as a real measurement if we only checked finiteness.
+    private static func measuredDistance(_ points: [CGPoint],
+                                         _ reference: LetterStrokes) -> CGFloat? {
+        let d = FreeWriteScorer.rawDistance(tracedPoints: points, reference: reference)
+        guard d.isFinite, d < .greatestFiniteMagnitude else { return nil }
+        return d
     }
 
     /// Clear every buffer. Called on letter load and on phase
@@ -201,7 +258,7 @@ final class FreeWritePhaseRecorder {
         sessionStart = 0
         activePhaseStart = 0
         checkpointsPerSecond = 0
-        lastDistance = 0
+        lastFrechetDistance = nil
         lastAssessment = nil
         lastGuidedScore = nil
     }

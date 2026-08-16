@@ -223,14 +223,23 @@ final class PhaseTransitionCoordinator {
         let freeWriteTraceID: UUID? = scores.keys.contains("freeWrite")
             ? vm.captureFreeWriteTrace() : nil
         // Measured-phase time: first-to-last raw freeWrite sample
-        // (CACurrentMediaTime deltas). Excludes the trailing 2.0 s
-        // quiet-window auto-advance (`freeWriteQuietSeconds`) by
-        // construction — the window starts after the last sample.
-        let freeWriteDuration: Double? = {
-            guard let first = vm.freeWriteTimestamps.first,
-                  let last = vm.freeWriteTimestamps.last, last > first else { return nil }
-            return last - first
-        }()
+        // (CACurrentMediaTime deltas), end-inclusive — see
+        // `FreeWritePhaseRecorder.measuredSpanSeconds` for why the span
+        // must not end at the final stroke's start.
+        let freeWriteDuration: Double? = vm.freeWriteRecorder.measuredSpanSeconds
+        // PRIMARY accuracy outcome: the raw discrete-Fréchet distance the
+        // scorer already computed for this trial. Until now it only fed
+        // the debug overlay and was discarded at the next letter load.
+        // Unlike `formAccuracy` it is unclamped, so it keeps
+        // discriminating at both ends of the scale.
+        let freeWriteFrechet: Double? = vm.lastFreeWriteFrechetDistance.map { Double($0) }
+        // SECONDARY: checkpoint coverage of the freeWrite trace.
+        // `resetForPhaseTransition` reset the tracker on entry to
+        // freeWrite, so this reads the freeWrite pass alone and not the
+        // guided pass before it. Saturates at 1.0 — kept for continuity
+        // with earlier rounds, not as the primary.
+        let freeWriteCoverage: Double? = scores.keys.contains("freeWrite")
+            ? Double(vm.grid.aggregateProgress) : nil
         for (phase, phaseScore) in scores {
             vm.dashboardStore.recordPhaseSession(
                 letter: vm.currentLetterName,
@@ -245,7 +254,9 @@ final class PhaseTransitionCoordinator {
                 inputDevice: device,
                 rawTraceID: phase == "freeWrite" ? freeWriteTraceID : nil,
                 trainedSubset: vm.trainedSubset.rawValue,
-                phaseDurationSeconds: phase == "freeWrite" ? freeWriteDuration : nil
+                phaseDurationSeconds: phase == "freeWrite" ? freeWriteDuration : nil,
+                frechetDistance: phase == "freeWrite" ? freeWriteFrechet : nil,
+                checkpointCoverage: phase == "freeWrite" ? freeWriteCoverage : nil
             )
         }
         commitCompletion(letter: vm.currentLetterName,

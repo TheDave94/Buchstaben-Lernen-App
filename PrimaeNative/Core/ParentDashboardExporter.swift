@@ -132,7 +132,12 @@ struct ParentDashboardExporter {
         // excluding the trailing 2.0 s quiet-window auto-advance) are
         // appended last, newest-last, so the legacy column order is
         // preserved for existing consumers.
-        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds"].joined(separator: sep))
+        // `frechetDistance` is the study's PRIMARY accuracy outcome (raw,
+        // unclamped, lower = better) and `checkpointCoverage` the
+        // SECONDARY one (bounded 0–1, saturates at ceiling). Both are
+        // freeWrite-only. They ride at the end for the same
+        // column-order reason.
+        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage"].joined(separator: sep))
         for rec in snapshot.phaseSessionRecords {
             // Discard rows from before enrolment so pilot/sandbox
             // activity isn't attributed to the assigned arm. Also
@@ -165,7 +170,12 @@ struct ParentDashboardExporter {
                 rec.inputDevice ?? "",
                 rec.audioCondition.rawValue,
                 rec.trainedSubset ?? "",
-                rec.phaseDurationSeconds.map { String(format: "%.3f", $0) } ?? ""
+                rec.phaseDurationSeconds.map { String(format: "%.3f", $0) } ?? "",
+                // 6 dp: the distance lives in normalised 0–1 letter
+                // space, where meaningful between-child differences show
+                // up in the 3rd–4th decimal.
+                rec.frechetDistance.map { String(format: "%.6f", $0) } ?? "",
+                rec.checkpointCoverage.map { String(format: "%.4f", $0) } ?? ""
             ].joined(separator: sep))
         }
         lines.append("")

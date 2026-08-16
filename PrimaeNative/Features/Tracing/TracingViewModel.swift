@@ -350,8 +350,14 @@ public final class TracingViewModel {
     /// the unit: checkpoints, not strokes — the name matters for
     /// motor-rhythm correlations.
     var checkpointsPerSecond: CGFloat { freeWriteRecorder.checkpointsPerSecond }
-    /// Last computed Fréchet distance (debug overlay).
+    /// Last computed Fréchet distance (debug overlay). 0 when nothing
+    /// was measured — use `lastFreeWriteFrechetDistance` for anything
+    /// that gets recorded.
     var lastFreeWriteDistance: CGFloat { freeWriteRecorder.lastDistance }
+    /// Raw discrete-Fréchet distance of the measured freeWrite trace in
+    /// reference-normalised units, or nil if none was measured. The
+    /// study's primary accuracy outcome — see `PhaseSessionRecord.frechetDistance`.
+    var lastFreeWriteFrechetDistance: CGFloat? { freeWriteRecorder.lastFrechetDistance }
     /// Most recent four-dimension Schreibmotorik assessment.
     var lastWritingAssessment: WritingAssessment? { freeWriteRecorder.lastAssessment }
     /// Last guided-phase score, captured for the "Nachspuren fertig"
