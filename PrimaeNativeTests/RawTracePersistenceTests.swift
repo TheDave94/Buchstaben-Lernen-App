@@ -134,6 +134,32 @@ import CoreGraphics
         #expect(store.traces.isEmpty)
     }
 
+    // MARK: - Durability across the app lifecycle
+
+    /// The trace and the `PhaseSessionRecord` that links to it are written
+    /// by two different stores, and for a while only the record's store was
+    /// named in the VM's background drain. That let the archive keep a
+    /// `rawTraceID` pointing at a trace that never reached disk — the exact
+    /// inverse of the invariant `captureFreeWriteTrace`'s trace-first
+    /// ordering exists to guarantee. It hit the LAST trial of a session,
+    /// because that is when the proctor closes the app.
+    ///
+    /// Asserted on the drain call rather than on the file: the detached
+    /// write usually wins the race unaided, so a disk round-trip would pass
+    /// with or without the drain and guard nothing. What has to be pinned
+    /// is that the VM names this store at all.
+    @Test("backgrounding drains the raw-trace store")
+    func backgroundingDrainsTheTraceStore() async {
+        let store = StubRawTraceStore()
+        let vm = vmWith(store)
+        #expect(store.flushCount == 0)
+
+        await vm.appDidEnterBackground()
+
+        #expect(store.flushCount == 1,
+                "the raw-trace store must be drained alongside the store that holds the linking record")
+    }
+
     // MARK: - Export: JSON carries traces, CSV does not
 
     @Test("JSON export includes rawTraces; CSV excludes rawTraceID")
