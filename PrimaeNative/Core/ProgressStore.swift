@@ -190,6 +190,14 @@ public final class JSONProgressStore: ProgressStoring {
     /// Hard ceiling on `completionDates`. The streak query only reads
     /// the trailing 30 days; anything beyond ~1000 is dead weight.
     private static let completionDatesCap = 1000
+    /// Per-letter writing-speed series retained for the automatisation
+    /// bonus and the `speedTrend` export column.
+    private static let speedTrendCap = 50
+    /// Rolling window shared by the three per-letter research channels
+    /// (retrieval attempts, recognition accuracy, recognition samples).
+    /// Exported, so this is a research parameter rather than an
+    /// implementation detail — change it and the CSV changes meaning.
+    private static let rollingChannelCap = 10
 
     // MARK: - Canonical key
 
@@ -222,7 +230,9 @@ public final class JSONProgressStore: ProgressStoring {
             // Keep up to 50 samples — the scheduler only consults
             // the trend halves but the thesis export needs the full
             // trajectory to plot speed-up curves.
-            if trend.count > 50 { trend.removeFirst(trend.count - 50) }
+            if trend.count > Self.speedTrendCap {
+                trend.removeFirst(trend.count - Self.speedTrendCap)
+            }
             p.speedTrend = trend
         }
         if let rr = recognitionResult {
@@ -264,7 +274,9 @@ public final class JSONProgressStore: ProgressStoring {
         var p = store.letterProgress[key] ?? LetterProgress()
         var attempts = p.retrievalAttempts ?? []
         attempts.append(correct)
-        if attempts.count > 10 { attempts.removeFirst(attempts.count - 10) }
+        if attempts.count > Self.rollingChannelCap {
+            attempts.removeFirst(attempts.count - Self.rollingChannelCap)
+        }
         p.retrievalAttempts = attempts
         store.letterProgress[key] = p
         save()
@@ -278,7 +290,9 @@ public final class JSONProgressStore: ProgressStoring {
                                           into p: inout LetterProgress) {
         var acc = p.recognitionAccuracy ?? []
         acc.append(Double(result.confidence))
-        if acc.count > 10 { acc.removeFirst(acc.count - 10) }
+        if acc.count > Self.rollingChannelCap {
+            acc.removeFirst(acc.count - Self.rollingChannelCap)
+        }
         p.recognitionAccuracy = acc
 
         var samples = p.recognitionSamples ?? []
@@ -288,7 +302,9 @@ public final class JSONProgressStore: ProgressStoring {
             rawConfidence: result.rawConfidence.map { Double($0) },
             isCorrect: result.isCorrect
         ))
-        if samples.count > 10 { samples.removeFirst(samples.count - 10) }
+        if samples.count > Self.rollingChannelCap {
+            samples.removeFirst(samples.count - Self.rollingChannelCap)
+        }
         p.recognitionSamples = samples
     }
 

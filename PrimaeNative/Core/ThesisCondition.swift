@@ -163,10 +163,11 @@ enum ParticipantStore {
         UserDefaults.standard.object(forKey: enrolledAtKey) as? Date
     }
 
-    /// Spaced-retrieval counter key (per participant). Mirrors
-    /// `RetrievalScheduler.counterKey`; reset for a new participant so the
-    /// retrieval cadence restarts.
-    private static let retrievalCounterKey = "de.flamingistan.primae.retrievalCounter"
+    /// Spaced-retrieval counter key (per participant), READ FROM its
+    /// owner rather than mirrored. Reset for a new participant so the
+    /// retrieval cadence restarts; a divergence here would leave a fresh
+    /// enrollee inheriting the previous child's cadence, silently.
+    private static let retrievalCounterKey = RetrievalScheduler.counterKey
 
     /// Resets participant IDENTITY for a fresh enrollee on a shared study
     /// device, returning the new UUID. Generates a new `participantId`

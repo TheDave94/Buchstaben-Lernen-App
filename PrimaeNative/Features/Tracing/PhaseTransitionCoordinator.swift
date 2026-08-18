@@ -115,19 +115,17 @@ final class PhaseTransitionCoordinator {
     func completePostFreeWriteRecognition(score: CGFloat,
                                           result: RecognitionResult?) {
         guard let vm else { return }
-        _ = vm  // silence unused warning while only `result` is read here
-        let triggerRetry: Bool
-        if let r = result, !vm.studyMode {
-            // Study sessions never retry: the recognizer forcing extra
-            // freeWrite attempts would manipulate the time-to-complete
-            // outcome and vary trial counts between children. The
-            // recognition sample is still recorded (passive data).
-            triggerRetry = !r.isCorrect && r.confidence > 0.7
-        } else {
-            triggerRetry = false
-        }
-        if triggerRetry {
-            requestFreeWriteRetry(result: result!)
+        // One binding decides and carries the value. The previous shape
+        // computed a Bool from `if let r = result`, then re-unwrapped
+        // `result!` in the branch the Bool guarded — safe, but the flag
+        // was the only reason a force-unwrap was needed at all.
+        //
+        // Study sessions never retry: the recognizer forcing extra
+        // freeWrite attempts would manipulate the time-to-complete
+        // outcome and vary trial counts between children. The recognition
+        // sample is still recorded (passive data).
+        if let r = result, !vm.studyMode, !r.isCorrect, r.confidence > 0.7 {
+            requestFreeWriteRetry(result: r)
         } else {
             celebrateFreeWrite(score: score, result: result)
         }

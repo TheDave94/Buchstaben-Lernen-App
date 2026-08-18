@@ -15,7 +15,9 @@ import Foundation
 
     private let studyModeKey   = StudyBuild.studyModeDefaultsKey
     private let schriftArtKey  = "de.flamingistan.primae.selectedSchriftArt"
-    private let retrievalKey   = "de.flamingistan.primae.retrievalCounter"
+    // Read from the owner, not re-declared: a third copy of the string
+    // would make this suite prove only that it agrees with itself.
+    private let retrievalKey   = RetrievalScheduler.counterKey
 
     /// Snapshot the global participant-scoped keys this suite mutates and
     /// restore them after each test so suites stay independent.
@@ -80,6 +82,36 @@ import Foundation
             UserDefaults.standard.set(7, forKey: retrievalKey)
             _ = ParticipantStore.startNewParticipant()
             #expect(UserDefaults.standard.object(forKey: retrievalKey) == nil)
+        }
+    }
+
+    /// The string-level test above cannot catch the failure that matters.
+    /// Both sides now read `RetrievalScheduler.counterKey`, so renaming it
+    /// moves them together and stays green — correctly. What no
+    /// string-comparison test can see is the reset clearing a DIFFERENT
+    /// key than the scheduler actually uses, which is how a fresh
+    /// enrollee silently inherits the previous child's cadence.
+    ///
+    /// So assert the behaviour instead of the string: drive the real
+    /// scheduler, reset, and read a fresh scheduler back. This names no
+    /// key at all, and goes red for any divergence however introduced.
+    @Test("startNewParticipant clears the counter RetrievalScheduler actually uses")
+    func clearsTheLiveRetrievalCounter() {
+        withRestoredState {
+            var progress = LetterProgress()
+            progress.completionCount = 3          // clears minimumPriorCompletions
+            let scheduler = RetrievalScheduler(initialCounter: 0)
+            _ = scheduler.shouldPrompt(for: "A", progress: progress)
+            #expect(scheduler.selectionsSinceRetrieval > 0,
+                    "precondition: the scheduler must have persisted a non-zero cadence")
+
+            _ = ParticipantStore.startNewParticipant()
+
+            // A fresh scheduler re-reads UserDefaults. Still non-zero here
+            // means the reset cleared a key nothing reads.
+            let afterReset = RetrievalScheduler()
+            #expect(afterReset.selectionsSinceRetrieval == 0,
+                    "new participant inherited a cadence of \(afterReset.selectionsSinceRetrieval)")
         }
     }
 

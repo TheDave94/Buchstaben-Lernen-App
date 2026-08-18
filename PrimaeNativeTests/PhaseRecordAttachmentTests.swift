@@ -261,10 +261,17 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         }
 
         // Exactly one row in the session owns the measurement fields.
+        //
+        // Asserted as a SET, not on `carriers.first`. The earlier form
+        // indexed into a collection whose order is the dictionary
+        // iteration order of the coordinator's loop — so it only
+        // evaluated meaningfully once a break produced two carriers, and
+        // then reported whichever happened to hash first. It passed under
+        // one iteration order and failed under another for the same
+        // defect, which makes it noise rather than signal.
         let carriers = s.calls.filter { $0.measurementFieldCount > 0 }
-        #expect(carriers.count == 1,
-                "exactly one row may carry measurements, got \(carriers.map(\.phase))")
-        #expect(carriers.first?.phase == LearningPhase.freeWrite.rawName)
+        #expect(carriers.map(\.phase).sorted() == [LearningPhase.freeWrite.rawName],
+                "exactly one row may carry measurements, and it must be freeWrite — got \(carriers.map(\.phase).sorted())")
     }
 
     // MARK: - 4. The trace is written before the linking record

@@ -36,6 +36,22 @@ enum CanvasOverlay: Equatable, Sendable {
     /// `LetterProgress.retrievalAttempts`. Modal.
     case retrievalPrompt(letter: String, distractors: [String])
 
+    /// Whether an in-flight instance of this overlay is INTERRUPTED by a
+    /// later `enqueueBeforeCelebration` rather than allowed to finish.
+    ///
+    /// Deliberately NOT the same set as "modal" (`defaultDuration == nil`),
+    /// which also contains `.retrievalPrompt`. Retrieval fires pre-trace
+    /// and the interrupting caller runs post-freeWrite, so the two cannot
+    /// be on screen together; naming the concept separately records that
+    /// rather than leaving it to be re-derived from two inline case lists.
+    var isBlocking: Bool {
+        switch self {
+        case .paperTransfer, .celebration:                      return true
+        case .kpOverlay, .recognitionBadge,
+             .rewardCelebration, .retrievalPrompt:              return false
+        }
+    }
+
     /// Default display duration. `nil` means modal — only an explicit
     /// `.dismiss()` advances the queue.
     var defaultDuration: TimeInterval? {
@@ -103,15 +119,9 @@ final class OverlayQueueManager {
     func enqueueBeforeCelebration(_ overlay: CanvasOverlay,
                                    duration: TimeInterval? = nil) {
         let d = duration ?? overlay.defaultDuration
-        // If a blocking modal (paperTransfer or celebration) is on screen,
-        // interrupt it: re-enqueue at front, insert badge ahead of it.
-        // Bind the value rather than a flag: the flag detour was the
-        // only reason this needed a force-unwrap. Collapsing the
-        // duplicated case list is finding 16's job, not this one's.
-        var blocking: CanvasOverlay? = nil
-        if case .paperTransfer = currentOverlay { blocking = currentOverlay }
-        if case .celebration   = currentOverlay { blocking = currentOverlay }
-        if let saved = blocking {
+        // A blocking overlay on screen is interrupted: re-enqueue it at
+        // the front, insert this one ahead of it.
+        if let saved = currentOverlay, saved.isBlocking {
             advanceTask?.cancel()
             advanceTask = nil
             currentOverlay = nil
@@ -120,11 +130,7 @@ final class OverlayQueueManager {
             advance()
             return
         }
-        if let idx = queue.firstIndex(where: { entry in
-            if case .paperTransfer = entry.overlay { return true }
-            if case .celebration = entry.overlay { return true }
-            return false
-        }) {
+        if let idx = queue.firstIndex(where: { $0.overlay.isBlocking }) {
             queue.insert((overlay, d), at: idx)
         } else {
             queue.append((overlay, d))

@@ -21,8 +21,12 @@ final class RetrievalScheduler {
     /// UserDefaults so the cadence survives an app relaunch.
     private(set) var selectionsSinceRetrieval: Int
 
-    /// UserDefaults key for the rolling counter.
-    private static let counterKey = "de.flamingistan.primae.retrievalCounter"
+    /// UserDefaults key for the rolling counter. NOT private: the
+    /// new-participant reset in `ParticipantStore` must clear this exact
+    /// key, and the tests must assert on it. One declaration so the
+    /// three cannot drift apart on the string — the same discipline
+    /// `StudyBuild.studyModeDefaultsKey` already uses.
+    static let counterKey = "de.flamingistan.primae.retrievalCounter"
 
     init(initialCounter: Int? = nil) {
         if let v = initialCounter {
