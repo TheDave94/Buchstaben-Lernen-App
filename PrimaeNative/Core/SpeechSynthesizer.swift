@@ -172,15 +172,4 @@ enum ChildSpeechLibrary {
         }
     }
 
-    /// Map a star count (0–4) to its praise prompt key. Out-of-range
-    /// counts collapse to the 0-star tier.
-    static func praisePromptKey(starsEarned: Int) -> PromptPlayer.PromptKey {
-        switch starsEarned {
-        case 4: return .praise4
-        case 3: return .praise3
-        case 2: return .praise2
-        case 1: return .praise1
-        default: return .praise0
-        }
-    }
 }

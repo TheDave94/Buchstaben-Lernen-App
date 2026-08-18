@@ -20,8 +20,10 @@ import Foundation
 struct TrainedLetterSubset: RawRepresentable, Codable, Equatable, Hashable, Sendable {
     let rawValue: String
 
-    /// The 5-letter pilot stimulus set, sorted. Must match
-    /// `TracingViewModel.studyBaseLetters`.
+    /// The 5-letter pilot stimulus set, sorted. THE single owner of
+    /// this list: `TracingViewModel.studyBaseLetters` and
+    /// `LetterPickerBar.demoLetters` both read it from here, and
+    /// `allSubsets` below derives the ten assignment buckets from it.
     static let studyLetters = ["A", "F", "I", "L", "M"]
 
     /// All 10 subsets in deterministic lexicographic order — index i of

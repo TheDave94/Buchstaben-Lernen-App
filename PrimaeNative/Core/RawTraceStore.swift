@@ -103,7 +103,10 @@ final class JSONRawTraceStore: RawTraceStoring {
     private func persist() {
         // Encode on main, write off main. See ParentDashboardStore.persist
         // for the cancel-and-replace coalescing rationale.
-        guard let data = try? JSONEncoder().encode(traces) else { return }
+        guard let data = try? JSONEncoder().encode(traces) else {
+            storePersistenceLogger.warning("RawTraceStore encode failed — raw traces not persisted.")
+            return
+        }
         let url = fileURL
         let previous = pendingSave
         previous?.cancel()

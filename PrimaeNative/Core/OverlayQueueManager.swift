@@ -105,11 +105,13 @@ final class OverlayQueueManager {
         let d = duration ?? overlay.defaultDuration
         // If a blocking modal (paperTransfer or celebration) is on screen,
         // interrupt it: re-enqueue at front, insert badge ahead of it.
-        var isBlocking = false
-        if case .paperTransfer = currentOverlay { isBlocking = true }
-        if case .celebration   = currentOverlay { isBlocking = true }
-        if isBlocking {
-            let saved = currentOverlay!
+        // Bind the value rather than a flag: the flag detour was the
+        // only reason this needed a force-unwrap. Collapsing the
+        // duplicated case list is finding 16's job, not this one's.
+        var blocking: CanvasOverlay? = nil
+        if case .paperTransfer = currentOverlay { blocking = currentOverlay }
+        if case .celebration   = currentOverlay { blocking = currentOverlay }
+        if let saved = blocking {
             advanceTask?.cancel()
             advanceTask = nil
             currentOverlay = nil

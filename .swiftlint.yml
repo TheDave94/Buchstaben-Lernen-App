@@ -1,5 +1,11 @@
 # SwiftLint config for PrimaeNative
-# All violations block commits — enforcing best practices
+#
+# NOT yet wired into CI — there is no lint step in ios-build.yml or
+# bake-gates.yml and no git hook, so nothing here is currently
+# enforced. (An earlier header claimed violations blocked commits;
+# they never did, which is how two force_unwrapping errors reached
+# main under a config that escalates them.) Wire it once the backlog
+# is measured at zero on a real run.
 strict: true
 
 
@@ -21,6 +27,14 @@ opt_in_rules:
   - file_header
 
 disabled_rules:
+  # Conflicts with a deliberate, consistently-applied column-alignment
+  # style (`private let engine     = AVAudioEngine()`, `case .schule:
+  #   return "book.fill"`). 449 of ~532 measurable violations were
+  # these two rules, and 268 of them sit in AudioEngine.swift — the one
+  # file docs/LESSONS.md forbids reformatting. A --fix pass would
+  # rewrite exactly what must not be touched.
+  - colon
+  - operator_usage_whitespace
   - trailing_newline        # minor formatting
   - vertical_whitespace     # minor formatting  
   - line_length             # handled by swift-format separately
@@ -33,6 +47,14 @@ disabled_rules:
 force_cast: error
 force_try: error
 force_unwrapping: error
+
+# recordPhaseSession carries 15 parameters because it is the pilot's
+# data-record writer and every column is an exported field. A parameter
+# object there is a schema change wearing a refactor's clothes, so raise
+# the threshold instead of restructuring the signature.
+function_parameter_count:
+  warning: 16
+  error: 20
 
 included:
   - PrimaeNative

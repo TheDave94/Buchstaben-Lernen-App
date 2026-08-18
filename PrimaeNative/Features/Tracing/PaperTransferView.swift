@@ -10,9 +10,7 @@ struct PaperTransferView: View {
     let onComplete: (Double) -> Void
     /// Injectable sleeper so the 3 s / 10 s timing is testable
     /// deterministically without 13 s of wall-clock wait.
-    var sleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
-    }
+    var sleep: Sleeper = realSleeper
 
     @State private var phase: Phase = .showLetter
 

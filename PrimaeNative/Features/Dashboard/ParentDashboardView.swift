@@ -271,7 +271,9 @@ extension ParentDashboardView {
     #if DEBUG
     private var forschungsmetrikenSection: some View {
         // Debug-only research-internal correlations. Toggled via
-        // vm.showDebug (long-press on the phase indicator).
+        // vm.showDebug, set from the parent area's Settings screen.
+        // (There is no long-press on the phase indicator; that
+        // gesture never existed on PhaseDotIndicator.)
         Section("Forschungsmetriken (Debug)") {
             LabeledContent("Scheduler-Effektivität (r)") {
                 Text(String(format: "%.3f", snapshot.schedulerEffectivenessProxy))

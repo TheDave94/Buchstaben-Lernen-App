@@ -48,13 +48,6 @@ extension Font {
         Font.custom(primaePostScriptName(for: weight, italic: false), size: size)
     }
 
-    /// Display-cursive (Primae italic). Reserved for marketing /
-    /// signature flourishes; in-app cursive uses Playwrite AT.
-    static func displayCursive(_ size: CGFloat,
-                               weight: Font.Weight = .regular) -> Font {
-        Font.custom(primaePostScriptName(for: weight, italic: true), size: size)
-    }
-
     /// Text-grade companion family (PrimaeText) — optimised for
     /// smaller sizes and longer prose.
     static func body(_ size: CGFloat,

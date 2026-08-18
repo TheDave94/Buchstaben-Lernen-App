@@ -31,10 +31,9 @@ final class TransientMessagePresenter {
 
     // MARK: - Sleep injection
 
-    typealias Sleeper = @Sendable (Duration) async throws -> Void
     private let sleep: Sleeper
 
-    init(sleep: @escaping Sleeper = { try await Task.sleep(for: $0) }) {
+    init(sleep: @escaping Sleeper = realSleeper) {
         self.sleep = sleep
     }
 

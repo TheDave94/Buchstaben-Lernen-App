@@ -3,8 +3,9 @@ import SwiftUI
 struct LetterPickerBar: View {
     @Environment(TracingViewModel.self) private var vm
 
-    /// Mirror of `TracingViewModel.studyBaseLetters` — keep in sync.
-    private let demoLetters: Set<String> = ["A", "F", "I", "L", "M"]
+    /// The 5-letter pilot stimulus set, read from its single owner in
+    /// Core. Dims non-study letters when `showAllLetters` is off.
+    private let demoLetters = Set(TrainedLetterSubset.studyLetters)
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {

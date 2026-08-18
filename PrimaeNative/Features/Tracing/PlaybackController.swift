@@ -42,7 +42,6 @@ final class PlaybackController {
 
     // MARK: - Sleep injection
 
-    typealias Sleeper = @Sendable (Duration) async throws -> Void
     private let sleep: Sleeper
 
     // MARK: - Init
@@ -51,7 +50,7 @@ final class PlaybackController {
          activeDebounceSeconds: TimeInterval = 0.03,
          idleDebounceSeconds: TimeInterval = 0.12,
          playIntentDebounceSeconds: CFTimeInterval = 0.1,
-         sleep: @escaping Sleeper = { try await Task.sleep(for: $0) },
+         sleep: @escaping Sleeper = realSleeper,
          onIsPlayingChanged: @escaping (Bool) -> Void = { _ in }) {
         self.audio = audio
         self.activeDebounceSeconds = activeDebounceSeconds

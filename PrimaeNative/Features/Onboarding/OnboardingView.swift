@@ -643,9 +643,8 @@ private struct FreeWriteDemoLayer: View {
                     Circle().path(in: CGRect(x: tipPt.x - r, y: tipPt.y - r,
                                              width: r * 2, height: r * 2)),
                     with: .color(.canvasInkStroke))
-            } else {
+            } else if let stroke = aDemoStrokes.last {
                 // Final stroke fully drawn during the celebration.
-                let stroke = aDemoStrokes.last!
                 drawWobblyStroke(context: context, size: size,
                                  from: stroke.from, to: stroke.to,
                                  t: 1.0, seed: aDemoStrokes.count - 1)

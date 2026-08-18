@@ -49,13 +49,6 @@ enum GridLayoutCalculator {
         return frames
     }
 
-    /// Bypasses the cache. Exposed for unit tests that need to verify
-    /// the layout math against deliberately-uncommon inputs without
-    /// the cache observing the test calls.
-    static func computeUncached(canvasSize: CGSize, preset: InputPreset) -> [CGRect] {
-        compute(canvasSize: canvasSize, preset: preset)
-    }
-
     private static func compute(canvasSize: CGSize, preset: InputPreset) -> [CGRect] {
         let n = max(1, preset.cellCount)
         let spacing = preset.cellSpacing

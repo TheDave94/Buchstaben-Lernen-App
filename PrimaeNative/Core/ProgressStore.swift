@@ -131,21 +131,6 @@ extension ProgressStoring {
         recordCompletion(for: letter, accuracy: accuracy,
                          phaseScores: phaseScores, speed: speed, recognitionResult: nil)
     }
-    // Optional protocol methods. Defaults crash so a stub forgetting
-    // to override fails loudly instead of silently swallowing data.
-    // Test stubs opt in explicitly with no-op overrides per channel.
-    func recordPaperTransferScore(for letter: String, score: Double) {
-        fatalError("Conformer must override \(#function) — protocol default refuses to silently no-op.")
-    }
-    func recordVariantUsed(for letter: String, variantID: String?) {
-        fatalError("Conformer must override \(#function) — protocol default refuses to silently no-op.")
-    }
-    func recordFreeformCompletion(letter: String, result: RecognitionResult) {
-        fatalError("Conformer must override \(#function) — protocol default refuses to silently no-op.")
-    }
-    func recordRecognitionSample(letter: String, result: RecognitionResult) {
-        fatalError("Conformer must override \(#function) — protocol default refuses to silently no-op.")
-    }
     func flush() async {}
 }
 
@@ -366,7 +351,10 @@ public final class JSONProgressStore: ProgressStoring {
         // Store sidesteps Swift 6's restriction on calling a
         // MainActor-isolated Encodable from a detached Task; only
         // the atomic disk write runs off main.
-        guard let data = try? JSONEncoder().encode(store) else { return }
+        guard let data = try? JSONEncoder().encode(store) else {
+            storePersistenceLogger.warning("ProgressStore encode failed — progress not persisted.")
+            return
+        }
         let url = fileURL
         // Coalesce + serialise: each call cancels its predecessor
         // and awaits it before writing. Avoids unbounded chain

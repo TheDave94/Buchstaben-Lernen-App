@@ -591,7 +591,10 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
         // them into a single disk write — each successor cancels its
         // predecessor before the atomic write fires. See
         // ParentDashboardStoreTests for the regression guard.
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        guard let data = try? JSONEncoder().encode(snapshot) else {
+            storePersistenceLogger.warning("ParentDashboardStore encode failed — snapshot not persisted; every later session is lost silently without this line.")
+            return
+        }
         let url = fileURL
         // Coalesce + order: see ProgressStore.save() for rationale.
         let previous = pendingSave

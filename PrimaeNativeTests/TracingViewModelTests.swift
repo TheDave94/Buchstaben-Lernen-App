@@ -284,7 +284,11 @@ private func slowDrag(vm: TracingViewModel,
         // Backgrounding folds the live slice into the accumulator and
         // clears letterLoadTime so the clock stops ticking.
         #expect(vm.debugLetterLoadTime == nil)
-        #expect(vm.debugLetterActiveTimeAccumulated >= 0)
+        // `>= 0` held whether or not the fold-in ran — the accumulator
+        // only ever adds elapsed time. `> 0` is what the docstring above
+        // actually claims, and the live window was open (letterLoadTime
+        // was non-nil) so the folded slice cannot be zero.
+        #expect(vm.debugLetterActiveTimeAccumulated > 0)
         vm.appDidBecomeActive()
         // Foregrounding restarts the live window. Accumulator remains
         // at whatever it was (we don't reset it — it only resets on

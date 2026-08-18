@@ -187,7 +187,10 @@ final class JSONOnboardingStore: OnboardingStoring {
 
     private func persist() {
         // Encode on main, write off main.
-        guard let data = try? JSONEncoder().encode(state) else { return }
+        guard let data = try? JSONEncoder().encode(state) else {
+            storePersistenceLogger.warning("OnboardingCoordinator encode failed — onboarding state not persisted.")
+            return
+        }
         let url = fileURL
         // Coalesce-and-await: each call cancels its predecessor and
         // awaits it before writing, so order is preserved on disk.

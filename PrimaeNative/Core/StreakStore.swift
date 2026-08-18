@@ -177,7 +177,10 @@ final class JSONStreakStore: StreakStoring {
 
     private func persist() {
         // Encode on main, write off main — see ProgressStore.save().
-        guard let data = try? JSONEncoder().encode(state) else { return }
+        guard let data = try? JSONEncoder().encode(state) else {
+            storePersistenceLogger.warning("StreakStore encode failed — streak state not persisted.")
+            return
+        }
         let url = fileURL
         // Coalesce + order: see ProgressStore.save() for rationale.
         let previous = pendingSave

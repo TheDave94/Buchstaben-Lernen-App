@@ -72,6 +72,11 @@ public enum StudyBuild {
     /// device prep, not for switching the study off.
     public static var studyModeDefault: Bool { isActive }
 
+    /// UserDefaults key holding the device's stored `studyMode`. One
+    /// declaration so the resolver, the proctor toggle, and the tests
+    /// cannot drift apart on the string.
+    public static let studyModeDefaultsKey = "de.flamingistan.primae.studyMode"
+
     /// Resolves the effective `studyMode` for a device: a stored value
     /// wins, otherwise the build default applies.
     ///
@@ -80,11 +85,6 @@ public enum StudyBuild {
     /// `TracingDependencies` would construct a live `AudioEngine`,
     /// which is what the headless-simulator TestApp bypass exists to
     /// avoid (see docs/LESSONS.md).
-    /// UserDefaults key holding the device's stored `studyMode`. One
-    /// declaration so the resolver, the proctor toggle, and the tests
-    /// cannot drift apart on the string.
-    public static let studyModeDefaultsKey = "de.flamingistan.primae.studyMode"
-
     public static func resolveStudyMode(
         in defaults: UserDefaults = .standard,
         key: String = StudyBuild.studyModeDefaultsKey

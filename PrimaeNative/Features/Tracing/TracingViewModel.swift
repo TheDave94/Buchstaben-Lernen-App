@@ -774,8 +774,6 @@ public final class TracingViewModel {
     // MARK: - Toggles
 
     func toggleGhost()             { showGhost.toggle();         toast("Hilfslinien \(showGhost ? "an" : "aus")") }
-    func toggleDebug()             { showDebug.toggle();         toast("Debug \(showDebug ? "an" : "aus")") }
-    func toggleCalibration()       { showCalibration.toggle();   toast("Kalibrieren \(showCalibration ? "an" : "aus")") }
 
     /// Switch between standard and variant stroke form. Reloads
     /// checkpoints + resets tracing progress; phase state unchanged.
@@ -949,24 +947,6 @@ public final class TracingViewModel {
     static let demoWordList: [String] = [
         "OMA", "OMI", "OPA", "MAMA", "PAPA", "LAMA", "KILO", "FILM"
     ]
-
-    /// Load a word — each character becomes a cell. Uppercase only,
-    /// no per-letter variants/calibration, no word-level
-    /// spaced-repetition tracking.
-    func loadWord(_ word: String) {
-        let upper = word.uppercased()
-        guard !upper.isEmpty, let first = upper.first,
-              let idx = letters.firstIndex(where: { $0.name == String(first) }) else { return }
-        letterIndex = idx
-        load(letter: letters[idx])
-        // load() built a length-1 grid; swap in the word sequence
-        // and re-flow cells + strokes to match.
-        grid.load(sequence: .word(upper), preset: grid.preset)
-        grid.layout(in: canvasSize, schriftArt: schriftArt)
-        lastCheckpointKey = nil
-        reloadStrokeCheckpoints(for: letters[idx])
-        toast("Wort: \(upper)")
-    }
 
     func randomLetter() {
         let visible = visibleLetterNames
@@ -1387,10 +1367,10 @@ public final class TracingViewModel {
     }
 
     /// The 5-letter pilot stimulus set (uppercase-only in study
-    /// sessions). Duplicated in `LetterPickerBar.demoLetters` — keep in
-    /// sync. Anlaut phonemes /a/ /ɪ/ /m/ /f/ /l/ are all vowels or
-    /// continuants, so every study letter is loopable (moots D6).
-    private let studyBaseLetters: Set<String> = ["A", "F", "I", "L", "M"]
+    /// sessions), read from its single owner in Core rather than
+    /// re-declared. Anlaut phonemes /a/ /ɪ/ /m/ /f/ /l/ are all vowels
+    /// or continuants, so every study letter is loopable (moots D6).
+    private let studyBaseLetters = Set(TrainedLetterSubset.studyLetters)
 
     /// Visible letters, sorted by `letterOrdering`. `studyMode` pins the
     /// pool to the 5-letter UPPERCASE pilot stimulus set regardless of
@@ -1783,12 +1763,6 @@ public final class TracingViewModel {
             }
         }
         lastCheckpointKey = key
-    }
-
-    /// Every persisted per-letter calibration for the active script,
-    /// keyed by letter. Used by the calibrator's "Alle JSON" export.
-    func loadAllCalibrations() -> [String: LetterStrokes] {
-        calibrationStore.loadAll(for: schriftArt)
     }
 
     /// The effective stroke definition for every loaded letter — the

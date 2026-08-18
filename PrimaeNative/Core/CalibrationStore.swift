@@ -61,8 +61,12 @@ final class CalibrationStore {
             })
         }
         let ls = LetterStrokes(letter: letter, checkpointRadius: 0.10, strokes: defs)
-        guard let url = fontSpecificURL(letter: letter, schriftArt: schriftArt),
-              let data = try? JSONEncoder().encode(ls) else { return }
+        guard let url = fontSpecificURL(letter: letter, schriftArt: schriftArt) else { return }
+        guard let data = try? JSONEncoder().encode(ls) else {
+            storePersistenceLogger.warning(
+                "CalibrationStore encode failed for '\(letter, privacy: .public)' — calibration not persisted.")
+            return
+        }
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         do {
