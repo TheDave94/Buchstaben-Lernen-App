@@ -220,7 +220,7 @@ final class PhaseTransitionCoordinator {
         // crash can't leave a record linked to a missing trace) and BEFORE
         // the buffer clears on the next letter load. freeWrite-only; nil if
         // no freeWrite phase ran or the buffer is empty.
-        let freeWriteTraceID: UUID? = scores.keys.contains("freeWrite")
+        let freeWriteTraceID: UUID? = scores.keys.contains(LearningPhase.freeWrite.rawName)
             ? vm.captureFreeWriteTrace() : nil
         // Measured-phase time: first-to-last raw freeWrite sample
         // (CACurrentMediaTime deltas), end-inclusive — see
@@ -238,7 +238,7 @@ final class PhaseTransitionCoordinator {
         // freeWrite, so this reads the freeWrite pass alone and not the
         // guided pass before it. Saturates at 1.0 — kept for continuity
         // with earlier rounds, not as the primary.
-        let freeWriteCoverage: Double? = scores.keys.contains("freeWrite")
+        let freeWriteCoverage: Double? = scores.keys.contains(LearningPhase.freeWrite.rawName)
             ? Double(vm.grid.aggregateProgress) : nil
         for (phase, phaseScore) in scores {
             vm.dashboardStore.recordPhaseSession(
@@ -249,14 +249,14 @@ final class PhaseTransitionCoordinator {
                 schedulerPriority: vm.lastScheduledLetterPriority,
                 condition: vm.thesisCondition,
                 audioCondition: vm.audioCondition,
-                assessment: phase == "freeWrite" ? vm.lastWritingAssessment : nil,
-                recognition: phase == "freeWrite" ? freeWriteRecognition : nil,
+                assessment: phase == LearningPhase.freeWrite.rawName ? vm.lastWritingAssessment : nil,
+                recognition: phase == LearningPhase.freeWrite.rawName ? freeWriteRecognition : nil,
                 inputDevice: device,
-                rawTraceID: phase == "freeWrite" ? freeWriteTraceID : nil,
+                rawTraceID: phase == LearningPhase.freeWrite.rawName ? freeWriteTraceID : nil,
                 trainedSubset: vm.trainedSubset.rawValue,
-                phaseDurationSeconds: phase == "freeWrite" ? freeWriteDuration : nil,
-                frechetDistance: phase == "freeWrite" ? freeWriteFrechet : nil,
-                checkpointCoverage: phase == "freeWrite" ? freeWriteCoverage : nil
+                phaseDurationSeconds: phase == LearningPhase.freeWrite.rawName ? freeWriteDuration : nil,
+                frechetDistance: phase == LearningPhase.freeWrite.rawName ? freeWriteFrechet : nil,
+                checkpointCoverage: phase == LearningPhase.freeWrite.rawName ? freeWriteCoverage : nil
             )
         }
         commitCompletion(letter: vm.currentLetterName,

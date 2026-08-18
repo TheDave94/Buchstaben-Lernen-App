@@ -346,7 +346,7 @@ struct DashboardSnapshot: Codable, Equatable {
     /// Mean overall score across all completed freeWrite phase sessions.
     var averageFreeWriteScore: Double {
         let scores = phaseSessionRecords
-            .filter { $0.phase == "freeWrite" && $0.completed }
+            .filter { $0.phase == LearningPhase.freeWrite.rawName && $0.completed }
             .map { $0.score }
         guard !scores.isEmpty else { return 0 }
         return scores.reduce(0, +) / Double(scores.count)
@@ -356,7 +356,7 @@ struct DashboardSnapshot: Codable, Equatable {
     /// freeWrite sessions with dimension data, or nil if none exist.
     var averageWritingDimensions: (form: Double, tempo: Double, pressure: Double, rhythm: Double)? {
         let records = phaseSessionRecords
-            .filter { $0.phase == "freeWrite" && $0.completed && $0.formAccuracy != nil }
+            .filter { $0.phase == LearningPhase.freeWrite.rawName && $0.completed && $0.formAccuracy != nil }
         guard !records.isEmpty else { return nil }
         let count = Double(records.count)
         return (

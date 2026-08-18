@@ -197,7 +197,7 @@ struct ParentDashboardExporter {
         // priority scale, so the cross-arm proxy is invalid.
         for arm in ThesisCondition.allCases {
             let armRecords = snapshot.phaseSessionRecords.filter { $0.condition == arm }
-            let freeWrite = armRecords.filter { $0.phase == "freeWrite" && $0.completed }.map(\.score)
+            let freeWrite = armRecords.filter { $0.phase == LearningPhase.freeWrite.rawName && $0.completed }.map(\.score)
             if !freeWrite.isEmpty {
                 let avg = freeWrite.reduce(0, +) / Double(freeWrite.count)
                 lines.append(["averageFreeWriteScore_\(arm.rawValue)", String(format: "%.4f", avg)].joined(separator: sep))
@@ -253,7 +253,7 @@ struct ParentDashboardExporter {
         // pedagogical contrast stay exportable from one file.
         for arm in PilotAudioCondition.allCases {
             let armRecords = snapshot.phaseSessionRecords.filter { $0.audioCondition == arm }
-            let freeWrite = armRecords.filter { $0.phase == "freeWrite" && $0.completed }.map(\.score)
+            let freeWrite = armRecords.filter { $0.phase == LearningPhase.freeWrite.rawName && $0.completed }.map(\.score)
             if !freeWrite.isEmpty {
                 let avg = freeWrite.reduce(0, +) / Double(freeWrite.count)
                 lines.append(["averageFreeWriteScore_audio_\(arm.rawValue)", String(format: "%.4f", avg)].joined(separator: sep))
