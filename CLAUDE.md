@@ -63,6 +63,7 @@ User-level `~/.claude/CLAUDE.md` has the general output discipline (Bash caps, r
 - **Main target**: Uses `.defaultIsolation(MainActor.self)` — all types are implicitly @MainActor
 - **Test target**: Uses `.swiftLanguageMode(.v5)` — do NOT change this
 - **CI**: GitHub Actions on hosted macos-26 runners with Xcode 26.4 (simulator matrix: iPad Pro 13-inch (M5) + iPad (A16))
+- **Remotes**: `origin` is the Forgejo forge at `https://git.flamingistan.com/David/Primae.git` — that is where you push. The GitHub repo `TheDave94/Primae` is a **push mirror** of the forge, not the origin: branches and workflow files reach it automatically, with nobody pushing to GitHub directly. CI runs there, so `gh run list --repo TheDave94/Primae` is the right way to read results and the wrong way to imagine the data flows.
 - **Learning phases**: observe → direct → guided → freeWrite (managed by PhaseController)
 - **Stroke data**: JSON files in `Resources/Letters/{letter}/strokes.json` with normalized coordinates
 - **Audio**: Proximity-triggered playback via AudioEngine + StrokeTracker
@@ -243,7 +244,7 @@ python3 scripts/generate_letter_audio.py …
 - Debug features gated on `vm.showDebug`
 - German UI text (the app is for German-speaking children)
 - Child-facing screens (Schule / Werkstatt / Fortschritte / Onboarding / overlays during practice) must work via icons + animation + TTS, not text — the target audience is 5–6 yr-old Volksschule 1. Klasse children who can't or barely read. Text is fine for parent-area screens (Settings, ParentDashboard, ResearchDashboard, Datenexport).
-- Design tokens: read from `PrimaeNative/Theme/{Colors, Spacing, Radii, Fonts}.swift`. Color values are auto-flipping light/dark via `Color("name")` (Asset-Catalog colorsets); fonts via `Font.display(_:weight:)` / `Font.body(_:weight:)` / `Font.cursive(_:)`. The picker for the appearance override lives in the parent area as "Erscheinungsbild" (System / Hell / Dunkel).
+- Design tokens: read from `PrimaeNative/Theme/{Colors, Radii, Fonts}.swift`. Color values are auto-flipping light/dark via `Color("name")` (Asset-Catalog colorsets); fonts via `Font.display(_:weight:)` / `Font.body(_:weight:)` / `Font.cursive(_:)`. The picker for the appearance override lives in the parent area as "Erscheinungsbild" (System / Hell / Dunkel).
 - Run `git config core.quotePath false` in every fresh clone. 35 of the ~500 tracked paths carry umlauts (`PrimaeNative/Resources/Letters/F/Föhn.mp3`, `.../Regular/Ä/strokes.json`, …); under git's default `quotePath=true` those come back octal-escaped and double-quoted (`"…/F\303\266hn.mp3"`), so any instrument that greps or diffs tracked paths silently drops exactly the letter assets that matter. This setting lives in `.git/config`, which is untracked — a fresh clone does NOT inherit it, which is why it is written down here.
 
 ## Visual sweep workflow

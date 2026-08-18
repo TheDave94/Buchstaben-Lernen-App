@@ -136,7 +136,6 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | `ConfidenceCalibrator.swift` | 119 | Confusable-pair penalty + history boost shim. |
 | `FreeWriteScorer.swift` | 372 | Discrete Fréchet, four-dimension `WritingAssessment`, Hausdorff form-accuracy. |
 | `FreeformWordList.swift` | small | Demo word library for freeform-word mode. |
-| `GlyphStrokeExtractor.swift` | small | CoreText path → checkpoint extraction (debug calibrator). |
 | `PrimaeLetterRenderer.swift` | small | OTF-based glyph render → UIImage. SchriftArt-aware. |
 | `LetterAnimationGuide.swift` | small | Per-stroke animation timing model. |
 | `CalibrationStore.swift` | small | Per-letter user-calibrated stroke persistence. |
@@ -158,7 +157,6 @@ SwiftUI port of the Primae design tokens (see [`design-system/`](../design-syste
 | `PaperTransferView.swift` | 95 | 3 s reference → 10 s write-on-paper → 3-emoji self-assessment. Speaks each prompt. |
 | `PhaseDotIndicator.swift` | small | Phase progress visuals. |
 | `LetterPickerBar.swift` / `LetterWheelPicker.swift` | small | Letter / word selection chrome. |
-| `DebugAudioPanel.swift` | small | DEBUG-only audio tuning sliders. |
 | `StrokeCalibrationOverlay.swift` | 521 | DEBUG calibration UI with per-script persistence. |
 | `PlaybackController.swift` / `AnimationGuideController.swift` / `TransientMessagePresenter.swift` | small | Per-VM controllers built via factories. |
 | `InputModeDetector.swift` / `InputPreset.swift` | small | Finger / pencil hysteresis. |
