@@ -23,8 +23,39 @@ import CoreGraphics
 import Testing
 @testable import PrimaeNative
 
-@MainActor
+@Suite(.serialized) @MainActor
 struct StudyModeGuardTests {
+
+    private let studyModeKey = StudyBuild.studyModeDefaultsKey
+
+    /// Runs `body` with the process-global `studyMode` default restored
+    /// afterwards — an unset key restored as unset, not as `false`.
+    ///
+    /// Since B2 those are different states. `StudyBuild.resolveStudyMode`
+    /// gives a STORED value priority over the build default, so a test that
+    /// signs off by writing `false` doesn't clean up — it switches B2 off for
+    /// every `TracingDependencies` built later in the same process, and the
+    /// study build's suite silently starts testing the normal build. That is
+    /// what made the study-build failure set scheduling-dependent rather than
+    /// fixed. Mirrors `NewParticipantResetTests.withRestoredState`, but
+    /// removes explicitly rather than relying on `set(nil, forKey:)`.
+    ///
+    /// This closes the RESIDUE, not the window: while `body` runs the key is
+    /// flipped, and suites run in parallel with each other (`.serialized`
+    /// orders tests *within* a suite only). The window is closed on the other
+    /// side, by `TracingDependencies.stub` pinning `studyMode` so that no test
+    /// resolves it from the default in the first place.
+    private func withRestoredStudyMode(_ body: () throws -> Void) rethrows {
+        let saved = UserDefaults.standard.object(forKey: studyModeKey)
+        defer {
+            if let saved {
+                UserDefaults.standard.set(saved, forKey: studyModeKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: studyModeKey)
+            }
+        }
+        try body()
+    }
 
     /// Absolute URL for a persisted calibration, matching the store's
     /// on-disk layout so the test cleans up after itself.
@@ -47,42 +78,44 @@ struct StudyModeGuardTests {
 
     @Test("studyMode bypasses the override; off-mode preserves override-wins")
     func resolvedStrokes_respectsStudyMode() throws {
-        // Unique letter name so no other test (or stale cache) collides.
-        let letter = "Z_\(UUID().uuidString.prefix(6))"
+        try withRestoredStudyMode {
+            // Unique letter name so no other test (or stale cache) collides.
+            let letter = "Z_\(UUID().uuidString.prefix(6))"
 
-        let vm = makeTestVM()
-        let art = vm.schriftArt   // persist under whatever the VM actually uses
+            let vm = makeTestVM()
+            let art = vm.schriftArt   // persist under whatever the VM actually uses
 
-        // Materialise a ONE-stroke (3-checkpoint) override on disk for
-        // this letter under the VM's active SchriftArt.
-        let store = CalibrationStore()
-        store.persist([[CGPoint(x: 0.0, y: 0.0),
-                        CGPoint(x: 0.5, y: 0.5),
-                        CGPoint(x: 1.0, y: 1.0)]],
-                      for: letter, schriftArt: art)
-        defer {
-            if let url = fontSpecificURL(letter: letter, schriftArt: art) {
-                try? FileManager.default.removeItem(at: url)
+            // Materialise a ONE-stroke (3-checkpoint) override on disk for
+            // this letter under the VM's active SchriftArt.
+            let store = CalibrationStore()
+            store.persist([[CGPoint(x: 0.0, y: 0.0),
+                            CGPoint(x: 0.5, y: 0.5),
+                            CGPoint(x: 1.0, y: 1.0)]],
+                          for: letter, schriftArt: art)
+            defer {
+                if let url = fontSpecificURL(letter: letter, schriftArt: art) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                // The persisted flag key is restored by withRestoredStudyMode.
             }
-            vm.studyMode = false   // restore the persisted flag key
+
+            let asset = makeBundleAsset(name: letter)   // 2 strokes (the bundle)
+
+            // Guard OFF: the on-device override (1 stroke) wins — the
+            // pre-guard behavior the shadow produced.
+            vm.studyMode = false
+            let offResolved = vm.resolvedStrokes(for: asset)
+            #expect(offResolved.strokes.count == 1,
+                    "studyMode==false must let the on-device calibration override win")
+
+            // Guard ON: the override is bypassed; the bundle (2 strokes) is
+            // returned verbatim — the identical frozen stimulus.
+            vm.studyMode = true
+            let onResolved = vm.resolvedStrokes(for: asset)
+            #expect(onResolved.strokes.count == 2,
+                    "studyMode==true must bypass the override and return the bundle")
+            #expect(onResolved == asset.strokes,
+                    "studyMode==true must return exactly the bundle strokes")
         }
-
-        let asset = makeBundleAsset(name: letter)   // 2 strokes (the bundle)
-
-        // Guard OFF: the on-device override (1 stroke) wins — the
-        // pre-guard behavior the shadow produced.
-        vm.studyMode = false
-        let offResolved = vm.resolvedStrokes(for: asset)
-        #expect(offResolved.strokes.count == 1,
-                "studyMode==false must let the on-device calibration override win")
-
-        // Guard ON: the override is bypassed; the bundle (2 strokes) is
-        // returned verbatim — the identical frozen stimulus.
-        vm.studyMode = true
-        let onResolved = vm.resolvedStrokes(for: asset)
-        #expect(onResolved.strokes.count == 2,
-                "studyMode==true must bypass the override and return the bundle")
-        #expect(onResolved == asset.strokes,
-                "studyMode==true must return exactly the bundle strokes")
     }
 }

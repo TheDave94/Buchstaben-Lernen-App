@@ -78,27 +78,28 @@ private final class TrackingMockAudio: AudioControlling {
 
 @Suite @MainActor struct TracingViewModelHapticTests {
 
-    @Test func beginTouch_firesStrokeBegan() {
-        let haptics = NullHapticEngine()
-        let vm = TracingViewModel(.stub.with(audio: TrackingMockAudio()).with(haptics: haptics).with(thesisCondition: .guidedOnly))
-        haptics.reset()
-        vm.beginTouch(at: CGPoint(x: 100, y: 100), t: CACurrentMediaTime())
-        #expect(haptics.firedEvents.contains(.strokeBegan),
-                "Expected strokeBegan, got \(haptics.firedEvents)")
+    /// Every VM in this suite names its `studyMode` rather than inheriting
+    /// the fixture's. These tests come in a matched pair — three asserting
+    /// that haptics fire and one asserting they do not — so which side of
+    /// the flag is under test is the entire point and must be stated, not
+    /// resolved from a default that differs between the normal and study
+    /// binaries.
+    private func makeVM(studyMode: Bool, haptics: NullHapticEngine) -> TracingViewModel {
+        TracingViewModel(
+            .stub
+                .with(audio: TrackingMockAudio())
+                .with(haptics: haptics)
+                .with(studyMode: studyMode)
+                .with(thesisCondition: .guidedOnly)
+        )
     }
 
-    @Test func prepare_calledOnInit() {
-        let haptics = NullHapticEngine()
-        _ = TracingViewModel(.stub.with(audio: TrackingMockAudio()).with(haptics: haptics).with(thesisCondition: .guidedOnly))
-        #expect(haptics.prepareCallCount == 1)
-    }
-
-    @Test func letterCompleted_firesLetterCompleted() {
-        let haptics = NullHapticEngine()
-        let vm = TracingViewModel(.stub.with(audio: TrackingMockAudio()).with(haptics: haptics).with(thesisCondition: .guidedOnly))
-        guard !vm.currentLetterName.isEmpty else { return }
-        haptics.reset()
-
+    /// Drives a complete trace along the stub letter's single horizontal
+    /// stroke, hitting all 50 checkpoints, and returns the resulting
+    /// progress. Shared by the completion test and its silenced twin so
+    /// both exercise byte-identical gestures.
+    @discardableResult
+    private func traceWholeLetter(_ vm: TracingViewModel) -> CGFloat {
         let canvasSize = CGSize(width: 400, height: 400)
         let w = canvasSize.width, h = canvasSize.height
         // Align the VM's canvasSize with the size used in updateTouch so the
@@ -110,17 +111,73 @@ private final class TrackingMockAudio: AudioControlling {
         let checkpointSequence: [CGPoint] = (0..<50).map { i in
             CGPoint(x: CGFloat(i) * 0.02 * w, y: 0.50 * h)
         }
-
         var t = CACurrentMediaTime()
         vm.beginTouch(at: checkpointSequence[0], t: t)
         for pt in checkpointSequence {
             t += 0.05
             vm.updateTouch(at: pt, t: t, canvasSize: canvasSize)
         }
-        #expect(Double(vm.progress) > 0.0,
-                "Progress=0 means no checkpoints hit. Events: \(haptics.firedEvents)")
-        #expect(haptics.firedEvents.contains(.letterCompleted),
-                "Expected letterCompleted. progress=\(vm.progress) events=\(haptics.firedEvents)")
+        return vm.progress
     }
 
+    // MARK: - Haptics fire outside a study session
+
+    @Test func beginTouch_firesStrokeBegan() {
+        let haptics = NullHapticEngine()
+        let vm = makeVM(studyMode: false, haptics: haptics)
+        haptics.reset()
+        vm.beginTouch(at: CGPoint(x: 100, y: 100), t: CACurrentMediaTime())
+        #expect(haptics.firedEvents.contains(.strokeBegan),
+                "Expected strokeBegan, got \(haptics.firedEvents)")
+    }
+
+    @Test func prepare_calledOnInit() {
+        let haptics = NullHapticEngine()
+        _ = makeVM(studyMode: false, haptics: haptics)
+        #expect(haptics.prepareCallCount == 1)
+    }
+
+    @Test func letterCompleted_firesLetterCompleted() {
+        let haptics = NullHapticEngine()
+        let vm = makeVM(studyMode: false, haptics: haptics)
+        guard !vm.currentLetterName.isEmpty else { return }
+        haptics.reset()
+
+        let progress = traceWholeLetter(vm)
+        #expect(Double(progress) > 0.0,
+                "Progress=0 means no checkpoints hit. Events: \(haptics.firedEvents)")
+        #expect(haptics.firedEvents.contains(.letterCompleted),
+                "Expected letterCompleted. progress=\(progress) events=\(haptics.firedEvents)")
+    }
+
+    // MARK: - ...and are silent inside one (C1)
+
+    /// The negative twin of the three above: same engine, same gestures,
+    /// opposite expectation.
+    ///
+    /// `StudyCleanConfigTests` already proves the VM *holds* a
+    /// `NullHapticEngine` under studyMode, and that a session drives zero
+    /// calls into an injected spy. Neither pins the specific interactions
+    /// that DO fire haptics outside study mode, which is what a regression
+    /// would actually change — a new fire() site added to `beginTouch` or
+    /// the completion path would slip past both. C1's guarantee is that the
+    /// silent arm is actually silent at the event level, and this is the
+    /// haptic half of it.
+    ///
+    /// The progress assertion is load-bearing: without it the test passes
+    /// vacuously whenever the trace fails to advance the tracker for some
+    /// unrelated reason. It must be true that on the non-study path both
+    /// `.strokeBegan` and `.letterCompleted` would have fired.
+    @Test func studyMode_firesNoHaptics() {
+        let haptics = NullHapticEngine()
+        let vm = makeVM(studyMode: true, haptics: haptics)
+        #expect(haptics.prepareCallCount == 0,
+                "studyMode must not even prime the injected engine")
+
+        let progress = traceWholeLetter(vm)
+        #expect(Double(progress) > 0.0,
+                "the trace must really advance the tracker, or this proves nothing")
+        #expect(haptics.firedEvents.isEmpty,
+                "no haptics in a study session — got \(haptics.firedEvents)")
+    }
 }

@@ -144,6 +144,69 @@ xcodebuild test -project Primae.xcodeproj -scheme Primae \
    gh run list --repo TheDave94/Primae --limit 3
    ```
 
+## Study builds
+
+A **study build** compiles the non-study surfaces out and defaults `studyMode`
+ON (B2). `STUDY_BUILD` arrives as an xcodebuild command-line override, because a
+project-level `SWIFT_ACTIVE_COMPILATION_CONDITIONS` reaches the app target but
+NOT the `PrimaeNative` SwiftPM package target (measured — spike `ed055db`).
+`scripts/build_study.sh` is the only blessed way to produce one.
+
+**Two configurations, and they are not interchangeable:**
+
+| | `Debug-Study` | `Release-Study` |
+|---|---|---|
+| Purpose | simulator + CI | **the pilot artefact** |
+| Optimisation | `-Onone` | `-O` |
+| `#if DEBUG` surfaces | compiled IN | compiled out |
+| `ENABLE_TESTABILITY` | YES | NO |
+
+`Debug-Study` is a DEBUG build. Do **not** put it on a child's iPad: `DEBUG` is
+defined, so every `#if DEBUG` surface ships. (One of those was a live numeric
+accuracy readout on the child-facing tracing canvas — now additionally gated on
+`!STUDY_BUILD`, but the general hazard stands.)
+
+**Producing the pilot artefact on a physical iPad** — a deliberate LOCAL act,
+never automated. Requires an unlocked, connected iPad:
+
+```bash
+PRIMAE_CONFIGURATION=Release-Study \
+PRIMAE_CODE_SIGNING=YES \
+PRIMAE_DESTINATION='platform=iOS,name=<iPad name>' \
+PRIMAE_DERIVED_DATA=/tmp/dd-pilot \
+  scripts/build_study.sh build -allowProvisioningUpdates
+```
+
+Then verify the artefact rather than trusting the label — the identity is a
+link-enforced symbol, so this is a fact the linker had to agree with:
+
+```bash
+nm -jU /tmp/dd-pilot/Build/Products/Release-Study-iphoneos/Primae.app/Primae \
+  | grep primae_build_identity
+# must print _primae_build_identity_study, and nothing else
+```
+
+Pressing ⌘R on the `Primae-Study` scheme does NOT produce a study build. It
+fails at link time instead: every configuration names its own
+`_primae_build_identity_{study,normal}` via `-u`, and the symbol exists only
+when the package itself was compiled with the matching flag. Fail-closed in both
+directions; CI proves both (CONTROL A and CONTROL B in `ios-build.yml`).
+
+### ⚠️ The pilot artefact is built by a toolchain CI does not exercise
+
+This workstation runs **Xcode 27 beta**; `ios-build.yml` pins **Xcode 26.4** on
+`macos-26`. A device build made here is therefore compiled by a compiler no CI
+job has ever run. That gap matters more than usual for `Release-Study`, because
+it is the only `-O` build in the project and `-O` + `-default-isolation MainActor`
+is the exact configuration of the known inliner crash swiftlang/swift#88173
+(ROADMAP F11).
+
+Until a toolchain pin lands (see ROADMAP F11), **record the toolchain with the
+artefact** — `build_study.sh` prints `xcodebuild -version` on every run, so
+capture that output alongside the build. A pilot binary whose compiler version
+is unknown is not a reproducible artefact, and the thesis will be asked which
+one built it.
+
 ## Credentials and the ELEVENLABS_API_KEY pattern
 
 *Based on `/opt/autocoder/CREDENTIAL_CONVENTIONS_TEMPLATE.md` (canonical), adapted for this repo.*

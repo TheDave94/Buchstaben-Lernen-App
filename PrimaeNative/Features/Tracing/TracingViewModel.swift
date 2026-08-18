@@ -433,7 +433,7 @@ public final class TracingViewModel {
     var studyMode: Bool = false {
         didSet {
             UserDefaults.standard.set(studyMode,
-                forKey: "de.flamingistan.primae.studyMode")
+                forKey: StudyBuild.studyModeDefaultsKey)
         }
     }
     /// Opt-in spaced-retrieval prompts before every Nth letter; off

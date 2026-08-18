@@ -121,3 +121,310 @@ jobs:
             /tmp/xcode-test.log
             /tmp/TestResults.xcresult
 
+  study_build:
+    name: "Study build — identity + compile-out verification (macos-26 / Xcode 26)"
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Select Xcode 26.4
+        run: sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
+
+      - name: Resolve Swift Package dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Primae/Primae.xcodeproj -scheme Primae
+
+      # ---------------------------------------------------------------
+      # Build identity is carried by a LINK-ENFORCED symbol pair: exactly
+      # one of _primae_build_identity_{study,normal} is compiled, and each
+      # app configuration names its own with `-u`. Both controls below
+      # must be shown capable of failing before the builds they protect
+      # mean anything — and both directions matter. An earlier version
+      # guarded only the study half, and it was the study half that
+      # silently lost its identity.
+      # ---------------------------------------------------------------
+      - name: "CONTROL A — Debug-Study without the flag must FAIL to link"
+        run: |
+          set -o pipefail
+          if xcodebuild build \
+               -project Primae/Primae.xcodeproj \
+               -scheme Primae-Study \
+               -configuration Debug-Study \
+               -destination 'generic/platform=iOS Simulator' \
+               -derivedDataPath /tmp/dd-guard-a \
+               CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO \
+               > /tmp/guard-a.log 2>&1; then
+            echo "GUARD BROKEN: a flagless Debug-Study build succeeded."
+            echo "That is the Cmd-R trap this guard exists to close."
+            tail -30 /tmp/guard-a.log
+            exit 1
+          fi
+          if grep -qi "primae_build_identity_study" /tmp/guard-a.log; then
+            echo "GUARD A OK — flagless study build fails at link on the missing study identity:"
+            grep -i -m3 "primae_build_identity_study" /tmp/guard-a.log
+          else
+            echo "GUARD A INCONCLUSIVE — build failed, but not on the identity symbol."
+            echo "Some other error is masking the guard; treat as broken."
+            tail -30 /tmp/guard-a.log
+            exit 1
+          fi
+
+      - name: "CONTROL B — Debug WITH the flag must FAIL to link"
+        run: |
+          set -o pipefail
+          # The mirror of A. Force STUDY_BUILD into a NORMAL configuration:
+          # the package then emits the study identity, Debug's `-u` still
+          # demands the normal one, and the link must fail. Without this,
+          # a normal binary asserts nothing about its own identity.
+          if xcodebuild build \
+               -project Primae/Primae.xcodeproj \
+               -scheme Primae \
+               -configuration Debug \
+               -destination 'generic/platform=iOS Simulator' \
+               -derivedDataPath /tmp/dd-guard-b \
+               SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) STUDY_BUILD' \
+               CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO \
+               > /tmp/guard-b.log 2>&1; then
+            echo "GUARD BROKEN: a flagged Debug build succeeded."
+            echo "A normal configuration accepted a study-compiled package."
+            tail -30 /tmp/guard-b.log
+            exit 1
+          fi
+          if grep -qi "primae_build_identity_normal" /tmp/guard-b.log; then
+            echo "GUARD B OK — flagged normal build fails at link on the missing normal identity:"
+            grep -i -m3 "primae_build_identity_normal" /tmp/guard-b.log
+          else
+            echo "GUARD B INCONCLUSIVE — build failed, but not on the identity symbol."
+            tail -30 /tmp/guard-b.log
+            exit 1
+          fi
+
+      - name: "Build & test the study build"
+        run: |
+          set -o pipefail
+          PRIMAE_DESTINATION='platform=iOS Simulator,name=iPad (A16),OS=latest' \
+          PRIMAE_DERIVED_DATA=/tmp/dd-study \
+            scripts/build_study.sh test \
+              -enableCodeCoverage NO \
+              2>&1 | tee /tmp/study-test.log | tail -20
+
+      # The artefact that gets SCANNED must be built the same way as the
+      # one it is compared against. The `test` action above produced an
+      # arm64-only launcher stub (218 KB, 702 symbols) whose real code
+      # lives elsewhere, while the normal `build` action produced a
+      # universal 22 MB executable — not comparable, and the reason the
+      # identity symbol appeared absent. Same action, same destination.
+      - name: "Build the study build for scanning (build action, generic destination)"
+        run: |
+          set -o pipefail
+          PRIMAE_DESTINATION='generic/platform=iOS Simulator' \
+          PRIMAE_DERIVED_DATA=/tmp/dd-study-scan \
+            scripts/build_study.sh build \
+              2>&1 | tee /tmp/study-scan-build.log | tail -5
+
+      # The PILOT ARTEFACT is Release-Study, and until now nothing had
+      # ever built it. A successful link is itself the identity proof:
+      # Release-Study carries `-u _primae_build_identity_study`, so it
+      # cannot link unless the package was compiled with the flag.
+      #
+      # This is also the only -O build in the whole workflow, which makes
+      # it the only job that would notice swiftlang/swift#88173 (an
+      # inliner crash with -default-isolation MainActor + -O, our exact
+      # configuration). It cannot speak for Xcode 27 — see ROADMAP F11 —
+      # but it stops Release-Study from being a configuration nobody has
+      # compiled.
+      - name: "Build the pilot artefact (Release-Study, -O)"
+        run: |
+          set -o pipefail
+          PRIMAE_CONFIGURATION=Release-Study \
+          PRIMAE_DESTINATION='generic/platform=iOS Simulator' \
+          PRIMAE_DERIVED_DATA=/tmp/dd-release-study \
+            scripts/build_study.sh build \
+              2>&1 | tee /tmp/release-study-build.log | tail -5
+
+      - name: "Build the normal build for comparison"
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Primae/Primae.xcodeproj \
+            -scheme Primae \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/dd-normal \
+            CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO \
+            2>&1 | tee /tmp/normal-build.log | tail -5
+
+      # ---------------------------------------------------------------
+      # Identity is checked with `nm`, not `strings`: a symbol's presence
+      # is a fact the linker was required to enforce.
+      #
+      # The scan reads the whole .app bundle, not just the executable. An
+      # app executable can be a launcher stub with the real code in a
+      # sibling Mach-O (ENABLE_DEBUG_DYLIB, embedded frameworks), and
+      # `nm` on a stub reports absence exactly like a missing symbol.
+      # A comparability check runs FIRST so that never again reads as an
+      # identity failure.
+      # ---------------------------------------------------------------
+      - name: "Build identity — nm scan over the shipped bundles"
+        run: |
+          {
+          rc=0
+
+          locate_app() { # $1=derivedData  $2=glob
+            hit=$(find "$1/Build/Products" -maxdepth 3 -type d -path "$2" 2>/dev/null | head -1)
+            [ -z "$hit" ] && hit=$(find "$1" -maxdepth 6 -type d -path "$2" 2>/dev/null | head -1)
+            FOUND="$hit"
+          }
+
+          machos() { # $1=bundle -> every Mach-O file inside it
+            find "$1" -type f 2>/dev/null | while read -r f; do
+              case "$(file -b "$f" 2>/dev/null)" in *Mach-O*) echo "$f";; esac
+            done
+          }
+
+          bundle_syms() { # $1=bundle -> total defined symbols across all Mach-O
+            machos "$1" | while read -r f; do nm -jU "$f" 2>/dev/null | wc -l; done \
+              | awk '{s+=$1} END{print s+0}'
+          }
+
+          describe() { # $1=label $2=bundle $3=derivedData $4=glob -> 0 ok / 1 not found
+            if [ -z "$2" ]; then
+              echo "FAIL  APP BUNDLE NOT FOUND for the $1 build."
+              echo "      Nothing matched  $4  under  $3"
+              echo "      This is a LOCATION failure. It is NOT a missing symbol."
+              echo "      What is actually present:"
+              present=$(find "$3/Build/Products" -maxdepth 3 2>/dev/null | head -40)
+              if [ -n "$present" ]; then echo "$present" | sed 's/^/      /'
+              else echo "      (nothing — $3/Build/Products is empty or absent)"; fi
+              return 1
+            fi
+            echo "$1 bundle: $2"
+            machos "$2" | while read -r f; do
+              echo "    $(basename "$f")  $(stat -f%z "$f") bytes  [$(lipo -archs "$f" 2>/dev/null || echo '?')]  $(nm -jU "$f" 2>/dev/null | wc -l | tr -d ' ') defined symbols"
+            done
+            echo "    TOTAL defined symbols in bundle: $(bundle_syms "$2")"
+            return 0
+          }
+
+          locate_app /tmp/dd-study-scan '*/Debug-Study-*/Primae.app'; STUDY="$FOUND"
+          locate_app /tmp/dd-normal    '*/Debug-iphone*/Primae.app';  NORMAL="$FOUND"
+
+          describe study  "$STUDY"  /tmp/dd-study-scan '*/Debug-Study-*/Primae.app' || rc=1
+          describe normal "$NORMAL" /tmp/dd-normal     '*/Debug-iphone*/Primae.app' || rc=1
+
+          # -------------------------------------------------------------
+          # Comparability. Two builds of the same app cannot differ by an
+          # order of magnitude in symbol count; if they do, one of them is
+          # a stub or is missing the package, and any identity result read
+          # off it is meaningless. This is asserted BEFORE identity so the
+          # failure names the real problem.
+          # -------------------------------------------------------------
+          if [ -n "$STUDY" ] && [ -n "$NORMAL" ]; then
+            SS=$(bundle_syms "$STUDY"); NS=$(bundle_syms "$NORMAL")
+            echo "comparability: study=$SS symbols, normal=$NS symbols"
+            if [ "$SS" -eq 0 ] || [ "$NS" -eq 0 ]; then
+              echo "FAIL  IMPLAUSIBLE BUNDLE: one build has NO defined symbols at all."
+              rc=1
+            else
+              hi=$SS; lo=$NS
+              if [ "$NS" -gt "$SS" ]; then hi=$NS; lo=$SS; fi
+              if [ $(( hi / lo )) -ge 10 ]; then
+                echo "FAIL  IMPLAUSIBLY FEW SYMBOLS: the two builds of the same app differ"
+                echo "      by ${hi}/${lo} = $(( hi / lo ))x in defined-symbol count."
+                echo "      One of these is a launcher stub or is missing the PrimaeNative"
+                echo "      package entirely. Any identity verdict read off it is void."
+                rc=1
+              fi
+            fi
+          fi
+
+          # -------------------------------------------------------------
+          # Identity, searched across every Mach-O in the bundle.
+          # -------------------------------------------------------------
+          identity_hits() { # $1=bundle $2=half -> "file" lines carrying that identity
+            machos "$1" | while read -r f; do
+              if nm -jU "$f" 2>/dev/null | grep -qx "_primae_build_identity_$2"; then echo "$f"; fi
+            done
+          }
+
+          check() { # $1=label $2=bundle $3=expected half $4=forbidden half
+            [ -z "$2" ] && return 0
+            want=$(identity_hits "$2" "$3")
+            deny=$(identity_hits "$2" "$4")
+            if [ -z "$want" ]; then
+              echo "FAIL  $1 bundle carries no _primae_build_identity_$3 in ANY Mach-O file."
+              echo "      The link demanded it via -u and succeeded, so compare the"
+              echo "      per-file symbol counts above — a stub will show far too few."
+              rc=1
+            else
+              echo "ok    $1 identity _primae_build_identity_$3 found in:"
+              echo "$want" | sed 's/^/        /'
+            fi
+            if [ -n "$deny" ]; then
+              echo "FAIL  $1 bundle ALSO carries _primae_build_identity_$4 in:"
+              echo "$deny" | sed 's/^/        /'
+              rc=1
+            fi
+          }
+          check study  "$STUDY"  study  normal
+          check normal "$NORMAL" normal study
+
+          if [ $rc -eq 0 ]; then
+            echo "Build identity OK — each bundle carries exactly its own."
+          fi
+
+          # -------------------------------------------------------------
+          # Compiled-out surfaces. Each entry is a substring of the Swift
+          # mangled name of a declaration that must exist in the normal
+          # build and NOT in the study one. The "missing from normal too"
+          # branch is what stops an entry from passing vacuously after a
+          # rename — if it fires, fix the pattern, never delete the entry.
+          # -------------------------------------------------------------
+          sym_in_bundle() { # $1=bundle $2=pattern -> files whose symbols match
+            machos "$1" | while read -r f; do
+              if nm -jU "$f" 2>/dev/null | grep -q "$2"; then echo "$f"; fi
+            done
+          }
+
+          SURFACES="debugPercentReadout"
+          if [ -n "$STUDY" ] && [ -n "$NORMAL" ]; then
+            for sym in $SURFACES; do
+              in_study=$(sym_in_bundle "$STUDY" "$sym")
+              in_normal=$(sym_in_bundle "$NORMAL" "$sym")
+              if [ -n "$in_study" ]; then
+                echo "FAIL  $sym is still IN the study bundle:"
+                echo "$in_study" | sed 's/^/        /'
+                rc=1
+              elif [ -z "$in_normal" ]; then
+                echo "FAIL  $sym is missing from the NORMAL bundle too — this entry is"
+                echo "      asserting nothing. Either the declaration was renamed, or it"
+                echo "      is not emitted under this name. Fix the pattern; do not"
+                echo "      delete the entry."
+                rc=1
+              else
+                echo "ok    $sym absent from study, present in normal"
+              fi
+            done
+          fi
+
+          echo "SCAN_RESULT=$rc"
+          } 2>&1 | tee /tmp/identity-scan.log
+          grep -qx 'SCAN_RESULT=0' /tmp/identity-scan.log
+
+      - name: Upload study build logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: study-build-logs
+          if-no-files-found: warn
+          path: |
+            /tmp/guard-a.log
+            /tmp/guard-b.log
+            /tmp/study-test.log
+            /tmp/normal-build.log
+            /tmp/study-scan-build.log
+            /tmp/release-study-build.log
+            /tmp/identity-scan.log
+

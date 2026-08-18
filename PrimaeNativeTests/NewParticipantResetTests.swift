@@ -13,7 +13,7 @@ import Foundation
 
 @Suite(.serialized) @MainActor struct NewParticipantResetTests {
 
-    private let studyModeKey   = "de.flamingistan.primae.studyMode"
+    private let studyModeKey   = StudyBuild.studyModeDefaultsKey
     private let schriftArtKey  = "de.flamingistan.primae.selectedSchriftArt"
     private let retrievalKey   = "de.flamingistan.primae.retrievalCounter"
 

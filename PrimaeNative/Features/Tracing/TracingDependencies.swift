@@ -129,9 +129,10 @@ struct TracingDependencies {
         enablePhonemeMode: Bool = UserDefaults.standard.bool(
             forKey: "de.flamingistan.primae.enablePhonemeMode"
         ),
-        studyMode: Bool = UserDefaults.standard.bool(
-            forKey: "de.flamingistan.primae.studyMode"
-        ),
+        // Default-when-unset, same shape as `enableFreeformMode` above:
+        // ON in a study build (B2), OFF otherwise, and a stored value
+        // always wins. See `StudyBuild.resolveStudyMode`.
+        studyMode: Bool = StudyBuild.resolveStudyMode(),
         enableRetrievalPrompts: Bool = UserDefaults.standard.bool(
             forKey: "de.flamingistan.primae.enableRetrievalPrompts"
         ),

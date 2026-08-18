@@ -198,6 +198,15 @@ extension TracingDependencies {
             // Pin the trained subset for the same reason (the default
             // reads ParticipantStore). "AFI" = allSubsets[0].
             trainedSubset:        TrainedLetterSubset.allSubsets[0],
+            // Pin studyMode for the same reason as the three axes above,
+            // plus one specific to it: since B2 the default resolves ON in
+            // a study build, so an unpinned fixture makes every VM-building
+            // test behave differently depending on which binary compiled
+            // it — which is how three haptic tests started failing in the
+            // study build only. Tests that mean to exercise studyMode say
+            // so at the call site with `.with(studyMode:)`, in whichever
+            // direction they are asserting.
+            studyMode:            false,
             letterRecognizer:     StubLetterRecognizer(),
             speech:               NullSpeechSynthesizer(),
             // Real AVAudioPlayer.play() in PromptPlayer adds enough
@@ -236,6 +245,9 @@ extension TracingDependencies {
     }
     func with(audioCondition: PilotAudioCondition) -> TracingDependencies {
         var copy = self; copy.audioCondition = audioCondition; return copy
+    }
+    func with(studyMode: Bool) -> TracingDependencies {
+        var copy = self; copy.studyMode = studyMode; return copy
     }
     func with(trainedSubset: TrainedLetterSubset) -> TracingDependencies {
         var copy = self; copy.trainedSubset = trainedSubset; return copy

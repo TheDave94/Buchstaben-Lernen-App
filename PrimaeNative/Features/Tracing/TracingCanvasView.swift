@@ -425,12 +425,8 @@ private struct ProgressPill: View, Equatable {
                     .frame(width: geo.size.width * p)
             }
             .frame(height: 8)
-            #if DEBUG
-            // Numeric readout for tuning; Release strips this branch.
-            Text("\(Int(p * 100))%")
-                .font(.caption2.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.primary)
-                .padding(.leading, 8)
+            #if DEBUG && !STUDY_BUILD
+            debugPercentReadout(p)
             #endif
         }
         .frame(width: 88, height: 8)
@@ -444,6 +440,33 @@ private struct ProgressPill: View, Equatable {
         // Status is spoken via ChildSpeechLibrary; pill is decorative.
         .accessibilityHidden(true)
     }
+
+    #if DEBUG && !STUDY_BUILD
+    /// Numeric readout for tuning. Excluded from study builds as well as
+    /// from Release.
+    ///
+    /// The docstring on this type says "no visible number — 5–6 yr-olds
+    /// don't read percentages", and the original comment here said
+    /// "Release strips this branch". That stopped being true the moment a
+    /// Debug-Study configuration existed: a study build is a DEBUG build,
+    /// so every child in the pilot would have seen a live percentage of
+    /// their own accuracy on the canvas. That is text on a child-facing
+    /// screen against the stated convention, and an uncontrolled
+    /// feedback signal that varies with performance in a study whose
+    /// post-trial feedback is otherwise stripped for exactly that reason
+    /// (audit C2).
+    ///
+    /// Split into a named declaration rather than left inline so it emits
+    /// a symbol the CI compile-out scan can assert on — present in the
+    /// normal binary, absent from the study one.
+    @ViewBuilder
+    private func debugPercentReadout(_ p: CGFloat) -> some View {
+        Text("\(Int(p * 100))%")
+            .font(.caption2.weight(.semibold).monospacedDigit())
+            .foregroundStyle(.primary)
+            .padding(.leading, 8)
+    }
+    #endif
 }
 
 // MARK: - Direct phase dot overlay

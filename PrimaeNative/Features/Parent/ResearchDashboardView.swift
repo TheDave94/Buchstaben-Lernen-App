@@ -19,6 +19,9 @@ struct ResearchDashboardView: View {
     @State private var newParticipantShareURL: URL?
     @State private var showNewParticipantConfirm = false
     @State private var showRelaunchAlert = false
+    /// Proctor-facing studyMode as STORED, which is not necessarily what
+    /// this session is running. See `studyDeviceSection`.
+    @State private var studyModePending = StudyBuild.resolveStudyMode()
     @State private var showExportError = false
 
     var body: some View {
@@ -124,21 +127,47 @@ struct ResearchDashboardView: View {
     /// destructive-confirm pattern. Scoped, like the overlay, to the
     /// active `SchriftArt` (the pilot runs Druckschrift).
     private var studyDeviceSection: some View {
-        @Bindable var vm = vm
-        return VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
             sectionHeader(title: "Studien-Gerät vorbereiten",
                           subtitle: "Studienmodus aktivieren und gespeicherte Kalibrierungen entfernen, damit jedes Kind exakt das gebündelte Stimulus-Set nachspurt")
-            Toggle(isOn: $vm.studyMode) {
+            // Writes the STORED value only — never `vm.studyMode` on the
+            // live session. Most of what studyMode means is captured at
+            // `TracingViewModel.init`: the null haptic/speech/prompt
+            // engines, the fixed adaptation policy, the pinned SchriftArt
+            // and letter ordering. Only the rest (stimulus resolution,
+            // practice pool, retry and post-trial feedback suppression)
+            // reads the live property. Binding the toggle straight to it
+            // therefore produced a session that filtered letters and
+            // stripped feedback while still firing haptics and TTS with
+            // an unpinned SchriftArt — invalid study data that looked
+            // correct from the toggle. The three sibling research
+            // controls in SettingsView already say "wirksam beim
+            // nächsten App-Start"; this one now behaves that way too.
+            Toggle(isOn: Binding(
+                get: { studyModePending },
+                set: {
+                    studyModePending = $0
+                    UserDefaults.standard.set($0, forKey: StudyBuild.studyModeDefaultsKey)
+                })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Studienmodus")
                         .font(.body(FontSize.md, weight: .semibold))
-                    Text(vm.studyMode
+                    Text(studyModePending
                          ? "An — dieses Gerät spurt exakt das gebündelte Stimulus-Set nach; gespeicherte Kalibrierungs-Overrides werden umgangen."
                          : "Aus — normale Kalibrierung; gespeicherte Overrides gewinnen.")
                         .font(.caption)
                         .foregroundStyle(Color.inkSoft)
+                    if studyModePending != vm.studyMode {
+                        Label(
+                            "Wirksam beim nächsten App-Start. Diese Sitzung läuft weiter mit Studienmodus \(vm.studyMode ? "An" : "Aus") — App vor der Session vollständig schließen und neu starten.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
                 }
             }
+            .accessibilityHint("Nur für Studienleitung. Legt fest, ob dieses Gerät exakt das gebündelte Stimulus-Set nachspurt und sämtliches Feedback stummgeschaltet wird. Änderung wird beim nächsten App-Start wirksam.")
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(Color(.secondarySystemBackground),

@@ -46,6 +46,14 @@ struct ParentAreaView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Eltern-Bereich")
+            // B1 — permanent build-identity marker. A study iPad must
+            // never be mistakable for a normal one at a glance, and the
+            // proctor sees this screen at every handoff. The whole
+            // modifier is inside the #if, so the normal build's view
+            // tree is untouched rather than carrying an empty inset.
+            #if STUDY_BUILD
+            .safeAreaInset(edge: .top) { studyBuildBanner }
+            #endif
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Zurück zur App") { dismiss() }
@@ -56,6 +64,30 @@ struct ParentAreaView: View {
             detailView(for: selection ?? .overview)
         }
     }
+
+    #if STUDY_BUILD
+    /// Red band naming the binary. Reads the identity from
+    /// `StudyBuild.marker` rather than a literal, so the text cannot
+    /// drift away from what was actually compiled.
+    private var studyBuildBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "testtube.2")
+            Text("STUDY BUILD")
+                .font(.system(.subheadline, design: .monospaced).weight(.bold))
+            Spacer()
+            Text(StudyBuild.marker)
+                .font(.system(.caption2, design: .monospaced))
+                .opacity(0.85)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(Color.red.opacity(0.85))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Studien-Build. Nicht-Studien-Funktionen sind in diesem Build nicht enthalten.")
+    }
+    #endif
 
     @ViewBuilder
     private func detailView(for section: Section) -> some View {
