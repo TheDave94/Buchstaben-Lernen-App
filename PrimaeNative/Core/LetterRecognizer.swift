@@ -10,6 +10,7 @@ import CoreGraphics
 import CoreML
 import Foundation
 import OSLog
+import Synchronization
 import Vision
 
 // MARK: - Classifier intermediate type
@@ -109,16 +110,31 @@ private nonisolated(unsafe) let recognizerLogger = Logger(
 /// Declared `nonisolated` so the hot path can run inside a detached
 /// Task on the cooperative pool, away from the package-level
 /// `defaultIsolation(MainActor.self)`.
-nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, @unchecked Sendable {
+///
+/// Plain `Sendable`, not `@unchecked`: both stored properties are `let`
+/// and Sendable (a Sendable struct and a `@Sendable` closure), and the
+/// shared cache is a `Mutex` whose protection the type system knows
+/// about. The `@unchecked` this carried was load-bearing only for the
+/// two `nonisolated(unsafe)` statics it used to have.
+nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendable {
 
     // MARK: Static model cache
 
-    /// `nonisolated(unsafe)` because Vision model handles are
-    /// expensive to load (~50 ms) and safe to share across threads
-    /// after construction. Guarded by `loadLock` on first touch.
-    private nonisolated(unsafe) static var sharedModel: VNCoreMLModel?
-    private nonisolated(unsafe) static var didAttemptLoad = false
-    private static let loadLock = NSLock()
+    /// The two pieces of cache state travel together — a handle and
+    /// whether loading was attempted — so they live in one value behind
+    /// one `Mutex` rather than as two `nonisolated(unsafe)` statics that
+    /// a reader has to notice are covered by a third static's lock.
+    ///
+    /// `Mutex` over `NSLock` for the reason `AudioEngine` already uses it
+    /// (AudioEngine.swift:13): the protection is expressed in the type,
+    /// so the invariant is checked rather than commented. Vision model
+    /// handles are expensive (~50 ms) and safe to share once built; the
+    /// mutex covers construction, not use.
+    private struct ModelCache {
+        var model: VNCoreMLModel?
+        var didAttemptLoad = false
+    }
+    private static let modelCache = Mutex<ModelCache>(ModelCache())
 
     private let calibrator: ConfidenceCalibrator
     /// Classification is the only Vision-touching step — taking it as
@@ -206,13 +222,17 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, @unche
 
     // MARK: - Model loading
 
+    /// `loadModel()` runs INSIDE the lock, exactly as it did under
+    /// NSLock: the point is that the second caller waits for the first
+    /// load rather than starting its own. It does not call back into
+    /// this function, so holding the lock across it cannot re-enter.
     private static func loadModelIfNeeded() -> VNCoreMLModel? {
-        loadLock.lock()
-        defer { loadLock.unlock() }
-        if didAttemptLoad { return sharedModel }
-        didAttemptLoad = true
-        sharedModel = loadModel()
-        return sharedModel
+        modelCache.withLock { cache in
+            if cache.didAttemptLoad { return cache.model }
+            cache.didAttemptLoad = true
+            cache.model = loadModel()
+            return cache.model
+        }
     }
 
     private static func loadModel() -> VNCoreMLModel? {
