@@ -25,7 +25,15 @@ struct SettingsView: View {
     fileprivate static let shortOnboardingKey = "de.flamingistan.primae.useShortOnboarding"
 
     var body: some View {
-        Form {
+        // `@Bindable` is Observation's purpose-built projection for an
+        // @Observable reference type: `$vm.x` yields the same Binding the
+        // hand-written get/set pairs below used to build by hand. Only
+        // the identity pass-throughs are converted — the bindings with
+        // side effects stay explicit, because hiding a UserDefaults write
+        // or a two-property update behind `$` would make them harder to
+        // find, not easier.
+        @Bindable var vm = vm
+        return Form {
             Section("Schriftart") {
                 ForEach(SchriftArt.allCases.filter { $0 == .druckschrift || $0 == .schreibschrift }, id: \.self) { art in
                     schriftArtRow(art)
@@ -37,19 +45,13 @@ struct SettingsView: View {
                 }
             }
             Section("Freies Schreiben") {
-                Toggle("Freies Schreiben erlauben", isOn: Binding(
-                    get: { vm.enableFreeformMode },
-                    set: { vm.enableFreeformMode = $0 }
-                ))
+                Toggle("Freies Schreiben erlauben", isOn: $vm.enableFreeformMode)
                 .accessibilityHint("Zeigt einen zusätzlichen Modus, in dem das Kind auf einem leeren Blatt schreiben und die KI den Buchstaben erkennen kann")
             }
             Section("Schreibrichtung") {
                 // Backward chaining for direct phase only: taps the
                 // last stroke first (Spooner 2014). Off by default.
-                Toggle("Letzten Strich zuerst", isOn: Binding(
-                    get: { vm.enableBackwardChaining },
-                    set: { vm.enableBackwardChaining = $0 }
-                ))
+                Toggle("Letzten Strich zuerst", isOn: $vm.enableBackwardChaining)
                 .accessibilityHint("Vertauscht die Reihenfolge der Punkte in der Richtung-lernen-Phase: zuerst der letzte Strich, dann rückwärts. Hilft bei Schwierigkeiten mit der Bewegungsplanung.")
                 Text("Direkt-Phase nur. Bei Bewegungsplanungs-Schwierigkeiten (z. B. motorische Förderung) aktivieren.")
                     .font(.caption)
@@ -58,10 +60,7 @@ struct SettingsView: View {
             Section("Erinnerungstest") {
                 // Spaced-retrieval prompt every Nth letter selection
                 // (Roediger & Karpicke 2006). Default off.
-                Toggle("Erinnerungstest aktivieren", isOn: Binding(
-                    get: { vm.enableRetrievalPrompts },
-                    set: { vm.enableRetrievalPrompts = $0 }
-                ))
+                Toggle("Erinnerungstest aktivieren", isOn: $vm.enableRetrievalPrompts)
                 .accessibilityHint("Vor manchen Buchstaben fragt die App, welcher Buchstabe gehört wurde, mit drei Antwortmöglichkeiten. Stärkt das Gedächtnis.")
                 Text("Vor jedem dritten Buchstaben fragt die App: Welcher Buchstabe? Drei Wahlknöpfe. Stärkt das Langzeitgedächtnis (Roediger & Karpicke 2006).")
                     .font(.caption)
@@ -72,10 +71,7 @@ struct SettingsView: View {
                 // instead of its name (/aː/). Falls back to the name
                 // set when no phoneme recording exists, so the toggle
                 // never produces silence.
-                Toggle("Lautwert wiedergeben", isOn: Binding(
-                    get: { vm.enablePhonemeMode },
-                    set: { vm.enablePhonemeMode = $0 }
-                ))
+                Toggle("Lautwert wiedergeben", isOn: $vm.enablePhonemeMode)
                 .accessibilityHint("Spielt den Lautwert (z. B. /a/ wie in Affe) statt des Buchstabennamens (z. B. \"Aaa\"). Hilfreich für die phonologische Bewusstheit.")
                 Text("Spielt den Laut (/a/ wie in Affe) statt des Namens (/aː/). Phonologische Bewusstheit nach Adams 1990.")
                     .font(.caption)
@@ -98,10 +94,7 @@ struct SettingsView: View {
                 .accessibilityHint("Wie schnell die App spricht. Für jüngere Kinder \"Langsam\" wählen.")
             }
             Section("Anzeige") {
-                Toggle("Geisterbuchstabe anzeigen", isOn: Binding(
-                    get: { vm.showGhost },
-                    set: { vm.showGhost = $0 }
-                ))
+                Toggle("Geisterbuchstabe anzeigen", isOn: $vm.showGhost)
                 .accessibilityHint("Zeigt einen halbtransparenten Buchstaben während des Nachfahrens")
                 Text("Zeigt einen halbtransparenten Buchstaben während des Nachfahrens.")
                     .font(.caption)
@@ -121,10 +114,7 @@ struct SettingsView: View {
                     .foregroundStyle(Color.inkSoft)
             }
             Section("Forschung") {
-                Toggle("Schreiben auf Papier", isOn: Binding(
-                    get: { vm.enablePaperTransfer },
-                    set: { vm.enablePaperTransfer = $0 }
-                ))
+                Toggle("Schreiben auf Papier", isOn: $vm.enablePaperTransfer)
                 .accessibilityHint("Nach dem freien Schreiben wird das Kind gebeten, den Buchstaben auf Papier zu schreiben")
 
                 Toggle("Studienteilnahme (A/B-Arm)", isOn: Binding(
