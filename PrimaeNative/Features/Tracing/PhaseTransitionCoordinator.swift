@@ -199,8 +199,16 @@ final class PhaseTransitionCoordinator {
         let now = CACurrentMediaTime()
         let liveSlice = vm.letterLoadTime.map { now - $0 } ?? 0
         let duration = vm.letterActiveTimeAccumulated + liveSlice
+        // Iterate the TYPED scores. `rawName` is applied once, at the
+        // single point the string is actually needed (the store's `phase`
+        // argument), so every branch below compares LearningPhase values
+        // the compiler checks rather than strings it cannot.
+        let phaseScores = vm.phaseController.phaseScores
+        let didFreeWrite = phaseScores.keys.contains(.freeWrite)
+        // Still needed as [String: Double] for `commitCompletion`, whose
+        // signature is the persisted `LetterProgress.phaseScores` shape.
         let scores: [String: Double] = Dictionary(
-            uniqueKeysWithValues: vm.phaseController.phaseScores.map { ($0.key.rawName, Double($0.value)) }
+            uniqueKeysWithValues: phaseScores.map { ($0.key.rawName, Double($0.value)) }
         )
         // Attach the latest recognition reading to the freeWrite row so
         // per-session recognition is recoverable from the CSV; other
@@ -220,8 +228,7 @@ final class PhaseTransitionCoordinator {
         // crash can't leave a record linked to a missing trace) and BEFORE
         // the buffer clears on the next letter load. freeWrite-only; nil if
         // no freeWrite phase ran or the buffer is empty.
-        let freeWriteTraceID: UUID? = scores.keys.contains(LearningPhase.freeWrite.rawName)
-            ? vm.captureFreeWriteTrace() : nil
+        let freeWriteTraceID: UUID? = didFreeWrite ? vm.captureFreeWriteTrace() : nil
         // Measured-phase time: first-to-last raw freeWrite sample
         // (CACurrentMediaTime deltas), end-inclusive — see
         // `FreeWritePhaseRecorder.measuredSpanSeconds` for why the span
@@ -238,25 +245,29 @@ final class PhaseTransitionCoordinator {
         // freeWrite, so this reads the freeWrite pass alone and not the
         // guided pass before it. Saturates at 1.0 — kept for continuity
         // with earlier rounds, not as the primary.
-        let freeWriteCoverage: Double? = scores.keys.contains(LearningPhase.freeWrite.rawName)
+        let freeWriteCoverage: Double? = didFreeWrite
             ? Double(vm.grid.aggregateProgress) : nil
-        for (phase, phaseScore) in scores {
+        for (phase, phaseScore) in phaseScores {
+            // One typed comparison gates all six measurement fields. A
+            // wrong phase here is the defect PhaseRecordAttachmentTests
+            // exists to catch; a wrong *spelling* is no longer possible.
+            let isFreeWrite = phase == .freeWrite
             vm.dashboardStore.recordPhaseSession(
                 letter: vm.currentLetterName,
-                phase: phase,
+                phase: phase.rawName,
                 completed: true,
-                score: phaseScore,
+                score: Double(phaseScore),
                 schedulerPriority: vm.lastScheduledLetterPriority,
                 condition: vm.thesisCondition,
                 audioCondition: vm.audioCondition,
-                assessment: phase == LearningPhase.freeWrite.rawName ? vm.lastWritingAssessment : nil,
-                recognition: phase == LearningPhase.freeWrite.rawName ? freeWriteRecognition : nil,
+                assessment: isFreeWrite ? vm.lastWritingAssessment : nil,
+                recognition: isFreeWrite ? freeWriteRecognition : nil,
                 inputDevice: device,
-                rawTraceID: phase == LearningPhase.freeWrite.rawName ? freeWriteTraceID : nil,
+                rawTraceID: isFreeWrite ? freeWriteTraceID : nil,
                 trainedSubset: vm.trainedSubset.rawValue,
-                phaseDurationSeconds: phase == LearningPhase.freeWrite.rawName ? freeWriteDuration : nil,
-                frechetDistance: phase == LearningPhase.freeWrite.rawName ? freeWriteFrechet : nil,
-                checkpointCoverage: phase == LearningPhase.freeWrite.rawName ? freeWriteCoverage : nil
+                phaseDurationSeconds: isFreeWrite ? freeWriteDuration : nil,
+                frechetDistance: isFreeWrite ? freeWriteFrechet : nil,
+                checkpointCoverage: isFreeWrite ? freeWriteCoverage : nil
             )
         }
         commitCompletion(letter: vm.currentLetterName,
