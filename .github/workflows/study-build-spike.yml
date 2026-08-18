@@ -1,0 +1,139 @@
+# SPIKE ONLY — delete before the real STUDY_BUILD work lands.
+#
+# One question: does a `STUDY_BUILD` compilation condition set by the
+# Xcode project reach the PrimaeNative *SwiftPM package* target?
+#
+# Three builds, each reporting independently (no early exit), so one
+# run answers all of it:
+#   M1  scheme Primae-Study  — flag set at project level only
+#   M2  scheme Primae        — flag forced via xcodebuild CLI override
+#   NEG scheme Primae        — no flag at all; the scan MUST report OFF
+#
+# NEG is the point of the exercise: a scan that has only ever been run
+# against a binary expected to pass is not evidence.
+
+name: "STUDY_BUILD mechanism spike"
+on:
+  push:
+    branches: ["ux/**"]
+  workflow_dispatch:
+
+jobs:
+  spike:
+    name: "Flag propagation into the SwiftPM package"
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Select Xcode 26.4
+        run: sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
+
+      - name: Resolve Swift Package dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Primae/Primae.xcodeproj -scheme Primae
+
+      # ---- M1: project-level SWIFT_ACTIVE_COMPILATION_CONDITIONS ----
+      - name: "M1 — build Primae-Study (Debug-Study)"
+        id: m1
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Primae/Primae.xcodeproj \
+            -scheme Primae-Study \
+            -configuration Debug-Study \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/dd-m1 \
+            CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO \
+            2>&1 | tee /tmp/m1.log | tail -5
+
+      # ---- M2: xcodebuild command-line override on the normal scheme ----
+      - name: "M2 — build Primae with CLI override"
+        id: m2
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Primae/Primae.xcodeproj \
+            -scheme Primae \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/dd-m2 \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) STUDY_BUILD' \
+            CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO \
+            2>&1 | tee /tmp/m2.log | tail -5
+
+      # ---- NEG: no flag anywhere ----
+      - name: "NEG — build Primae with no flag"
+        id: neg
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Primae/Primae.xcodeproj \
+            -scheme Primae \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/dd-neg \
+            CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO \
+            2>&1 | tee /tmp/neg.log | tail -5
+
+      - name: "Read the canaries out of each binary"
+        run: |
+          scan () {
+            local label="$1" dd="$2" cfg="$3"
+            local bin
+            bin=$(find "$dd/Build/Products/$cfg-iphonesimulator/Primae.app" \
+                    -maxdepth 1 -name Primae -type f 2>/dev/null | head -1)
+            if [ -z "$bin" ]; then
+              echo "$label: NO BINARY (build failed?)"
+              return
+            fi
+            local pkg app
+            pkg=$(strings "$bin" | grep -o 'PRIMAE_CANARY_PKG_O[NF]*' | sort -u | tr '\n' ' ')
+            app=$(strings "$bin" | grep -o 'PRIMAE_CANARY_APP_O[NF]*' | sort -u | tr '\n' ' ')
+            echo "$label: package=[${pkg:-none}] app=[${app:-none}]"
+          }
+          echo "=== canary scan ==="
+          scan "M1  (project-level flag) " /tmp/dd-m1  Debug-Study
+          scan "M2  (CLI override)       " /tmp/dd-m2  Debug
+          scan "NEG (no flag)            " /tmp/dd-neg Debug
+
+          echo
+          echo "=== did swiftc actually receive -D STUDY_BUILD when compiling the package? ==="
+          for f in m1 m2 neg; do
+            n=$(grep -cE -- "-D ?STUDY_BUILD" /tmp/$f.log || true)
+            pkg=$(grep -E -- "-D ?STUDY_BUILD" /tmp/$f.log | grep -c "PrimaeNative" || true)
+            echo "$f: swiftc invocations with -D STUDY_BUILD = $n (of which mention PrimaeNative = $pkg)"
+          done
+
+          # The scan must be able to report a negative. If the no-flag
+          # build reads ON, the scan is measuring nothing and every
+          # other line above is worthless.
+          echo
+          NEGBIN=$(find /tmp/dd-neg/Build/Products/Debug-iphonesimulator/Primae.app \
+                     -maxdepth 1 -name Primae -type f 2>/dev/null | head -1)
+          if [ -n "$NEGBIN" ]; then
+            if strings "$NEGBIN" | grep -q 'PRIMAE_CANARY_PKG_OFF'; then
+              echo "NEG control: OK — no-flag build reads OFF, so the scan discriminates."
+            else
+              echo "NEG control: BROKEN — no-flag build did not read OFF. Scan is not evidence."
+              exit 1
+            fi
+          else
+            echo "NEG control: INCONCLUSIVE — no-flag build produced no binary."
+            exit 1
+          fi
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: study-build-spike-logs
+          if-no-files-found: warn
+          path: |
+            /tmp/m1.log
+            /tmp/m2.log
+            /tmp/neg.log

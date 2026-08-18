@@ -25,7 +25,21 @@ struct PrimaeApp: App {
     /// Stored under `primaeAppearance`: "system" / "light" / "dark".
     @AppStorage(PrimaeAppearance.storageKey) private var appearance: String = "system"
 
+    /// SPIKE ONLY — app-target side of the flag check. If this reads
+    /// OFF while the package reads ON (or vice versa) the two targets
+    /// disagree about the flag, which is the failure we're hunting.
+    static let appCanary: String = {
+        #if STUDY_BUILD
+        return "PRIMAE_CANARY_APP_ON"
+        #else
+        return "PRIMAE_CANARY_APP_OFF"
+        #endif
+    }()
+
     init() {
+        // SPIKE ONLY — force both canary object files to link.
+        _ = PrimaeApp.appCanary
+        _ = PrimaeNative.StudyBuildCanary.marker
         // Register SPM-bundled fonts with CoreText. `UIAppFonts` only
         // covers main-bundle fonts; the SPM resource bundle needs
         // `CTFontManagerRegisterFontsForURLs`. Idempotent.

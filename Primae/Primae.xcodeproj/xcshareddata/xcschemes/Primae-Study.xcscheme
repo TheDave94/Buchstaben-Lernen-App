@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme
+   LastUpgradeVersion = "2640"
+   version = "1.3">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "DBDE4FA92F632FC30052F95D"
+               BuildableName = "Primae.app"
+               BlueprintName = "Primae"
+               ReferencedContainer = "container:Primae.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "DC81ED0CB6E1B1C304209F6A"
+               BuildableName = "PrimaeNativeTests.xctest"
+               BlueprintName = "PrimaeNativeTests"
+               ReferencedContainer = "container:Primae.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug-Study"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "DC81ED0CB6E1B1C304209F6A"
+               BuildableName = "PrimaeNativeTests.xctest"
+               BlueprintName = "PrimaeNativeTests"
+               ReferencedContainer = "container:Primae.xcodeproj">
+            </BuildableReference>
+            <SkippedTests>
+               <Test
+                  Identifier = "AudioEngineTests">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testCancelPendingLifecycleWork_isIdempotent()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testDeinit_removesObserversAndDoesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testInterruptionBegan_isIdempotent()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testInterruptionBegan_stopsPlayback()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testInterruptionDuringBackground_stateIsConsistent()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testInterruptionEnded_missingOptionKey_defaultsToNoResume()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testInterruptionEnded_shouldResumeFalse_remainsPaused()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testInterruptionEnded_shouldResumeTrue_setsFlag()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testInterruptionEnded_withoutPrecedingBegan_isHarmless()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testLoadAudioFile_missingFile_autoplayTrue_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testLoadAudioFile_missingFile_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testPendingSafeEnginePause_cancelledByResume()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testPendingSafeEnginePause_firesAfterDelay()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testPlay_withNoFile_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRapidSuspendResumeCycle_completesWithinTimeout()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRestart_withNoFile_doesNotCrashAndSetsShouldResume()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testResumeAfterLifecycle_setsAppIsForeground()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRouteChangeDuringInterruption_doesNotCorruptState()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRouteChange_categoryChange_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRouteChange_malformedUserInfo_isHarmless()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRouteChange_newDeviceAvailable_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRouteChange_oldDeviceUnavailable_isIdempotent()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRouteChange_oldDeviceUnavailable_stopsPlayback()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testRouteChange_wakeFromSleep_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testSetAdaptivePlayback_clampsAboveMaxSpeed_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testSetAdaptivePlayback_clampsBelowMinSpeed_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testSetAdaptivePlayback_clampsBias_doesNotCrash()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testStop_isIdempotent()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testStop_setsIsPlayingFalse()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testSuspendForLifecycle_isIdempotent()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testSuspendForLifecycle_stopsPlayback()">
+               </Test>
+               <Test
+                  Identifier = "AudioEngineTests/testSuspendThenResume_doesNotCrash()">
+               </Test>
+            </SkippedTests>
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug-Study"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "DBDE4FA92F632FC30052F95D"
+            BuildableName = "Primae.app"
+            BlueprintName = "Primae"
+            ReferencedContainer = "container:Primae.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "Debug-Study"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "DBDE4FA92F632FC30052F95D"
+            BuildableName = "Primae.app"
+            BlueprintName = "Primae"
+            ReferencedContainer = "container:Primae.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction
+      buildConfiguration = "Debug-Study">
+   </AnalyzeAction>
+   <ArchiveAction
+      buildConfiguration = "Debug-Study"
+      revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>
