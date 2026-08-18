@@ -1051,6 +1051,13 @@ public final class TracingViewModel {
         await progressStore.flush()
         await streakStore.flush()
         await dashboardStore.flush()
+        // The raw trace and the PhaseSessionRecord that links to it live
+        // in two separate stores. Draining the record without the trace
+        // leaves exactly the dangling `rawTraceID` that the
+        // capture-before-record ordering in `PhaseTransitionCoordinator`
+        // exists to prevent — and the trial at risk is the last one of a
+        // session, because that is when the proctor closes the app.
+        await rawTraceStore.flush()
         await onboardingStore.flush()
     }
 

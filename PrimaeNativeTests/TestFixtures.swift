@@ -120,8 +120,13 @@ final class StubDashboardStore: ParentDashboardStoring {
 final class StubRawTraceStore: RawTraceStoring {
     private(set) var traces: [RawTrace] = []
     private(set) var resetCount = 0
+    /// Counts lifecycle drains — the protocol default `flush()` is a no-op,
+    /// so without this override a missing drain is indistinguishable from a
+    /// performed one. See RawTracePersistenceTests.
+    private(set) var flushCount = 0
     func append(_ trace: RawTrace) { traces.append(trace) }
     func reset() { traces.removeAll(); resetCount += 1 }
+    func flush() async { flushCount += 1 }
 }
 
 // MARK: - No-op onboarding store
