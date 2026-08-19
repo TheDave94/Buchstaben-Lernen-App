@@ -14,7 +14,20 @@ let package = Package(
         .target(
             name: "PrimaeNative",
             path: "PrimaeNative",
-            resources: [.copy("Resources")],
+            // `Resources` stays `.copy`: it holds 87 identically-named
+            // `strokes.json` files in per-letter directories, and
+            // `.process` flattens toward the bundle root. Measured, not
+            // assumed — SwiftPM rejects the manifest outright with
+            // "multiple resources named 'strokes.json'".
+            //
+            // The CoreML model lives in its own root so it can carry
+            // `.process`, which ships the COMPILED `.mlmodelc`. Under
+            // `.copy` the model shipped as a raw `.mlpackage` directory
+            // and every cold load called `MLModel.compileModel(at:)` at
+            // runtime — behaviour Apple does not document as guaranteed,
+            // in the one feature that already failed silently across 194
+            // records (`cb7291d`).
+            resources: [.copy("Resources"), .process("MLResources")],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .enableUpcomingFeature("InferSendableFromCaptures"),

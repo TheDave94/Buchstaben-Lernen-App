@@ -235,40 +235,72 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendab
         }
     }
 
-    private static func loadModel() -> VNCoreMLModel? {
-        // Path probes, not `url(forResource:withExtension:)`. The model
-        // ships as a DIRECTORY (`.copy` preserves `.mlpackage` verbatim),
-        // and that API does not resolve directory-shaped resources
-        // reliably — which is why this reported "not found in any bundle"
-        // for every session on record while the letter loader, which
-        // enumerates the same bundle, worked.
-        //
-        // Layout order: SwiftPM `.copy("Resources")` keeps the tree, an
-        // Xcode copy phase flattens toward the root. Compiled `.mlmodelc`
-        // first so a future `.process` rule is picked up without changes.
-        let relativePaths = ["Resources/ML", "ML", "Resources", ""]
+    /// Every location the model could ship at, in preference order,
+    /// filtered to the ones that actually exist.
+    ///
+    /// Path probes, not `url(forResource:withExtension:)`. Both shipped
+    /// forms are DIRECTORIES, and that API does not resolve
+    /// directory-shaped resources reliably — which is why this reported
+    /// "not found in any bundle" for every session on record while the
+    /// letter loader, which enumerates the same bundle, worked.
+    ///
+    /// Layout order: `.process("MLResources")` places the processed
+    /// resource at the bundle ROOT, `.copy("Resources")` preserves the
+    /// tree, and an Xcode copy phase flattens toward the root. Compiled
+    /// `.mlmodelc` is tried before raw `.mlpackage` at every location, so
+    /// a compiled model always wins over one that would need compiling.
+    ///
+    /// `internal` rather than `private` on purpose: `BundleResolutionTests`
+    /// asserts against THIS list. A test carrying its own hard-coded path
+    /// is exactly the shape that let the loader fail while coverage stayed
+    /// green.
+    nonisolated static func modelCandidates() -> [(url: URL, isCompiled: Bool)] {
+        let relativePaths = ["", "MLResources", "Resources/ML", "ML", "Resources"]
+        var found: [(url: URL, isCompiled: Bool)] = []
+        for ext in ["mlmodelc", "mlpackage"] {
+            for dir in relativePaths {
+                let leaf = dir.isEmpty
+                    ? "GermanLetterRecognizer.\(ext)"
+                    : "\(dir)/GermanLetterRecognizer.\(ext)"
+                if let u = PrimaeBundle.resourceURL(leaf) {
+                    found.append((u, ext == "mlmodelc"))
+                }
+            }
+        }
+        return found
+    }
 
+    /// The winning candidate, or `nil` when the model did not ship at all.
+    nonisolated static func resolveModelURL() -> (url: URL, isCompiled: Bool)? {
+        modelCandidates().first
+    }
+
+    private static func loadModel() -> VNCoreMLModel? {
+        let candidates = modelCandidates()
+        guard !candidates.isEmpty else {
+            recognizerLogger.warning("GermanLetterRecognizer model not found in any bundle — letter recognition disabled")
+            return nil
+        }
+
+        // A raw `.mlpackage` still has to be compiled at first use. That
+        // path is retained as a fallback, not as the expected route: it
+        // depends on runtime compilation of an uncompiled package, which
+        // is why `Package.swift` ships the model under `.process`.
         let modelURL: URL? = {
-            for ext in ["mlmodelc", "mlpackage"] {
-                for dir in relativePaths {
-                    let leaf = dir.isEmpty
-                        ? "GermanLetterRecognizer.\(ext)"
-                        : "\(dir)/GermanLetterRecognizer.\(ext)"
-                    guard let u = PrimaeBundle.resourceURL(leaf) else { continue }
-                    if ext == "mlmodelc" { return u }
-                    do {
-                        return try MLModel.compileModel(at: u)
-                    } catch {
-                        recognizerLogger.warning("Failed to compile mlpackage at \(u.path): \(error.localizedDescription)")
-                        continue
-                    }
+            for candidate in candidates {
+                if candidate.isCompiled { return candidate.url }
+                do {
+                    return try MLModel.compileModel(at: candidate.url)
+                } catch {
+                    recognizerLogger.warning("Failed to compile mlpackage at \(candidate.url.path): \(error.localizedDescription)")
+                    continue
                 }
             }
             return nil
         }()
 
         guard let url = modelURL else {
-            recognizerLogger.warning("GermanLetterRecognizer model not found in any bundle — letter recognition disabled")
+            recognizerLogger.warning("GermanLetterRecognizer found but unusable — letter recognition disabled")
             return nil
         }
         do {

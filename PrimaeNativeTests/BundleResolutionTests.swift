@@ -24,18 +24,39 @@ import Foundation
                 "fell back to Bundle.main — the resource bundle was not located, and every bundled resource is now looked up in the wrong place")
     }
 
-    /// The `.mlpackage` is a DIRECTORY, which is what
+    /// Both shipped forms are DIRECTORIES, which is what
     /// `url(forResource:withExtension:)` failed to resolve. Asserting on
     /// the path probe pins the fix rather than the symptom.
+    ///
+    /// This probes `CoreMLLetterRecognizer.resolveModelURL()` — the SAME
+    /// list the loader uses — rather than a path of its own. A test with
+    /// its own hard-coded path stays green while the loader fails, which
+    /// is precisely how 194 records came back empty under coverage.
     @Test("the CoreML model is present in the resource bundle")
     func modelIsPresent() throws {
-        let url = try #require(
-            PrimaeBundle.resourceURL("Resources/ML/GermanLetterRecognizer.mlpackage"),
-            "GermanLetterRecognizer.mlpackage not found under the resource bundle")
+        let found = try #require(
+            CoreMLLetterRecognizer.resolveModelURL(),
+            "GermanLetterRecognizer not found at any probed location — the resource stopped shipping, and recognition is silently disabled")
         var isDirectory: ObjCBool = false
-        #expect(FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory))
+        #expect(FileManager.default.fileExists(atPath: found.url.path, isDirectory: &isDirectory))
         #expect(isDirectory.boolValue,
-                "expected a directory-shaped .mlpackage — if this is now a file, the resource rule changed from .copy and the probe order should follow")
+                "expected a directory-shaped .mlmodelc/.mlpackage — a file here means the resource rule changed and the probe order should follow")
+    }
+
+    /// `.process("MLResources")` exists to ship the COMPILED model.
+    /// Under `.copy` the raw `.mlpackage` shipped instead and every cold
+    /// load ran `MLModel.compileModel(at:)`, relying on runtime
+    /// compilation of an uncompiled package — undocumented behaviour in
+    /// the one feature already known to fail silently.
+    ///
+    /// If this goes red while `modelIsPresent` stays green, the model is
+    /// shipping but SwiftPM did not compile it: the `.process` rule is
+    /// not doing what it was added for.
+    @Test("the shipped model is the compiled form, not a raw .mlpackage")
+    func modelShipsCompiled() throws {
+        let found = try #require(CoreMLLetterRecognizer.resolveModelURL())
+        #expect(found.isCompiled,
+                "shipped as \(found.url.lastPathComponent) — expected GermanLetterRecognizer.mlmodelc from the .process rule")
     }
 
     /// THE guard. `isModelAvailable()` returning false is exactly the

@@ -2,7 +2,7 @@
 
 See `docs/BAKE_INVARIANTS.md` for permanent bake invariants — apply to every letter, every weight, every bake.
 
-_Single forward-looking work log. Last updated 2026-05-25 against `main` (commit `1f9f5a0`). Only items still requiring work appear here — every shipped item has been removed. Shipped items live in commit history._
+_Single forward-looking work log. Last updated 2026-08-19 against `main` (commit `cb7291d`), after a full read-only reconciliation against code and git history. Only items still requiring work appear here — every shipped item has been removed. Shipped items live in commit history._
 
 ---
 
@@ -156,6 +156,49 @@ If any of those fails on device, the fix is a tweak in `Coordinator.pencilIntera
 
 ## 4. TECHNICAL DEBT
 
+### D11 — Measurement-layer correctness residuals
+**Effort:** S each · **Priority:** P1 (pilot-blocking for the two data-integrity items)
+
+Found by the 2026-08-19 reconciliation; none of these was previously tracked.
+
+1. **Pre-enrolment filter guards only the raw rows.** `ParentDashboardExporter.swift:147`
+   filters `recordedAt < enrolledAt` inside the per-row loop. Every aggregate below it
+   (`averageFreeWriteScore_<arm>`, `schedulerEffectivenessProxy_<arm>`, `letterByArm`,
+   `letterByAudioArm`, from `:199`) reads `snapshot.phaseSessionRecords` unfiltered, so
+   pre-enrolment activity lands in the arm aggregates — the exact attribution the filter
+   exists to prevent. `csvFiltersPreEnrolmentRows` passes because it asserts on a raw-row
+   substring only. **Pilot-blocking: it corrupts between-arm comparisons.**
+2. **Scheduler proxy assumes array order is chronological.** `ParentDashboardStore.swift:376`
+   and `ParentDashboardExporter.swift:207` both compute `records[i+1].score - records[i].score`
+   without sorting; the exporter's local is named `chrono` and is not. `PhaseSessionRecord`
+   already carries `recordedAt`. Correct by construction today, enforced by nothing.
+3. **Export failure policy is implemented but undecided.** All three call sites are fail-loud
+   and the destructive new-participant path is correctly gated behind a successful export.
+   Missing is the DECISIONS entry recording that as policy — see DEFER 23. Doc-only.
+4. **Golden-file export test.** `ExporterArmStratificationTests` gives structural coverage and
+   its header calls it "Golden coverage", but no checked-in CSV fixture exists. A byte-comparison
+   golden over a fixed snapshot is still absent. See DEFER 22.
+5. **CoreML model is compiled at runtime.** `Package.swift:17` is `.copy("Resources")`, so the
+   model ships as an uncompiled `.mlpackage` directory and `LetterRecognizer.swift:260` pays
+   `MLModel.compileModel(at:)` on every cold load. Not a correctness bug since `cb7291d`.
+   **A wholesale `.process("Resources")` is a hard build error** — measured: SwiftPM rejects
+   the 87 identically-named `strokes.json` files with "multiple resources named". Any fix must
+   scope the rule to the ML directory; whether SwiftPM's `.process` emits `.mlmodelc` at all is
+   UNMEASURED and must be established on a real build before this is scheduled.
+
+---
+
+### D12 — Execute the D5 `direct`-phase cut
+**Effort:** M · **Priority:** P2
+
+`docs/DECISIONS.md` locks D5 (cut `direct`, move to three-phase `observe → guided → freeWrite`)
+on a six-paper evidence read, but the cut was never executed and appeared in no work log:
+`LearningPhase.swift:17` still declares `case direct = 1` and the exporter deliberately iterates
+it. Blast radius and the Codable `rawValue` backward-compat constraint are recorded in DECISIONS.
+Not pilot-blocking (flow is held constant across arms either way).
+
+---
+
 ### D8 — Canvas redraw frequency profile
 **Effort:** S (profile only) — could expand to M if a real bottleneck surfaces · **Priority:** P3
 
@@ -188,27 +231,20 @@ Carried forward from the now-removed `docs/RENDERING.md` "Open questions for ren
 
 ---
 
-### D10 — Self-hosted CI runner toolchain drift — RE-BROKEN 2026-07-02 (was RESOLVED 2026-06-19)
+### D10 — Self-hosted CI runner toolchain drift — CLOSED 2026-07-13 (obsolete, not fixed)
 
-**Re-break (2026-07-02, run 28597659598, commit `ae1884f` — docs/design-system-only, no Swift).** The predicted failure mode arrived, in a new costume: `Device Test (MacBook self-hosted)` now dies at xcodebuild startup with `CoreSimulator is out of date. Current version (1155.4.0) is older than build version (1166.0.0)` (DVTCoreSimulatorAdditionsErrorDomain code 3). Xcode-beta updated but the Mac's CoreSimulator framework didn't — exactly the caveat below. The hosted macos-26 job on the same SHA is green, so this is **runner-infra, not code**. Local op for David: install pending macOS/Xcode-beta component updates on the MacBook (or `sudo xcodebuild -runFirstLaunch`), then re-run the job.
+The job this item tracked no longer exists. `c673176` (2026-07-13) retired the self-hosted
+MacBook jobs — "hosted macos-26 simulator matrix only" — eleven days after the 2026-07-02
+re-break this section described. `grep -rn "self-hosted" .github/` returns nothing; the
+workflow now runs `stroke_audit`, `xcode_test`, `study_build`. Kept as a stub because two
+other docs still reference the removed `ipad-device-test.yml`
+(`docs/APP_DOCUMENTATION.md:223`, `:1826`) and `docs/PROJECT_STATUS.md:31` still lists the
+self-hosted runner as live.
 
-**Original 2026-06-19 incident (`simctl` not found) — resolved; kept as history:**
-**Effort:** S (a couple of local commands on the runner machine) · **Priority:** P2 — precondition for on-device golden-test work
-
-**Symptom.** The `Device Test (MacBook self-hosted)` CI job fails at its first step, "List available iPad simulators", with `xcrun: error: unable to find utility "simctl", not a developer tool or in PATH`. It dies before compilation. The hosted `Build & Test — iPad Simulator (macos-26 / Xcode 26)` job builds and runs the full suite on the same SHA and is green — so a red overall badge from this is **runner-infra, not code** (first observed on the docs-only commit `3f9cda3`, 2026-06-19).
-
-**Root cause.** The self-hosted MacBook's active developer directory is unset or points at CLT-only / a missing toolchain, so `xcrun simctl` can't resolve. Prior runs were green through 2026-05-31, so something changed on that machine since (Xcode path, OS update, or toolchain removal).
-
-**Fix (local op on the runner machine — David runs it, NOT a claudebox task).** The runner has **Xcode-beta**, not release Xcode — `/Applications/Xcode.app` does not exist on that machine, only `/Applications/Xcode-beta.app`. What worked (2026-06-19):
-```
-sudo xcode-select -s /Applications/Xcode-beta.app/Contents/Developer
-sudo xcodebuild -license accept
-```
-After which `xcrun simctl list devices` resolved (iOS 26.5 sims present) and `xcode-select -p` confirmed the beta path.
-
-**Caveat (keep visible).** The runner now builds against a **BETA toolchain**. This will break again the same way whenever Xcode-beta updates/relocates or a release Xcode is installed without repointing. The durable fix is to keep `xcode-select` pointed at whatever Xcode is actually installed (or install release Xcode for stability).
-
-**Priority flag.** This is a **precondition for the planned geometry golden-test / characterization work**: any golden test that depends on the on-device runner cannot be trusted until the runner is healthy. Fix before building the golden-test net — not necessarily before then.
+**Consequence that outlives the item.** The on-device golden layer left open under the
+CalibrationStore known-issue in §2 named this runner as its precondition. There is now no
+device CI at all, so that work is not merely blocked — it needs re-scoping as a manual
+on-device act (like the pilot artefact build in CLAUDE.md) or dropping.
 
 ---
 
@@ -274,6 +310,10 @@ Per the 2026-07-07 readiness audit the app already satisfies both mandatory iOS 
 - ~~**CI availability** — no `macos-27` hosted runner and no Xcode 27 on the `macos-26` image yet.~~ **CORRECTED 2026-08-18: this blocker was false.** A hosted image labelled **`xcode-27`** has existed since **2026-07-16**. The 2026-07-07 gate searched for a `macos-27` label, which is not how the image is named, and the negative result was recorded as an availability blocker rather than as a failed search. Nothing was blocking CI adoption from 2026-07-16 onward. Lesson worth keeping: a gate that searches for the wrong identifier returns "absent" indistinguishably from "does not exist" — the same failure shape as the identity scan reading the wrong binary (`9b01dcd`).
 - **Toolchain pin** — the operator decided on 2026-08-18 that Xcode 27 applies across every Apple project in the estate, pinned by MAJOR version (not exact build), with the pin living **in each repo** and this workstation authoritative, CI following. Recorded at homelab-architecture #624, `decisions/DECISION-LOG.md`, slug `xcode-27-toolchain-decision-2026-08-18` — read it there, not from a relay. Primae's pin shape is still to be chosen; `estate-app` #32 uses a `bin/toolchain.pin` data file plus a verify leg that reads it, which is one shape and not a mandate. Until a pin lands, the device procedure in CLAUDE.md is the only thing recording which compiler built a pilot artefact.
 - Optional modernization to fold in: Icon Composer layered `.icon` (current icon is the classic PNG light/dark/tinted set — still works) and a String Catalog if F9 localization happens.
+- **Partial evidence toward the `-O` gate (2026-08-19, unrecorded until now):** this workstation
+  measures Swift 6.4 / Xcode-beta, and PR #11 (`1df0feb`) reports a successful local
+  `Release-Study` `-O` compile on Xcode 27 beta. That is one clean compile, not a cleared gate —
+  swiftlang/swift#88173 is an inliner crash, so absence on one build is weak evidence.
 
 ### F12 — Xcode MCP bridge *(declined 2026-08-15; revisit post-pilot)*
 **Effort:** S to adopt · **Priority:** P3 (post-pilot only)
