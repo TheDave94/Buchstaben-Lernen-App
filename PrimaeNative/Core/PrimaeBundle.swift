@@ -76,10 +76,35 @@ enum PrimaeBundle {
     /// can run on a detached Task, and a filesystem probe has no business
     /// hopping to the main actor to satisfy a package-wide default.
     nonisolated static func resourceURL(_ relativePath: String) -> URL? {
-        for root in [resources.bundleURL, resources.resourceURL].compactMap({ $0 }) {
+        // `.main` last, and deliberately: the host embeds some resources
+        // directly (fonts via `INFOPLIST_KEY_UIAppFonts`), so a lookup that
+        // misses the package bundle can still legitimately succeed there.
+        // It is a probe INSIDE this resolver rather than a second resolver
+        // beside it — one path, watched by one test, so a resource that
+        // only resolves by accident cannot hide in a fallback nobody reads.
+        let roots = [resources.bundleURL, resources.resourceURL, Bundle.main.resourceURL]
+        for root in roots.compactMap({ $0 }) {
             let candidate = root.appendingPathComponent(relativePath)
             if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
         }
         return nil
+    }
+
+    /// First of several candidate layouts that exists.
+    ///
+    /// `.copy("Resources")` preserves the tree, `.process` flattens toward
+    /// the bundle root, and an Xcode copy phase flattens differently again.
+    /// Callers pass the layouts their resource can legitimately ship in,
+    /// most-specific first, instead of each hand-rolling the same loop.
+    nonisolated static func resourceURL(firstOf relativePaths: [String]) -> URL? {
+        for path in relativePaths {
+            if let url = resourceURL(path) { return url }
+        }
+        return nil
+    }
+
+    /// Bundle-relative layouts a resource under `Resources/<dir>/` can ship in.
+    nonisolated static func layouts(dir: String, name: String, ext: String) -> [String] {
+        ["Resources/\(dir)/\(name).\(ext)", "\(dir)/\(name).\(ext)", "\(name).\(ext)"]
     }
 }

@@ -256,30 +256,24 @@ public enum PrimaeLetterRenderer {
 
     static func makeFont(size: CGFloat, fontName: String = "Primae-Regular",
                          openTypeFeatures: [String] = []) -> CTFont? {
-        let bundles: [Bundle] = [.module, .main]
-        // Try root, then SPM .copy("Resources") nested paths, then flat Fonts/.
-        let subdirs: [String?] = [nil, "Resources/Fonts", "Fonts"]
         // Primae is OTF, Playwrite AT is variable TTF — probe both so
         // `schriftArt.fontFileName` can stay extension-agnostic.
-        let exts = ["otf", "ttf"]
-        for bundle in bundles {
-            for subdir in subdirs {
-                for ext in exts {
-                    let url: URL?
-                    if let subdir {
-                        url = bundle.url(forResource: fontName, withExtension: ext, subdirectory: subdir)
-                    } else {
-                        url = bundle.url(forResource: fontName, withExtension: ext)
-                    }
-                    guard let url,
-                          let dataProvider = CGDataProvider(url: url as CFURL),
-                          let cgFont       = CGFont(dataProvider) else { continue }
-                    let baseFont = CTFontCreateWithGraphicsFont(cgFont, size, nil, nil)
-                    return applyOpenTypeFeatures(to: baseFont, tags: openTypeFeatures)
-                }
-            }
+        // Resolution goes through `PrimaeBundle` rather than `Bundle.module`,
+        // which calls `fatalError` when it cannot resolve (`cb7291d`).
+        for ext in ["otf", "ttf"] {
+            guard let url = PrimaeBundle.resourceURL(firstOf: Self.fontLayouts(fontName, ext)),
+                  let dataProvider = CGDataProvider(url: url as CFURL),
+                  let cgFont       = CGFont(dataProvider) else { continue }
+            let baseFont = CTFontCreateWithGraphicsFont(cgFont, size, nil, nil)
+            return applyOpenTypeFeatures(to: baseFont, tags: openTypeFeatures)
         }
         return nil
+    }
+
+    /// Bundle-relative layouts for a bundled face. Shared with
+    /// `ResourceResolutionTests` so the test cannot drift from the probe.
+    static func fontLayouts(_ fontName: String, _ ext: String) -> [String] {
+        PrimaeBundle.layouts(dir: "Fonts", name: fontName, ext: ext)
     }
 
     /// Returns a CTFont with the given OpenType feature tags enabled.

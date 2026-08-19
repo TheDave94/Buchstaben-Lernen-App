@@ -84,7 +84,7 @@ final class PromptPlayer: PromptPlaying {
     func play(_ key: PromptKey, fallbackText: String) {
         player?.stop()
         speech.stop()
-        guard let url = locate(key) else {
+        guard let url = Self.locate(key) else {
             log.info("Prompt missing for '\(key.rawValue, privacy: .public)' — falling back to TTS.")
             speech.speak(fallbackText)
             return
@@ -149,53 +149,34 @@ final class PromptPlayer: PromptPlaying {
         }
     }
 
+    /// Bundle-relative layouts for an effect sound. Shared with
+    /// `ResourceResolutionTests`, so the test probes the list the player
+    /// walks rather than a copy of it that can drift.
+    static func effectLayouts(_ name: String) -> [String] {
+        PrimaeBundle.layouts(dir: "Prompts", name: name, ext: "wav")
+    }
+
     private func loadEffectPlayer(name: String) -> AVAudioPlayer? {
-        let bundles: [Bundle] = [.module, .main]
-        let subdirs: [String?] = ["Resources/Prompts", "Prompts", nil]
-        for bundle in bundles {
-            for subdir in subdirs {
-                let url: URL?
-                if let subdir {
-                    url = bundle.url(forResource: name,
-                                     withExtension: "wav",
-                                     subdirectory: subdir)
-                } else {
-                    url = bundle.url(forResource: name,
-                                     withExtension: "wav")
-                }
-                if let url, let p = try? AVAudioPlayer(contentsOf: url) {
-                    p.prepareToPlay()
-                    return p
-                }
-            }
+        guard let url = PrimaeBundle.resourceURL(firstOf: Self.effectLayouts(name)),
+              let p = try? AVAudioPlayer(contentsOf: url) else {
+            log.info("\(name, privacy: .public).wav not bundled — falling back to system sound.")
+            return nil
         }
-        log.info("\(name, privacy: .public).wav not bundled — falling back to system sound.")
-        return nil
+        p.prepareToPlay()
+        return p
     }
 
     // MARK: - Bundle lookup
 
-    /// Probe `<key>.mp3` across the layouts SPM/Xcode bundling
-    /// produces, in both `.module` and `.main`.
-    private func locate(_ key: PromptKey) -> URL? {
-        let name = key.rawValue
-        let bundles: [Bundle] = [.module, .main]
-        let subdirs: [String?] = ["Resources/Prompts", "Prompts", nil]
-        for bundle in bundles {
-            for subdir in subdirs {
-                if let subdir,
-                   let url = bundle.url(forResource: name,
-                                        withExtension: "mp3",
-                                        subdirectory: subdir) {
-                    return url
-                }
-                if subdir == nil,
-                   let url = bundle.url(forResource: name,
-                                        withExtension: "mp3") {
-                    return url
-                }
-            }
-        }
-        return nil
+    /// Probe `<key>.mp3` across the layouts SPM/Xcode bundling produces.
+    ///
+    /// Was `Bundle.module` + `url(forResource:)`. `Bundle.module` calls
+    /// `fatalError` when it cannot resolve, which turns a missing resource
+    /// into a launch crash in a test host — the hazard `PrimaeBundle` was
+    /// extracted to remove (`cb7291d`). One resolver, so there is no second
+    /// path for a lookup to succeed through by accident.
+    static func locate(_ key: PromptKey) -> URL? {
+        PrimaeBundle.resourceURL(
+            firstOf: PrimaeBundle.layouts(dir: "Prompts", name: key.rawValue, ext: "mp3"))
     }
 }

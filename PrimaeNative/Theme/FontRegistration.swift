@@ -17,7 +17,10 @@ public enum PrimaeFonts {
     /// Bundled font filenames (no extension). Keep in sync with the
     /// files in `PrimaeNative/Resources/Fonts/` and
     /// `INFOPLIST_KEY_UIAppFonts` in `Primae.xcodeproj`.
-    private static let registrations: [(name: String, ext: String)] = [
+    /// `internal`, not `private`: `ResourceResolutionTests` asserts every
+    /// entry resolves. A test with its own copy of this list proves the
+    /// copy, not the app.
+    static let registrations: [(name: String, ext: String)] = [
         ("Primae-Light",                "otf"),
         ("Primae-LightCursive",         "otf"),
         ("Primae-Semilight",            "otf"),
@@ -51,28 +54,13 @@ public enum PrimaeFonts {
         guard !didRegister else { return }
         didRegister = true
 
-        // Probe `Bundle.module` first, then `.main` as a fallback for
-        // hosts that embed the fonts directly.
-        let bundles: [Bundle] = [.module, .main]
-        let subdirs: [String?] = ["Resources/Fonts", "Fonts", nil]
-
-        var urls: [URL] = []
-        for (name, ext) in registrations {
-            for bundle in bundles {
-                var url: URL?
-                for subdir in subdirs {
-                    if let subdir {
-                        url = bundle.url(forResource: name, withExtension: ext, subdirectory: subdir)
-                    } else {
-                        url = bundle.url(forResource: name, withExtension: ext)
-                    }
-                    if url != nil { break }
-                }
-                if let url {
-                    urls.append(url)
-                    break
-                }
-            }
+        // Resolution goes through `PrimaeBundle`, whose `.main` probe covers
+        // the host's `INFOPLIST_KEY_UIAppFonts` copies. Previously this used
+        // `Bundle.module`, which calls `fatalError` when it cannot resolve
+        // (`cb7291d`), behind a `urls.isEmpty` warning that degraded the whole
+        // type system to the system font with nothing failing.
+        let urls: [URL] = registrations.compactMap { name, ext in
+            PrimaeBundle.resourceURL(firstOf: PrimaeBundle.layouts(dir: "Fonts", name: name, ext: ext))
         }
 
         guard !urls.isEmpty else {
