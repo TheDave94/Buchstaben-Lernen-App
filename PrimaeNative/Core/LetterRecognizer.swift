@@ -236,45 +236,31 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendab
     }
 
     private static func loadModel() -> VNCoreMLModel? {
-        let candidates: [Bundle] = {
-            var bundles: [Bundle] = [.main]
-            let name = "PrimaeNative_PrimaeNative"
-            if let b = Bundle(identifier: name) { bundles.append(b) }
-            bundles.append(contentsOf: Bundle.allBundles.filter {
-                $0.bundlePath.hasSuffix(name + ".bundle")
-            })
-            bundles.append(contentsOf: Bundle.allFrameworks.filter {
-                $0.bundlePath.hasSuffix(name + ".bundle")
-            })
-            return bundles
-        }()
+        // Path probes, not `url(forResource:withExtension:)`. The model
+        // ships as a DIRECTORY (`.copy` preserves `.mlpackage` verbatim),
+        // and that API does not resolve directory-shaped resources
+        // reliably — which is why this reported "not found in any bundle"
+        // for every session on record while the letter loader, which
+        // enumerates the same bundle, worked.
+        //
+        // Layout order: SwiftPM `.copy("Resources")` keeps the tree, an
+        // Xcode copy phase flattens toward the root. Compiled `.mlmodelc`
+        // first so a future `.process` rule is picked up without changes.
+        let relativePaths = ["Resources/ML", "ML", "Resources", ""]
 
         let modelURL: URL? = {
-            // SwiftPM `.copy("Resources")` preserves tree structure,
-            // Xcode flattens to bundle root — probe all layouts.
-            let subdirs: [String?] = [nil, "Resources/ML", "ML", "Resources"]
-            for bundle in candidates {
-                for sub in subdirs {
-                    if let u = bundle.url(
-                        forResource: "GermanLetterRecognizer",
-                        withExtension: "mlmodelc",
-                        subdirectory: sub
-                    ) {
-                        return u
-                    }
-                }
-                for sub in subdirs {
-                    if let u = bundle.url(
-                        forResource: "GermanLetterRecognizer",
-                        withExtension: "mlpackage",
-                        subdirectory: sub
-                    ) {
-                        do {
-                            return try MLModel.compileModel(at: u)
-                        } catch {
-                            recognizerLogger.warning("Failed to compile mlpackage at \(u.path): \(error.localizedDescription)")
-                            continue
-                        }
+            for ext in ["mlmodelc", "mlpackage"] {
+                for dir in relativePaths {
+                    let leaf = dir.isEmpty
+                        ? "GermanLetterRecognizer.\(ext)"
+                        : "\(dir)/GermanLetterRecognizer.\(ext)"
+                    guard let u = PrimaeBundle.resourceURL(leaf) else { continue }
+                    if ext == "mlmodelc" { return u }
+                    do {
+                        return try MLModel.compileModel(at: u)
+                    } catch {
+                        recognizerLogger.warning("Failed to compile mlpackage at \(u.path): \(error.localizedDescription)")
+                        continue
                     }
                 }
             }

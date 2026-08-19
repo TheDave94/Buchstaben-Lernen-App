@@ -56,18 +56,15 @@ struct BundleLetterResourceProvider: LetterResourceProviding {
         self.bundle = bundle
     }
 
-    /// Returns `Bundle.module` if available, falling back to
-    /// `Bundle.main`. Avoids the `fatalError` SPM's generated
-    /// `Bundle.module` accessor throws in test hosts.
-    private static func safeModuleBundle() -> Bundle {
-        let bundleName = "PrimaeNative_PrimaeNative"
-        let candidates: [Bundle?] = [
-            Bundle(identifier: bundleName),
-            Bundle.allBundles.first(where: { $0.bundlePath.hasSuffix(bundleName + ".bundle") }),
-            Bundle.allFrameworks.first(where: { $0.bundlePath.hasSuffix(bundleName + ".bundle") })
-        ]
-        return candidates.compactMap { $0 }.first ?? .main
-    }
+    /// The module's resource bundle, resolved once by `PrimaeBundle`.
+    ///
+    /// Previously hand-rolled here with three probes, two of which were
+    /// dead: `Bundle(identifier: "PrimaeNative_PrimaeNative")` takes a
+    /// CFBundleIdentifier (the real one is `primae.PrimaeNative.resources`)
+    /// and the `allFrameworks` filter looked for a `.bundle` suffix on
+    /// paths that end in `.framework`. Letters resolved anyway, through
+    /// the one surviving probe — an accident this removes reliance on.
+    private static func safeModuleBundle() -> Bundle { PrimaeBundle.resources }
 
     var searchBundles: [Bundle] {
         var bundles: [Bundle] = [bundle]

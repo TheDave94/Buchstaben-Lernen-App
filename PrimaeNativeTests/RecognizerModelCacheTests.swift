@@ -23,9 +23,18 @@
 //     and a discarded handle; it is not a correctness fault, which is
 //     why it is not worth widening access to chase.
 //
-// The probes deliberately do not assert WHETHER the model loads. Bundle
-// resolution differs in the test host, so either answer is legitimate —
-// what must hold is that every concurrent caller gets the SAME answer.
+// The probes deliberately do not assert WHETHER the model loads — that
+// is `BundleResolutionTests`' job. What must hold here is that every
+// concurrent caller gets the SAME answer.
+//
+// HISTORICAL NOTE, because this suite's name promised more than its
+// first run delivered: when written, the model did not resolve at all,
+// so the probes agreed on `nil`. That is a weaker statement than
+// agreeing on one shared instance, and the double-load race the suite
+// was written for cannot occur when nothing loads. The lock path was
+// still genuinely contended — every call takes it, hit or miss — but
+// the miss branch is the cheap one. Since the resource-lookup fix the
+// probes agree on a real model, which is the contention this describes.
 
 import Testing
 import Foundation
