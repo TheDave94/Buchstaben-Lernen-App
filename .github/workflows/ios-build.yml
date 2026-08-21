@@ -6,6 +6,9 @@ on:
     branches: ["main", "ux/**", "roadmap-*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -427,4 +430,3 @@ jobs:
             /tmp/study-scan-build.log
             /tmp/release-study-build.log
             /tmp/identity-scan.log
-
