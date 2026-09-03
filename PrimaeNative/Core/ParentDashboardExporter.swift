@@ -178,7 +178,14 @@ struct ParentDashboardExporter {
             let dimTempo  = rec.tempoConsistency.map { String(format: "%.4f", $0) } ?? ""
             let dimPress  = rec.pressureControl.map  { String(format: "%.4f", $0) } ?? ""
             let dimRhythm = rec.rhythmScore.map      { String(format: "%.4f", $0) } ?? ""
-            lines.append([
+            // Explicitly typed as [String] and split from `.joined` —
+            // the combined array-literal-plus-chained-method-call
+            // expression stopped type-checking in reasonable time once
+            // this grew past ~19 heterogeneous-looking elements (all
+            // are String, but the compiler re-derives that per element
+            // across the whole chain unless the literal's target type
+            // is pinned up front). Found by CI, 2026-09-03.
+            let row: [String] = [
                 rec.letter, rec.phase, "\(rec.completed)", score, prio,
                 rec.condition.rawValue, recordedAtField,
                 recLabel, recConf, recConfRaw, recRight,
@@ -197,7 +204,8 @@ struct ParentDashboardExporter {
                 rec.strokeCount.map(String.init) ?? "",
                 rec.strokeOrder ?? "",
                 rec.reversedStrokeCount.map(String.init) ?? ""
-            ].joined(separator: sep))
+            ]
+            lines.append(row.joined(separator: sep))
         }
         lines.append("")
 
