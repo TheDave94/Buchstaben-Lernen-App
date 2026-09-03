@@ -136,19 +136,39 @@ xcodebuild test -project Primae.xcodeproj -scheme Primae \
 >   from `gh auth token` against the same URL works. Use curl for reading CI
 >   results from a sandboxed seat.
 
-> **Commit signing runs IN a Claude Code session — it is not a handover.**
-> `ls`/`cat` on `~/.ssh` return `Operation not permitted` from a sandboxed
-> Bash tool call, which looks like a hard block on reading the signing key —
-> it isn't one for `git commit` itself. Measured directly (2026-09-03,
-> commit `b2d5397`): a plain `git commit` (no special flags, this repo's
-> `commit.gpgsign=true` / `gpg.format=ssh` fires automatically) completed
-> synchronously, no hang, no visible prompt delay, and `git log --show-signature`
-> confirmed a genuine `Good "git" signature ... ED25519-SK key`. So: run the
-> commit directly from the session. Only the physical key touch is David's;
-> the commit itself is not. (Whether every future attempt is this fast — e.g.
-> a FIDO2 recent-verification window — is unmeasured; if a commit ever
-> genuinely hangs, that's new information to record, not a reason to assume
-> the old "structurally blocked" claim was right after all.)
+> **Commit signing runs IN a Claude Code session — invoking `git commit`
+> directly is not a handover. The physical touch reaching David is a
+> separate, less reliable step, and a failure there is not the same claim
+> as "signing is impossible from here."** Both halves are measured, not
+> assumed — read them as two distinct findings, not one:
+>
+> 1. `ls`/`cat` on `~/.ssh` return `Operation not permitted` from a
+>    sandboxed Bash tool call, which looks like a hard block on reading the
+>    signing key — it is not one for `git commit` itself. Six commits
+>    signed and pushed directly from this session on 2026-09-03
+>    (`b2d5397` through `a4f4c9b`, later squash-merged as `881116b`), each
+>    confirmed genuine with `git log --show-signature` (`Good "git"
+>    signature ... ED25519-SK key`), completed synchronously with no hang
+>    and no visible prompt delay. The earlier same-day claim that this was
+>    structurally impossible was never re-tested before being written down,
+>    and did not hold up.
+> 2. The SAME evening, a seventh attempt (via `land.sh`, same repo, same
+>    key) failed differently: `yubi-sign` — the wrapper that signs and cues
+>    David — threw an AppleScript error trying to raise the notification
+>    ("NOTE notification channel unavailable... syntax error"), then
+>    reported the public key as unreadable, and `git commit` never wrote
+>    the object. Nothing was committed or pushed; land.sh's own failure
+>    discipline caught it cleanly. This is real, and it is not the same
+>    finding as (1) reversed — six clean signs and one failed notification
+>    cue are consistent with "direct invocation works, the cue-to-David
+>    path is not yet fully reliable," which is narrower than either "always
+>    works" or "structurally blocked."
+>
+> Run the commit directly from the session; that part holds. If a commit
+> fails or stalls, that is new information about the notification/signing
+> path specifically to record and investigate on its own terms — not proof
+> the retracted claim was right, and not something to silently retry past
+> without noting it happened.
 
 1. **Swift compilation check** (claudebox Linux — basic syntax check only, SwiftUI/QuartzCore won't link):
    ```bash

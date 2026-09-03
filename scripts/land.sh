@@ -6,9 +6,37 @@
 # name invented at the prompt that did not match the one checked out, a
 # commit message written to a path that did not exist, and commit / push /
 # gitflow drifting apart because three commands are three chances to be
-# wrong instead of one. This collapses them into a single call whose only
-# manual acts are the two that can ONLY be manual — the YubiKey tap on the
-# commit, and reading the verification output afterwards.
+# wrong instead of one. This collapses them into a single call.
+#
+# WHO RUNS THIS, AND WHY THE STEPS AREN'T PAUSED BETWEEN. Directly, by
+# whichever seat prepared the change — a Claude Code session included.
+# Earlier drafts of this comment claimed "reading the verification output
+# afterwards" could ONLY be done by a human at a terminal; that was never
+# re-tested before being written, and a session invoking this script does
+# read its own stdout/stderr and act on the printed verdict, the same way
+# a person would (measured 2026-09-03, six commits signed and pushed this
+# way in one session — b2d5397 through a4f4c9b).
+#
+# What that measurement does NOT establish: that the physical half is
+# reliable regardless of who invokes this. The same evening, the seventh
+# attempt failed differently — yubi-sign's notification channel to David
+# threw an AppleScript error trying to raise the cue, and the signing step
+# then reported the public key as unreadable and never wrote the commit.
+# Six successes and one clean failure (land.sh's own discipline: nothing
+# was committed, nothing pushed) is not evidence the notification path is
+# solid; it is evidence the boundary is narrower than "always works" and
+# narrower than "always needs a human's terminal" both. Treat a stall or
+# an unreadable-key failure as something to look at, not something to
+# route around by reverting to a handover — and not something to paper
+# over as certainly transient either.
+#
+# The absence of a pause between steps (commit -> push -> gitflow --go,
+# no "are you sure") is a separate, older, and still-independent choice:
+# it assumes whoever staged the diff already reviewed it before writing
+# the commit message, so a second confirmation prompt would just be a
+# step the invoker learns to click through. That holds for a session that
+# reviewed its own diff exactly as much as it holds for a person who
+# reviewed theirs — it was never about which one is typing.
 #
 # USAGE
 #   sh scripts/land.sh <<'MSG'
@@ -59,11 +87,17 @@ usage() {
 
 # ---------------------------------------------------------------- verified
 #
-# WHY THIS EXISTS. Two SHAs were reported merged in one session on the
-# strength of narrative rather than output — against a main that had not
-# moved and PRs that did not exist. `landed : main is now $SHA` printed a
-# SHA it had never checked resolves, so the line read identically whether
-# the merge happened or not.
+# WHY THIS EXISTS, PRECISELY. Two SHAs were reported merged in one session
+# on the strength of narrative rather than output — against a main that had
+# not moved and PRs that did not exist. `landed : main is now $SHA` printed
+# a SHA it had never checked resolves, so the line read identically whether
+# the merge happened or not. That incident was a session asserting success
+# without checking, full stop — nothing about who signed the commit or
+# whether a human ran the script. This check would be exactly as necessary
+# in a world where every commit here was always signed by a Claude Code
+# session directly, because the failure it guards against is a REPORT
+# drifting from REALITY, not a boundary about who is allowed to type
+# `git commit`. Keep it on that basis.
 #
 # Four assertions, each answering a different way the claim can be false:
 # the object exists, origin/BASE contains it, BASE actually MOVED, and the
