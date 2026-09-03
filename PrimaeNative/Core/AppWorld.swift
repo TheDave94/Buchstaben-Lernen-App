@@ -11,10 +11,12 @@ import Foundation
 enum AppWorld: String, CaseIterable, Identifiable, Sendable {
     /// Buchstaben-Schule — guided four-phase letter learning.
     case schule
+    #if !STUDY_BUILD
     /// Schreibwerkstatt — freeform letter and word writing.
     case werkstatt
     /// Meine Fortschritte — child-facing progress / stars / streak.
     case fortschritte
+    #endif
 
     var id: String { rawValue }
 
@@ -22,8 +24,10 @@ enum AppWorld: String, CaseIterable, Identifiable, Sendable {
     var icon: String {
         switch self {
         case .schule:       return "book.fill"
+        #if !STUDY_BUILD
         case .werkstatt:    return "pencil.tip"
         case .fortschritte: return "star.fill"
+        #endif
         }
     }
 
@@ -31,8 +35,10 @@ enum AppWorld: String, CaseIterable, Identifiable, Sendable {
     var label: String {
         switch self {
         case .schule:       return "Schule"
+        #if !STUDY_BUILD
         case .werkstatt:    return "Werkstatt"
         case .fortschritte: return "Sterne"
+        #endif
         }
     }
 
@@ -40,8 +46,10 @@ enum AppWorld: String, CaseIterable, Identifiable, Sendable {
     var accessibilityLabel: String {
         switch self {
         case .schule:       return "Buchstaben-Schule"
+        #if !STUDY_BUILD
         case .werkstatt:    return "Schreibwerkstatt"
         case .fortschritte: return "Meine Fortschritte"
+        #endif
         }
     }
 }

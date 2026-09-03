@@ -138,19 +138,26 @@ struct ParentDashboardExporter {
         // freeWrite-only. They ride at the end for the same
         // column-order reason.
         lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage"].joined(separator: sep))
-        for rec in snapshot.phaseSessionRecords {
-            // Discard rows from before enrolment so pilot/sandbox
-            // activity isn't attributed to the assigned arm. Also
-            // discard rows lacking `recordedAt` when an `enrolledAt`
-            // exists — they default to `.threePhase` and would
-            // silently inflate that arm.
-            if let enrolledAt {
-                if let ts = rec.recordedAt {
-                    if ts < enrolledAt { continue }
-                } else {
-                    continue
-                }
+        // D11#1: filtered ONCE, here, and every aggregate below —
+        // including the arm-split ones — reads `enrolledRecords`, never
+        // `snapshot.phaseSessionRecords` directly. The raw-row loop and
+        // the arm aggregates used to apply this filter independently;
+        // the aggregates' copy was missing, so a pre-enrolment row
+        // (proctor test-taps, sandbox activity) was excluded from the
+        // per-row export but still counted into the between-arm
+        // comparison — the exact attribution this filter exists to
+        // prevent.
+        let enrolledRecords: [PhaseSessionRecord] = {
+            guard let enrolledAt else { return snapshot.phaseSessionRecords }
+            // Also discard rows lacking `recordedAt` when an `enrolledAt`
+            // exists — they default to `.threePhase` and would silently
+            // inflate that arm.
+            return snapshot.phaseSessionRecords.filter { rec in
+                guard let ts = rec.recordedAt else { return false }
+                return ts >= enrolledAt
             }
+        }()
+        for rec in enrolledRecords {
             let score = String(format: "%.4f", rec.score)
             let prio  = String(format: "%.4f", rec.schedulerPriority)
             let recordedAtField = rec.recordedAt.map { isoFormatter.string(from: $0) } ?? ""
@@ -196,7 +203,7 @@ struct ParentDashboardExporter {
         // meaningful only inside an arm — `.control` uses a different
         // priority scale, so the cross-arm proxy is invalid.
         for arm in ThesisCondition.allCases {
-            let armRecords = snapshot.phaseSessionRecords.filter { $0.condition == arm }
+            let armRecords = enrolledRecords.filter { $0.condition == arm }
             let freeWrite = armRecords.filter { $0.phase == LearningPhase.freeWrite.rawName && $0.completed }.map(\.score)
             if !freeWrite.isEmpty {
                 let avg = freeWrite.reduce(0, +) / Double(freeWrite.count)
@@ -236,7 +243,7 @@ struct ParentDashboardExporter {
         // letter-level source. Format:
         // `letterByArm,letter,arm,sampleCount,averageScore`.
         lines.append(["letterByArm","letter","arm","sampleCount","averageScore"].joined(separator: sep))
-        let phaseByArm = Dictionary(grouping: snapshot.phaseSessionRecords.filter(\.completed), by: { $0.condition })
+        let phaseByArm = Dictionary(grouping: enrolledRecords.filter(\.completed), by: { $0.condition })
         for arm in ThesisCondition.allCases {
             guard let records = phaseByArm[arm] else { continue }
             let byLetter = Dictionary(grouping: records, by: { $0.letter })
@@ -252,7 +259,7 @@ struct ParentDashboardExporter {
         // both the pilot's audio contrast and the larger study's
         // pedagogical contrast stay exportable from one file.
         for arm in PilotAudioCondition.allCases {
-            let armRecords = snapshot.phaseSessionRecords.filter { $0.audioCondition == arm }
+            let armRecords = enrolledRecords.filter { $0.audioCondition == arm }
             let freeWrite = armRecords.filter { $0.phase == LearningPhase.freeWrite.rawName && $0.completed }.map(\.score)
             if !freeWrite.isEmpty {
                 let avg = freeWrite.reduce(0, +) / Double(freeWrite.count)
@@ -263,7 +270,7 @@ struct ParentDashboardExporter {
         // `letterByArm`. Format:
         // `letterByAudioArm,letter,audioArm,sampleCount,averageScore`.
         lines.append(["letterByAudioArm","letter","audioArm","sampleCount","averageScore"].joined(separator: sep))
-        let phaseByAudioArm = Dictionary(grouping: snapshot.phaseSessionRecords.filter(\.completed), by: { $0.audioCondition })
+        let phaseByAudioArm = Dictionary(grouping: enrolledRecords.filter(\.completed), by: { $0.audioCondition })
         for arm in PilotAudioCondition.allCases {
             guard let records = phaseByAudioArm[arm] else { continue }
             let byLetter = Dictionary(grouping: records, by: { $0.letter })

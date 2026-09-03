@@ -1,3 +1,9 @@
+// COMPILED OUT OF THE STUDY BUILD.
+// Werkstatt world — child-reachable, not the tracing task (Q ruling)
+// The symbol must be ABSENT from the study binary, which the CI
+// identity scan asserts via SURFACES. Gating the whole file rather
+// than the call site is what makes that assertion meaningful.
+#if !STUDY_BUILD
 // WerkstattWorldView.swift
 // PrimaeNative
 //
@@ -118,3 +124,4 @@ struct WerkstattWorldView: View {
         }
     }
 }
+#endif

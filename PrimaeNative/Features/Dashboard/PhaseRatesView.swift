@@ -1,3 +1,9 @@
+// COMPILED OUT OF THE STUDY BUILD.
+// Phase rates — reached only from ParentDashboardView
+// The symbol must be ABSENT from the study binary, which the CI
+// identity scan asserts via SURFACES. Gating the whole file rather
+// than the call site is what makes that assertion meaningful.
+#if !STUDY_BUILD
 // PhaseRatesView.swift
 // PrimaeNative
 //
@@ -57,3 +63,4 @@ struct PhaseRatesView: View {
         .padding(.vertical, 4)
     }
 }
+#endif

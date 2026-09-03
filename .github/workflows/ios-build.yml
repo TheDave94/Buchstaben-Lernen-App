@@ -52,6 +52,35 @@ jobs:
           print("No retrace/spike artifacts found.")
           PY
 
+  unwired_guards:
+    name: "Unwired-guard gate (macos-26 / Xcode 26)"
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # macos, not ubuntu, and that is load-bearing. The gate PROBES each
+      # --self-test by running it, so every probed script must be able to
+      # reach its own self-test branch here. typecheck_package.sh checks for
+      # xcrun before it dispatches, so on a runner without Xcode it would
+      # exit early and the gate would report a guard as unreachable when it
+      # is merely unhosted. Invoking rather than grepping is what makes the
+      # gate trustworthy; this is the cost of that choice.
+      - name: Select Xcode 26.4
+        run: sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
+
+      # FIRST, prove the gate can fail. A scan trusted before its own
+      # self-test has run is a scan whose CLEAN means nothing — and this
+      # step is also what keeps the gate's --self-test dispatched to on
+      # every run, rather than only when someone remembers.
+      - name: "Prove the gate can fail (--self-test)"
+        run: sh scripts/check_unwired_guards.sh --self-test
+
+      # THEN scan. Non-zero exit fails the job and therefore the build; the
+      # gate reports nothing it does not also fail on.
+      - name: "Scan for guards that assert nothing"
+        run: sh scripts/check_unwired_guards.sh
+
   xcode_test:
     name: "Build & Test — ${{ matrix.simulator }} (macos-26 / Xcode 26)"
     runs-on: macos-26
@@ -388,7 +417,17 @@ jobs:
             done
           }
 
-          SURFACES="debugPercentReadout"
+          # Every declaration compiled out of the study build. Each entry is
+          # a substring of the Swift mangled name; the "missing from NORMAL
+          # too" branch below means a rename cannot make an entry pass
+          # vacuously — fix the pattern, never delete the entry.
+          SURFACES="debugPercentReadout
+                    WerkstattWorldView
+                    FortschritteWorldView
+                    OnboardingView
+                    StrokeCalibrationOverlay
+                    ParentDashboardView
+                    PhaseRatesView"
           if [ -n "$STUDY" ] && [ -n "$NORMAL" ]; then
             for sym in $SURFACES; do
               in_study=$(sym_in_bundle "$STUDY" "$sym")

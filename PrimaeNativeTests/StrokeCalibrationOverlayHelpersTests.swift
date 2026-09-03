@@ -1,3 +1,7 @@
+// COMPILED OUT OF THE STUDY BUILD, matching StrokeCalibrationOverlay.swift
+// itself — the type these tests exercise does not exist under STUDY_BUILD.
+// Coverage still runs under the normal xcode_test job.
+#if !STUDY_BUILD
 import Testing
 import Foundation
 import CoreGraphics
@@ -144,3 +148,4 @@ import CoreGraphics
         #expect(breaks.isEmpty)
     }
 }
+#endif

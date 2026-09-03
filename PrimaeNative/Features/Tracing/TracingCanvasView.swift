@@ -346,9 +346,15 @@ struct TracingCanvasView: View {
                     // Top-most layer so drag / tap edits aren't swallowed
                     // by the underlying tracing/pencil overlays. Other
                     // overlays already gate themselves on `!isCalibrating`.
+                    #if !STUDY_BUILD
+                    // Q2: studyMode already bypasses calibration overrides
+                    // (TracingViewModel.resolvedStrokes), so in a study build
+                    // the overlay's only remaining power is editing the
+                    // stimulus. Calibration happens on the dev build.
                     if vm.isCalibrating {
                         StrokeCalibrationOverlay(canvasSize: geo.size)
                     }
+                    #endif
                 }
             )
         }

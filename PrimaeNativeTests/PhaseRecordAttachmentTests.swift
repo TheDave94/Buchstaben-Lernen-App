@@ -229,7 +229,12 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
 
         let frechet = try #require(fw.frechetDistance)
         #expect(frechet.isFinite, "frechetDistance must be finite, got \(frechet)")
-        #expect(frechet >= 0, "frechetDistance is a distance, got \(frechet)")
+        // A distance is >= 0 by construction, so that bound held whether the
+        // pipeline was right or wrong. The bound that CAN fail is the upper
+        // one: a value past the unit-square diagonal is not normalised letter
+        // space, which is how an unnormalised pixel distance would surface.
+        #expect(frechet <= 2.0.squareRoot(),
+                "frechetDistance outside normalised letter space: \(frechet)")
 
         let coverage = try #require(fw.checkpointCoverage)
         #expect((0...1).contains(coverage), "coverage out of domain: \(coverage)")

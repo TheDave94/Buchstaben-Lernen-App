@@ -99,6 +99,14 @@ check() {
 }
 
 if [ "$SELF_TEST" -eq 1 ]; then
+  # The probe answer check_unwired_guards.sh demands, as the FIRST act
+  # inside this branch. Placed here rather than beside the argument loop
+  # deliberately: a token printed earlier would prove only that the parser
+  # set SELF_TEST, not that this block is still reachable from it.
+  if [ "${GUARD_SELFTEST_PROBE:-0}" = "1" ]; then
+    echo "SELFTEST_REACHABLE"
+    exit 0
+  fi
   # Induce a KNOWN ActorIsolatedCall in a throwaway file rather than editing
   # a real one: a self-test that mutates tracked source can destroy work if
   # it dies mid-run. The trap guarantees removal on any exit path.

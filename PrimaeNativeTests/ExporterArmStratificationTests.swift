@@ -276,6 +276,51 @@ import Foundation
                 "the two axes share a label — they are not independent: \(thesisLabels) / \(audioLabels)")
     }
 
+    // MARK: - 8. Pre-enrolment rows never reach an arm-split aggregate
+    //
+    // D11#1: the pre-enrolment filter ran only over the raw per-phase
+    // rows; every arm-split aggregate below read `snapshot.phaseSessionRecords`
+    // directly and unfiltered, so a pre-enrolment row (proctor
+    // test-taps, sandbox activity) was excluded from the CSV's row-level
+    // section but still corrupted the between-arm comparison — the exact
+    // attribution the filter exists to prevent.
+
+    @Test("a pre-enrolment record does not reach any arm-split aggregate")
+    func preEnrolmentRowsExcludedFromArmAggregates() throws {
+        let enrolledAt = Date(timeIntervalSince1970: 1_000_000)
+        var s = snapshot()
+        // Same arm (guidedOnly/silent) as the existing single B record
+        // (score 1.0), so leakage is visible as both a moved average and
+        // an inflated sample count.
+        s.phaseSessionRecords.append(
+            PhaseSessionRecord(letter: "B", phase: "freeWrite", completed: true,
+                               score: 0.0, schedulerPriority: 0.0,
+                               condition: .guidedOnly, audioCondition: .silent,
+                               recordedAt: enrolledAt.addingTimeInterval(-3600)))
+
+        let data = ParentDashboardExporter.csvData(
+            from: s, participantId: pid, progress: [:], enrolledAt: enrolledAt)
+        let lines = String(data: data, encoding: .utf8)!
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let m = metrics(lines)
+
+        let thesisArm = try #require(m["averageFreeWriteScore_guidedOnly"])
+        #expect(Double(thesisArm) == 1.0,
+                "pre-enrolment score 0.0 pulled the guidedOnly average down: got \(thesisArm)")
+        let audioArm = try #require(m["averageFreeWriteScore_audio_silent"])
+        #expect(Double(audioArm) == 1.0,
+                "pre-enrolment score 0.0 pulled the silent-arm average down: got \(audioArm)")
+
+        let byArmRow = try #require(family("letterByArm", in: lines)
+            .first { $0[1] == "B" && $0[2] == "guidedOnly" })
+        #expect(byArmRow[3] == "1",
+                "pre-enrolment record inflated letterByArm's sample count: \(byArmRow)")
+        let byAudioRow = try #require(family("letterByAudioArm", in: lines)
+            .first { $0[1] == "B" && $0[2] == "silent" })
+        #expect(byAudioRow[3] == "1",
+                "pre-enrolment record inflated letterByAudioArm's sample count: \(byAudioRow)")
+    }
+
     // MARK: - Shared well-formedness
 
     /// Arity, integer sample count, and a score inside [0,1] with the

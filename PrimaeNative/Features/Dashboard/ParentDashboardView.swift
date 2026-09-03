@@ -1,3 +1,9 @@
+// COMPILED OUT OF THE STUDY BUILD.
+// Parent dashboard — child-visible accuracy history
+// The symbol must be ABSENT from the study binary, which the CI
+// identity scan asserts via SURFACES. Gating the whole file rather
+// than the call site is what makes that assertion meaningful.
+#if !STUDY_BUILD
 import SwiftUI
 import UIKit
 
@@ -450,3 +456,4 @@ private struct ActivityViewController: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+#endif

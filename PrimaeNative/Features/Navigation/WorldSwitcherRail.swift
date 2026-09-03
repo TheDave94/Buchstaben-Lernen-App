@@ -20,7 +20,13 @@ struct WorldSwitcherRail: View {
     var body: some View {
         VStack(spacing: 0) {
             Spacer().frame(height: 24)
+            #if !STUDY_BUILD
+            // One world remains in a study build, so a switcher would be a
+            // button that selects what is already selected. The rail itself
+            // stays: it carries the gear, which is the proctor's only route
+            // into the parent area.
             worldButtons
+            #endif
             Spacer()
             gearButton
                 .padding(.bottom, 24)
@@ -43,6 +49,12 @@ struct WorldSwitcherRail: View {
     }
 
     // MARK: - World buttons
+    //
+    // Gated at the DECLARATION, not merely where `body` uses it: a
+    // gated call site leaves the declaration compiling, and
+    // `worldButton(for:)` references `.fortschritte`, which does not
+    // exist in a study build.
+    #if !STUDY_BUILD
 
     private var worldButtons: some View {
         VStack(spacing: 8) {
@@ -89,6 +101,8 @@ struct WorldSwitcherRail: View {
         .accessibilityLabel(world.accessibilityLabel)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
     }
+
+    #endif
 
     private func starBadge(count: Int) -> some View {
         Text(badgeText(for: count))

@@ -13,11 +13,17 @@ struct ParentAreaView: View {
     @Environment(TracingViewModel.self) private var vm
 
     enum Section: String, CaseIterable, Identifiable {
+        #if STUDY_BUILD
+        case research, settings, export
+        #else
         case overview, research, settings, export
+        #endif
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .overview:  return "Übersicht"
+            #if !STUDY_BUILD
+        case .overview:  return "Übersicht"
+        #endif
             case .research:  return "Forschungs-Daten"
             case .settings:  return "Einstellungen"
             case .export:    return "Datenexport"
@@ -25,7 +31,9 @@ struct ParentAreaView: View {
         }
         var systemImage: String {
             switch self {
-            case .overview:  return "chart.bar.fill"
+            #if !STUDY_BUILD
+        case .overview:  return "chart.bar.fill"
+        #endif
             case .research:  return "chart.xyaxis.line"
             case .settings:  return "gearshape.fill"
             case .export:    return "square.and.arrow.up"
@@ -33,7 +41,11 @@ struct ParentAreaView: View {
         }
     }
 
+    #if STUDY_BUILD
+    @State private var selection: Section? = .research
+    #else
     @State private var selection: Section? = .overview
+    #endif
 
     var body: some View {
         NavigationSplitView {
@@ -61,7 +73,11 @@ struct ParentAreaView: View {
                 }
             }
         } detail: {
+            #if STUDY_BUILD
+            detailView(for: selection ?? .research)
+            #else
             detailView(for: selection ?? .overview)
+            #endif
         }
     }
 
@@ -92,8 +108,10 @@ struct ParentAreaView: View {
     @ViewBuilder
     private func detailView(for section: Section) -> some View {
         switch section {
+        #if !STUDY_BUILD
         case .overview:
             ParentDashboardView()
+        #endif
         case .research:
             ResearchDashboardView()
         case .settings:

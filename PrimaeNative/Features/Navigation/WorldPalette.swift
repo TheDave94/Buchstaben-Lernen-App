@@ -24,8 +24,10 @@ enum WorldPalette {
     static func accent(for world: AppWorld) -> Color {
         switch world {
         case .schule:       return .schule
+        #if !STUDY_BUILD
         case .werkstatt:    return .werkstatt
         case .fortschritte: return .fortschritte
+        #endif
         }
     }
 
@@ -34,8 +36,10 @@ enum WorldPalette {
     static func softTint(for world: AppWorld) -> Color {
         switch world {
         case .schule:       return .schuleSoft
+        #if !STUDY_BUILD
         case .werkstatt:    return .werkstattSoft
         case .fortschritte: return .fortschritteSoft
+        #endif
         }
     }
 }

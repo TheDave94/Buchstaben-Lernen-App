@@ -1,3 +1,9 @@
+// COMPILED OUT OF THE STUDY BUILD.
+// Calibration overlay — stimulus editing only under studyMode (Q2)
+// The symbol must be ABSENT from the study binary, which the CI
+// identity scan asserts via SURFACES. Gating the whole file rather
+// than the call site is what makes that assertion meaningful.
+#if !STUDY_BUILD
 // StrokeCalibrationOverlay.swift
 // PrimaeNative
 //
@@ -1918,3 +1924,4 @@ private struct ExportSheet: View {
         }
     }
 }
+#endif

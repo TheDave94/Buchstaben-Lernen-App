@@ -60,7 +60,7 @@ import Foundation
         store.recordCompletion(for: "E", accuracy: 2.5)
         #expect(store.progress(for: "E").bestAccuracy <= 1.0)
         store.recordCompletion(for: "F", accuracy: -0.5)
-        #expect(store.progress(for: "F").bestAccuracy >= 0.0)
+        #expect(store.progress(for: "F").bestAccuracy >= 0.0) // unwired-guard-ok: the input was -0.5, so this bound fails without the clamp
     }
     @Test func totalCompletions_sumsAcrossAllLetters() {
         store.recordCompletion(for: "A", accuracy: 1.0)

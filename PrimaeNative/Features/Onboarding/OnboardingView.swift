@@ -1,3 +1,9 @@
+// COMPILED OUT OF THE STUDY BUILD.
+// Onboarding — device ships already-onboarded (Q4)
+// The symbol must be ABSENT from the study binary, which the CI
+// identity scan asserts via SURFACES. Gating the whole file rather
+// than the call site is what makes that assertion meaningful.
+#if !STUDY_BUILD
 // OnboardingView.swift
 // PrimaeNative
 //
@@ -748,3 +754,4 @@ private struct RewardIntroStepView: View {
         .onDisappear { vm.speech.stop() }
     }
 }
+#endif

@@ -32,39 +32,60 @@ public struct MainAppView: View {
     }
 
     public var body: some View {
-        // Onboarding owns the full screen on first run; no rail
-        // until the user has reached the main experience.
+        // Onboarding owns the full screen on first run; no rail until the
+        // user has reached the main experience.
+        //
+        // A study build ships already-onboarded (Q4): the proctor prepares
+        // the device once, on a normal build. The branch is COMPILED OUT
+        // rather than short-circuited, so `OnboardingView` is never
+        // referenced and the notification-permission request at its trigger
+        // goes with it.
+        #if STUDY_BUILD
+        mainShell
+        #else
         if !vm.isOnboardingComplete {
             OnboardingView()
         } else {
-            HStack(spacing: 0) {
-                WorldSwitcherRail(
-                    activeWorld: activeWorldBinding,
-                    showParentArea: $showParentArea
-                )
-                worldContent
+            mainShell
+        }
+        #endif
+    }
+
+    /// The rail + world shell. Extracted so the onboarding branch above can
+    /// be compiled out as a COMPLETE STATEMENT in each arm — a `#if` cannot
+    /// split an `if`/`else` across its arms, which is how the first attempt
+    /// at this failed.
+    private var mainShell: some View {
+        HStack(spacing: 0) {
+            WorldSwitcherRail(
+                activeWorld: activeWorldBinding,
+                showParentArea: $showParentArea
+            )
+            worldContent
+        }
+        // Paper canvas behind the shell; each world overlays its
+        // own tinted band via `WorldPalette.background(for:)`.
+        .background(Color.paperDeep.ignoresSafeArea())
+        .ignoresSafeArea()
+        .fullScreenCover(isPresented: $showParentArea) {
+            ParentAreaView()
+                .environment(vm)
+        }
+        .onChange(of: activeWorldRaw) { _, _ in
+            #if !STUDY_BUILD
+            // Leaving Werkstatt — drop freeform so the other worlds see
+            // a clean VM state. Werkstatt is compiled out of the study
+            // build, so nothing can enter freeform there.
+            if activeWorld != .werkstatt, vm.writingMode == .freeform {
+                vm.exitFreeformMode()
             }
-            // Paper canvas behind the shell; each world overlays its
-            // own tinted band via `WorldPalette.background(for:)`.
-            .background(Color.paperDeep.ignoresSafeArea())
-            .ignoresSafeArea()
-            .fullScreenCover(isPresented: $showParentArea) {
-                ParentAreaView()
-                    .environment(vm)
-            }
-            .onChange(of: activeWorldRaw) { _, _ in
-                // Leaving Werkstatt — drop freeform so the other
-                // worlds see a clean VM state.
-                if activeWorld != .werkstatt, vm.writingMode == .freeform {
-                    vm.exitFreeformMode()
-                }
-                // Leaving Schule — halt the in-flight phase-entry
-                // voiceover. Phase prompts are Schule-only context;
-                // letting them bleed into Sterne or Werkstatt right
-                // after onboarding is confusing for the child.
-                if activeWorld != .schule {
-                    vm.prompts.stop()
-                }
+            #endif
+            // Leaving Schule — halt the in-flight phase-entry
+            // voiceover. Phase prompts are Schule-only context;
+            // letting them bleed into Sterne or Werkstatt right
+            // after onboarding is confusing for the child.
+            if activeWorld != .schule {
+                vm.prompts.stop()
             }
         }
     }
@@ -75,6 +96,7 @@ public struct MainAppView: View {
             switch activeWorld {
             case .schule:
                 SchuleWorldView()
+            #if !STUDY_BUILD
             case .werkstatt:
                 WerkstattWorldView()
             case .fortschritte:
@@ -82,6 +104,7 @@ public struct MainAppView: View {
                     vm.loadLetter(name: letter)
                     activeWorldRaw = AppWorld.schule.rawValue
                 })
+            #endif
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

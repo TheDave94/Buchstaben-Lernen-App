@@ -1,3 +1,9 @@
+// COMPILED OUT OF THE STUDY BUILD.
+// Fortschritte world — child-facing progress display (Q1)
+// The symbol must be ABSENT from the study binary, which the CI
+// identity scan asserts via SURFACES. Gating the whole file rather
+// than the call site is what makes that assertion meaningful.
+#if !STUDY_BUILD
 // FortschritteWorldView.swift
 // PrimaeNative
 //
@@ -321,3 +327,4 @@ struct FortschritteWorldView: View {
         }
     }
 }
+#endif

@@ -57,6 +57,63 @@ usage() {
 	sed -n '/^# USAGE/,/^# The message arrives/p' "$0" | sed 's/^# \{0,1\}//' >&2
 }
 
+# ---------------------------------------------------------------- verified
+#
+# WHY THIS EXISTS. Two SHAs were reported merged in one session on the
+# strength of narrative rather than output — against a main that had not
+# moved and PRs that did not exist. `landed : main is now $SHA` printed a
+# SHA it had never checked resolves, so the line read identically whether
+# the merge happened or not.
+#
+# Four assertions, each answering a different way the claim can be false:
+# the object exists, origin/BASE contains it, BASE actually MOVED, and the
+# subject is this change rather than someone else's.
+#
+# verify_landed SHA BASE BEFORE TITLE -> 0 verified, 1 not
+verify_landed() {
+	_sha=$1; _base=$2; _before=$3; _title=$4
+
+	if ! git cat-file -e "${_sha}^{commit}" 2>/dev/null; then
+		echo "NOT LANDED: $_sha is not a commit object in this repository" >&2
+		return 1
+	fi
+	if ! git merge-base --is-ancestor "$_sha" "refs/remotes/origin/$_base" 2>/dev/null; then
+		echo "NOT LANDED: origin/$_base does not contain $_sha" >&2
+		return 1
+	fi
+	if [ -n "$_before" ] && [ "$_sha" = "$_before" ]; then
+		echo "NOT LANDED: origin/$_base has not moved — still $_before" >&2
+		return 1
+	fi
+	_subj=$(git --no-pager log -1 --format='%s' "$_sha" 2>/dev/null || true)
+	case "$_subj" in
+		*"$_title"*) : ;;
+		*)
+			echo "NOT LANDED: origin/$_base moved to $_sha, but its subject is not this change" >&2
+			echo "  wanted to contain: $_title" >&2
+			echo "  actual subject   : $_subj" >&2
+			return 1 ;;
+	esac
+
+	echo "VERIFIED: $_base is now $_sha"
+	git --no-pager log -1 --format='          %h %s' "$_sha"
+	return 0
+}
+
+# The verdict runs on EVERY exit path, not only the successful one. The case
+# that most needs a verdict is the one where the land did NOT happen and
+# something might still believe it did — so silence on failure is the bug.
+LANDED=0
+MSGFILE=""
+cleanup() {
+	[ -n "$MSGFILE" ] && rm -f "$MSGFILE"
+	if [ "$LANDED" != "1" ]; then
+		echo "" >&2
+		echo "NOT LANDED: nothing was merged. origin/${BASE:-main} is $(git rev-parse --short "refs/remotes/origin/${BASE:-main}" 2>/dev/null || echo "unknown")" >&2
+	fi
+	return 0
+}
+
 # ---------------------------------------------------------------- self-test
 #
 # WHY THIS EXISTS. Every refusal below was driven by hand once, from outside
@@ -101,9 +158,22 @@ self_test() {
 	ST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/land-selftest.XXXXXX")
 	trap 'rm -rf "$ST_TMP"' EXIT INT TERM
 
-	# A stub gitflow, so the environment check passes and no real PR is ever
-	# created by a self-test.
-	printf '#!/bin/sh\necho "STUB gitflow: $*"\nexit 0\n' > "$ST_TMP/gitflow.sh"
+	# A stub gitflow that REALLY squash-merges into the local origin, so the
+	# happy path exercises verify_landed instead of bypassing it. An echo-only
+	# stub would now fail CASE 12 — correctly, since origin/main would not move.
+	# No real PR is ever created: origin here is a bare repo in the sandbox.
+	cat > "$ST_TMP/gitflow.sh" <<'STUB'
+#!/bin/sh
+set -eu
+_title=$2
+_br=$(git rev-parse --abbrev-ref HEAD)
+git checkout -q main
+git merge -q --squash "$_br"
+git commit -qm "$_title (#1)"
+git push -q origin main
+git checkout -q "$_br"
+echo "STUB gitflow: squash-merged $_br into main"
+STUB
 	chmod +x "$ST_TMP/gitflow.sh"
 	GITFLOW="$ST_TMP/gitflow.sh"
 	export GITFLOW
@@ -213,7 +283,7 @@ self_test() {
 	# Re-enter --self-test in a child. Reaching the branch is what prints the
 	# token, so the token coming back IS the proof of dispatch.
 	set +e
-	_o=$(cd "$R" && LAND_SELFTEST_CHILD=1 sh "$SELF" --self-test < /dev/null 2>&1); _c=$?
+	_o=$(cd "$R" && GUARD_SELFTEST_PROBE=1 sh "$SELF" --self-test < /dev/null 2>&1); _c=$?
 	set -e
 	_st_assert "11 --self-test is itself reachable" 0 "SELFTEST_REACHABLE" "$_c" "$_o"
 
@@ -226,7 +296,22 @@ self_test() {
 	set +e
 	_o=$(cd "$R" && sh "$SELF" < "$ST_TMP/msg_ok" 2>&1); _c=$?
 	set -e
-	_st_assert "12 happy path reaches gitflow and reports a SHA" 0 "landed :" "$_c" "$_o"
+	_st_assert "12 happy path merges and VERIFIES the SHA" 0 "VERIFIED:" "$_c" "$_o"
+
+	# 13 — a fabricated SHA. This is the exact failure this check exists for:
+	# a SHA that reads plausibly and has no object behind it.
+	set +e
+	_o=$(verify_landed 0123456789abcdef0123456789abcdef01234567 main "" "any" 2>&1); _c=$?
+	set -e
+	_st_assert "13 refuses a fabricated SHA" 1 "is not a commit object" "$_c" "$_o"
+
+	# 14 — a REAL commit that origin/main does not contain. Object existence
+	# alone would pass this one, which is why containment is asserted too.
+	_absent=$(git rev-parse selftest-other)
+	set +e
+	_o=$(verify_landed "$_absent" main "" "any" 2>&1); _c=$?
+	set -e
+	_st_assert "14 refuses a real SHA absent from origin/main" 1 "does not contain" "$_c" "$_o"
 
 	echo ""
 	if [ "$ST_FAIL" -eq 0 ]; then
@@ -249,8 +334,9 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$SELF_TEST" -eq 1 ]; then
-	# The child half of CASE 11. Reaching this line is the assertion.
-	if [ "${LAND_SELFTEST_CHILD:-0}" = "1" ]; then
+	# The child half of CASE 11, and the probe answer that
+	# check_unwired_guards.sh demands. Reaching this line is the assertion.
+	if [ "${GUARD_SELFTEST_PROBE:-0}" = "1" ]; then
 		echo "SELFTEST_REACHABLE"
 		exit 0
 	fi
@@ -275,6 +361,13 @@ BASE="${BASE#origin/}"
 
 BR=$(git rev-parse --abbrev-ref HEAD)
 
+# From here on every exit path reports a verdict.
+trap cleanup EXIT INT TERM
+
+# What origin/BASE was BEFORE this run. The "did it move" assertion is
+# meaningless without it, and it has to be read before anything is pushed.
+BASE_BEFORE=$(git rev-parse --verify --quiet "refs/remotes/origin/$BASE" 2>/dev/null || true)
+
 [ "$BR" != "HEAD" ] || die 2 "detached HEAD — check out a branch first"
 [ "$BR" != "$BASE" ] || die 2 "on the default branch '$BASE' — branch first" \
 	"git checkout -b type/short-description"
@@ -295,7 +388,6 @@ if [ -t 0 ]; then
 fi
 
 MSGFILE=$(mktemp "${TMPDIR:-/tmp}/land-msg.XXXXXX")
-trap 'rm -f "$MSGFILE"' EXIT INT TERM
 cat > "$MSGFILE"
 
 if [ -z "$(tr -d '[:space:]' < "$MSGFILE")" ]; then
@@ -365,5 +457,8 @@ fi
 
 SHA=$(git rev-parse "origin/$BASE")
 echo ""
-echo "landed : $BASE is now $SHA"
-git --no-pager log -1 --format='         %h %s' "origin/$BASE"
+if ! verify_landed "$SHA" "$BASE" "$BASE_BEFORE" "$TITLE"; then
+	die 1 "gitflow reported success but the merge is NOT on origin/$BASE" \
+	      "do not trust the SHA above; inspect before retrying"
+fi
+LANDED=1
