@@ -36,6 +36,22 @@ fileprivate final class RecordingAudio: AudioControlling {
     func cancelPendingLifecycleWork() {}
     func setAdaptivePlayback(speed: Float, horizontalBias: Float) { setAdaptiveCount += 1 }
     func setSpatialPitch(cents: Float) { spatialPitches.append(cents) }
+
+    /// Clear everything recorded so far. `TracingViewModel.init` itself
+    /// calls `load(letter:)` for its first (stub) letter, which does its
+    /// OWN unrelated `loadAudioFile(autoplay: false)` — the VM's normal
+    /// "ready to play on tap" priming, nothing to do with the pre-task
+    /// demonstration under test. Reset right after construction so every
+    /// assertion below reflects only what the explicit
+    /// `armPreTaskDemonstration` call under test actually did.
+    func reset() {
+        loadedFiles = []
+        autoplayFlags = []
+        setAdaptiveCount = 0
+        spatialPitches = []
+        stopCount = 0
+        isPlaying = false
+    }
 }
 
 // MARK: - Pure axis-sweep math
@@ -117,6 +133,7 @@ fileprivate final class RecordingAudio: AudioControlling {
     func nonStudy_noOp() async {
         let audio = RecordingAudio()
         let vm = TracingViewModel(.stub.with(audioCondition: .phoneme).with(audio: audio).with(studyMode: false))
+        audio.reset()
         vm.armPreTaskDemonstration(for: asset(), duration: 0.05)
         try? await Task.sleep(for: .milliseconds(150))
         #expect(audio.loadedFiles.isEmpty,
@@ -127,6 +144,7 @@ fileprivate final class RecordingAudio: AudioControlling {
     func silentArm_addsNoAudio() async {
         let audio = RecordingAudio()
         let vm = TracingViewModel(.stub.with(audioCondition: .silent).with(audio: audio).with(studyMode: true))
+        audio.reset()
         vm.armPreTaskDemonstration(for: asset(), duration: 0.05)
         try? await Task.sleep(for: .milliseconds(150))
         #expect(audio.loadedFiles.isEmpty,
@@ -137,6 +155,7 @@ fileprivate final class RecordingAudio: AudioControlling {
     func phonemeArm_playsPhonemeOnce() async {
         let audio = RecordingAudio()
         let vm = TracingViewModel(.stub.with(audioCondition: .phoneme).with(audio: audio).with(studyMode: true))
+        audio.reset()
         vm.armPreTaskDemonstration(for: asset(), duration: 0.05)
         await waitUntil { !audio.loadedFiles.isEmpty }
         #expect(audio.loadedFiles == ["A_phoneme1.mp3"])
@@ -151,6 +170,7 @@ fileprivate final class RecordingAudio: AudioControlling {
     func spatialArm_sweepsAndStops() async {
         let audio = RecordingAudio()
         let vm = TracingViewModel(.stub.with(audioCondition: .spatial).with(audio: audio).with(studyMode: true))
+        audio.reset()
         vm.armPreTaskDemonstration(for: asset(), duration: 0.1)
         await waitUntil { !audio.loadedFiles.isEmpty }
         #expect(audio.loadedFiles == [SpatialSonification.carrierToneFile])
@@ -168,6 +188,7 @@ fileprivate final class RecordingAudio: AudioControlling {
     func cancelBeforeRun_suppressesDemo() async {
         let audio = RecordingAudio()
         let vm = TracingViewModel(.stub.with(audioCondition: .phoneme).with(audio: audio).with(studyMode: true))
+        audio.reset()
         vm.armPreTaskDemonstration(for: asset(), duration: 0.05)
         vm.cancelPreTaskDemonstration()
         try? await Task.sleep(for: .milliseconds(150))
@@ -179,6 +200,7 @@ fileprivate final class RecordingAudio: AudioControlling {
     func realTouch_cancelsDemo() async {
         let audio = RecordingAudio()
         let vm = TracingViewModel(.stub.with(audioCondition: .spatial).with(audio: audio).with(studyMode: true))
+        audio.reset()
         vm.armPreTaskDemonstration(for: asset(), duration: 2.0)
         await waitUntil { !audio.loadedFiles.isEmpty }
         let countAtTouch = audio.setAdaptiveCount
