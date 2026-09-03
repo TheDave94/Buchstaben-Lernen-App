@@ -43,3 +43,7 @@ vcpkg/
 __pycache__/
 *.pyc
 tmp_overlays/
+
+# Session handoff (session-handoff skill) — within-seat scratch,
+# overwritten every time, never meant to carry history.
+HANDOFF.md
