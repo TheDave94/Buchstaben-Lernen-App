@@ -3,8 +3,9 @@
 //
 // Audit finding 19: `PhaseTransitionCoordinator.recordSessionCompletion`
 // discards the `LearningPhase` type into `[String: Double]` and then
-// re-derives it with eight `phase == "freeWrite"` string comparisons to
-// decide which of six fields to attach. Nothing tested that decision.
+// re-derives it with `phase == "freeWrite"` string comparisons to decide
+// which of the measurement fields (seven as of 2026-09-03, was six) to
+// attach. Nothing tested that decision.
 // `MeasurementLayerTests` builds a `PhaseSessionRecord` directly and
 // tests the *exporter*; every other `recordPhaseSession` reference in
 // the suite is a direct store call or a no-op stub. So a coordinator
@@ -37,19 +38,21 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         let condition: ThesisCondition
         let audioCondition: PilotAudioCondition
         let trainedSubset: String?
-        // The six freeWrite-only measurement fields.
+        // The seven freeWrite-only measurement fields (2026-09-03: added
+        // spatialDeviation, the order-invariant primary outcome).
         let assessment: WritingAssessment?
         let recognition: RecognitionSample?
         let rawTraceID: UUID?
         let phaseDurationSeconds: Double?
         let frechetDistance: Double?
         let checkpointCoverage: Double?
+        let spatialDeviation: Double?
 
-        /// How many of the six are populated. 6 on freeWrite, 0 elsewhere.
+        /// How many of the seven are populated. 7 on freeWrite, 0 elsewhere.
         var measurementFieldCount: Int {
             [assessment != nil, recognition != nil, rawTraceID != nil,
              phaseDurationSeconds != nil, frechetDistance != nil,
-             checkpointCoverage != nil].filter { $0 }.count
+             checkpointCoverage != nil, spatialDeviation != nil].filter { $0 }.count
         }
 
         /// Names of the populated fields — makes a failure say *which*
@@ -62,6 +65,7 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
             if phaseDurationSeconds != nil { out.insert("phaseDurationSeconds") }
             if frechetDistance != nil { out.insert("frechetDistance") }
             if checkpointCoverage != nil { out.insert("checkpointCoverage") }
+            if spatialDeviation != nil { out.insert("spatialDeviation") }
             return out
         }
     }
@@ -86,7 +90,8 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
                             trainedSubset: String?,
                             phaseDurationSeconds: Double?,
                             frechetDistance: Double?,
-                            checkpointCoverage: Double?) {
+                            checkpointCoverage: Double?,
+                            spatialDeviation: Double?) {
         calls.append(Call(letter: letter, phase: phase, completed: completed,
                           score: score, condition: condition,
                           audioCondition: audioCondition,
@@ -95,7 +100,8 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
                           rawTraceID: rawTraceID,
                           phaseDurationSeconds: phaseDurationSeconds,
                           frechetDistance: frechetDistance,
-                          checkpointCoverage: checkpointCoverage))
+                          checkpointCoverage: checkpointCoverage,
+                          spatialDeviation: spatialDeviation))
     }
 
     func reset() {}
@@ -203,10 +209,10 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         }
     }
 
-    // MARK: - 2. freeWrite carries all six
+    // MARK: - 2. freeWrite carries all seven
 
-    @Test("the freeWrite row carries all six measurement fields")
-    func freeWriteRowCarriesAllSixMeasurementFields() async throws {
+    @Test("the freeWrite row carries all seven measurement fields")
+    func freeWriteRowCarriesAllSevenMeasurementFields() async throws {
         let s = try await runSession()
         let fw = try row(.freeWrite, in: s.calls)
 
@@ -216,11 +222,12 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         #expect(fw.recognition != nil, "recognition missing from freeWrite row")
         #expect(fw.rawTraceID != nil, "rawTraceID missing from freeWrite row")
         #expect(fw.phaseDurationSeconds != nil, "phaseDurationSeconds missing from freeWrite row")
-        #expect(fw.frechetDistance != nil, "frechetDistance missing — the PRIMARY outcome")
-        #expect(fw.checkpointCoverage != nil, "checkpointCoverage missing — the SECONDARY outcome")
+        #expect(fw.frechetDistance != nil, "frechetDistance missing — the SECONDARY, sequence-sensitive outcome")
+        #expect(fw.checkpointCoverage != nil, "checkpointCoverage missing — a SECONDARY outcome")
+        #expect(fw.spatialDeviation != nil, "spatialDeviation missing — the PRIMARY, order-invariant outcome")
 
-        #expect(fw.measurementFieldCount == 6,
-                "freeWrite row carries \(fw.measurementFieldCount)/6: \(fw.populatedFields.sorted())")
+        #expect(fw.measurementFieldCount == 7,
+                "freeWrite row carries \(fw.measurementFieldCount)/7: \(fw.populatedFields.sorted())")
 
         // Well-formed, not merely present.
         let span = try #require(fw.phaseDurationSeconds)
@@ -235,6 +242,14 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         // space, which is how an unnormalised pixel distance would surface.
         #expect(frechet <= 2.0.squareRoot(),
                 "frechetDistance outside normalised letter space: \(frechet)")
+
+        // Same shape of bound, same reason, for the primary outcome: a
+        // Hausdorff distance in normalised letter space cannot exceed the
+        // unit square's diagonal either.
+        let deviation = try #require(fw.spatialDeviation)
+        #expect(deviation.isFinite, "spatialDeviation must be finite, got \(deviation)")
+        #expect(deviation <= 2.0.squareRoot(),
+                "spatialDeviation outside normalised letter space: \(deviation)")
 
         let coverage = try #require(fw.checkpointCoverage)
         #expect((0...1).contains(coverage), "coverage out of domain: \(coverage)")
@@ -263,6 +278,7 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
             #expect(call.phaseDurationSeconds == nil, "\(phase.rawName) picked up phaseDurationSeconds")
             #expect(call.frechetDistance == nil, "\(phase.rawName) picked up frechetDistance")
             #expect(call.checkpointCoverage == nil, "\(phase.rawName) picked up checkpointCoverage")
+            #expect(call.spatialDeviation == nil, "\(phase.rawName) picked up spatialDeviation")
         }
 
         // Exactly one row in the session owns the measurement fields.

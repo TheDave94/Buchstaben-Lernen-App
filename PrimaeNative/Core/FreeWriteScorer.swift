@@ -4,7 +4,10 @@
 // Scores a freehand drawn path against a reference letter definition.
 // Returns a WritingAssessment with four Schreibmotorik dimensions
 // (Marquardt & Söhl 2016): Form, Tempo, Druck, Rhythmus.
-// Form scoring uses discrete Fréchet distance (Eiter & Mannila 1994).
+// Form scoring uses symmetric Hausdorff distance (2026-09-03; order-
+// invariant — see `rawSpatialDeviation`). Discrete Fréchet distance
+// (Eiter & Mannila 1994) is retained as `rawDistance`, feeding the
+// sequence-sensitive secondary outcome `PhaseSessionRecord.frechetDistance`.
 
 import CoreGraphics
 import Foundation
@@ -13,7 +16,7 @@ import Foundation
 
 /// Four-dimension writing assessment per Schreibmotorik Institut (Marquardt & Söhl, 2016).
 struct WritingAssessment: Codable, Equatable {
-    /// Shape accuracy via discrete Fréchet distance (0–1).
+    /// Shape accuracy via order-invariant Hausdorff distance (0–1).
     let formAccuracy: CGFloat
     /// Speed consistency: 1 – normalised variance of inter-point intervals (0–1).
     let tempoConsistency: CGFloat
@@ -55,6 +58,7 @@ struct FreeWriteScorer {
     }
 
     /// Raw Fréchet distance (exposed for debug overlay and testing).
+    /// Sequence-sensitive — see the note on `PhaseSessionRecord.frechetDistance`.
     static func rawDistance(
         tracedPoints: [CGPoint],
         reference: LetterStrokes
@@ -66,6 +70,45 @@ struct FreeWriteScorer {
             resample(tracedPoints, targetCount: targetCount),
             resample(refPoints, targetCount: targetCount)
         )
+    }
+
+    /// Raw, ORDER-INVARIANT spatial deviation — the pilot's primary
+    /// accuracy outcome (2026-09-03). Symmetric Hausdorff distance
+    /// between the traced points and the reference strokes, the strokes
+    /// densified per-stroke first so cross-lift gaps can't absorb sample
+    /// points (same technique `formAccuracyShape` uses). Deliberately
+    /// NOT normalised to a unit bounding box the way `formAccuracyShape`
+    /// is: that normalisation is right for freeform/Werkstatt, where
+    /// there is no fixed reference frame to be accurate WITHIN, but the
+    /// guided/freeWrite task traces onto one, so position and scale
+    /// carry real signal here — the same space `rawDistance` (Fréchet)
+    /// already measures in, which is what makes the two comparable as a
+    /// primary/secondary pair rather than two measures on different
+    /// scales.
+    ///
+    /// Hausdorff over Fréchet because it is symmetric in point
+    /// CORRESPONDENCE, not just endpoint direction: Fréchet's DP walk
+    /// couples trace-order to reference-order monotonically, so writing
+    /// a spatially perfect letter in an unusual stroke order still
+    /// costs Fréchet distance — the two properties (shape, sequence)
+    /// were never actually separable inside one number. Hausdorff asks
+    /// only "is every traced point near some reference point, and vice
+    /// versa" — true for any traversal order — which is exactly the
+    /// product/process split the handwriting literature draws (form and
+    /// legibility vs. stroke count/order/direction). Not normalised or
+    /// clamped for the same statistical reason `rawDistance` isn't (see
+    /// `PhaseSessionRecord.frechetDistance`'s note): a clamped,
+    /// saturating score is worse for a continuous pilot outcome than an
+    /// unbounded one.
+    static func rawSpatialDeviation(
+        tracedPoints: [CGPoint],
+        reference: LetterStrokes
+    ) -> CGFloat {
+        let denseRef = densifyReferenceStrokes(reference)
+        guard denseRef.count >= 2, tracedPoints.count >= 2 else { return .greatestFiniteMagnitude }
+        let d1 = oneSidedHausdorff(tracedPoints, denseRef)
+        let d2 = oneSidedHausdorff(denseRef, tracedPoints)
+        return max(d1, d2)
     }
 
     // MARK: - Shape-only accuracy (freeform writing)
@@ -162,32 +205,27 @@ struct FreeWriteScorer {
 
     // MARK: - Dimension: Form accuracy
 
-    /// Primary thesis Form measure (the recorded `WritingAssessment.formAccuracy`).
+    /// The recorded `WritingAssessment.formAccuracy` — clamped, scaled
+    /// companion to `PhaseSessionRecord.spatialDeviation` (2026-09-03:
+    /// re-pointed from Fréchet to order-invariant Hausdorff; see
+    /// `rawSpatialDeviation` for why). "Form" is a product measure —
+    /// does the shape match — and should not cost a child anything for
+    /// tracing a spatially correct letter in an unusual stroke order;
+    /// that is a process property, recorded separately (stroke count/
+    /// order/direction) alongside the retained Fréchet distance, which
+    /// remains exactly as it was as the named sequence-sensitive
+    /// secondary — see `PhaseSessionRecord.frechetDistance`.
     ///
-    /// Cross-pen-lift note (investigated 2026-06): the reference is built
-    /// by `referencePolyline`, which concatenates all strokes into one
-    /// polyline and resamples by arc length — bridging each lift gap with
-    /// a phantom diagonal. This was found **Fréchet-SAFE**: discrete
-    /// Fréchet couples the trace's gap-bridge to the reference's
-    /// gap-bridge at matching arc-length fractions, so the phantom
-    /// diagonal cannot inflate the score beyond the real per-stroke error
-    /// (empirically ≤1.4% on real letters, 0 in most cases, always toward
-    /// HIGHER scores). The genuine cross-lift "tank" the
-    /// `formAccuracyShape` docstring describes was a Hausdorff concern on
-    /// the freeform/Werkstatt path, which is already per-stroke-densified.
-    /// No per-stroke fix to this primary measure is warranted. Replica
-    /// validation covered real A/T/H/I letters + synthetic long-gap,
-    /// length-mismatch, and gross-displacement regimes. See
-    /// docs/ROADMAP.md → Pilot study → Known issues (Fréchet cross-lift-safe).
+    /// Same clamp convention as the prior Fréchet-based version
+    /// (`checkpointRadius * 3.0`) for continuity in the UI's displayed
+    /// range; the cross-pen-lift concern that motivated an earlier
+    /// investigation of the old Fréchet path doesn't apply here — this
+    /// measure densifies the reference per-stroke (`densifyReferenceStrokes`),
+    /// which sidesteps cross-lift phantom segments entirely rather than
+    /// relying on them being provably harmless.
     private static func formAccuracy(tracedPoints: [CGPoint], reference: LetterStrokes) -> CGFloat {
-        let refPoints = referencePolyline(from: reference)
-        guard refPoints.count >= 2, tracedPoints.count >= 2 else { return 0 }
-
-        let targetCount = max(refPoints.count, 20)
-        let resampledTrace = resample(tracedPoints, targetCount: targetCount)
-        let resampledRef   = resample(refPoints, targetCount: targetCount)
-
-        let distance = discreteFrechetDistance(resampledTrace, resampledRef)
+        let distance = rawSpatialDeviation(tracedPoints: tracedPoints, reference: reference)
+        guard distance.isFinite, distance < .greatestFiniteMagnitude else { return 0 }
         let maxAcceptable = reference.checkpointRadius * 3.0
         guard maxAcceptable > 0 else { return 0 }
 

@@ -356,8 +356,13 @@ public final class TracingViewModel {
     var lastFreeWriteDistance: CGFloat { freeWriteRecorder.lastDistance }
     /// Raw discrete-Fréchet distance of the measured freeWrite trace in
     /// reference-normalised units, or nil if none was measured. The
-    /// study's primary accuracy outcome — see `PhaseSessionRecord.frechetDistance`.
+    /// study's SECONDARY (sequence-sensitive) accuracy outcome — see
+    /// `PhaseSessionRecord.frechetDistance`.
     var lastFreeWriteFrechetDistance: CGFloat? { freeWriteRecorder.lastFrechetDistance }
+    /// Raw, order-invariant spatial deviation of the measured freeWrite
+    /// trace, or nil if none was measured. The study's PRIMARY accuracy
+    /// outcome (2026-09-03) — see `PhaseSessionRecord.spatialDeviation`.
+    var lastFreeWriteSpatialDeviation: CGFloat? { freeWriteRecorder.lastSpatialDeviation }
     /// Most recent four-dimension Schreibmotorik assessment.
     var lastWritingAssessment: WritingAssessment? { freeWriteRecorder.lastAssessment }
     /// Last guided-phase score, captured for the "Nachspuren fertig"

@@ -40,13 +40,22 @@ final class FreeWritePhaseRecorder {
     private(set) var checkpointsPerSecond: CGFloat = 0
     /// Last raw discrete-Fréchet distance in reference-normalised
     /// (cell-local 0–1) units, or nil when no assessment has produced a
-    /// finite one this session. This is the study's PRIMARY accuracy
-    /// outcome — unlike `WritingAssessment.formAccuracy` it is neither
-    /// clamped nor rescaled, so it keeps discriminating above and below
-    /// the `checkpointRadius * 3` band where formAccuracy saturates at
-    /// 1 / 0. Lower is better. `PhaseTransitionCoordinator` records it
-    /// onto the freeWrite row.
+    /// finite one this session. SECONDARY outcome (2026-09-03: primary
+    /// moved to `lastSpatialDeviation` below — Fréchet is sequence-
+    /// sensitive, which made it a hybrid of a product measure and a
+    /// process one). Retained exactly as it was: neither clamped nor
+    /// rescaled, so it keeps discriminating above and below the
+    /// `checkpointRadius * 3` band where formAccuracy saturates at 1 / 0.
+    /// Lower is better. `PhaseTransitionCoordinator` records it onto the
+    /// freeWrite row.
     private(set) var lastFrechetDistance: CGFloat?
+    /// Last raw, ORDER-INVARIANT spatial deviation (symmetric Hausdorff)
+    /// in the same reference-normalised units as `lastFrechetDistance` —
+    /// the study's PRIMARY accuracy outcome (2026-09-03). See
+    /// `FreeWriteScorer.rawSpatialDeviation` for why Hausdorff over
+    /// Fréchet. Lower is better; nil when no assessment has produced a
+    /// finite one this session.
+    private(set) var lastSpatialDeviation: CGFloat?
     /// Non-optional mirror of `lastFrechetDistance` for the debug
     /// overlay, which wants a displayable number rather than a
     /// "not measured" state. 0 reads as "perfect" — never record this;
@@ -94,6 +103,7 @@ final class FreeWritePhaseRecorder {
         activePhaseStart = now
         checkpointsPerSecond = 0
         lastFrechetDistance = nil
+        lastSpatialDeviation = nil
         lastAssessment = nil
     }
 
@@ -232,6 +242,7 @@ final class FreeWritePhaseRecorder {
         )
         lastAssessment = assessment
         lastFrechetDistance = Self.measuredDistance(normalised, reference)
+        lastSpatialDeviation = Self.measuredSpatialDeviation(normalised, reference)
         return assessment
     }
 
@@ -243,6 +254,16 @@ final class FreeWritePhaseRecorder {
     private static func measuredDistance(_ points: [CGPoint],
                                          _ reference: LetterStrokes) -> CGFloat? {
         let d = FreeWriteScorer.rawDistance(tracedPoints: points, reference: reference)
+        guard d.isFinite, d < .greatestFiniteMagnitude else { return nil }
+        return d
+    }
+
+    /// Raw order-invariant spatial deviation, or nil when the pair isn't
+    /// comparable — same sentinel discipline as `measuredDistance`, since
+    /// `rawSpatialDeviation` signals "not comparable" the same way.
+    private static func measuredSpatialDeviation(_ points: [CGPoint],
+                                                 _ reference: LetterStrokes) -> CGFloat? {
+        let d = FreeWriteScorer.rawSpatialDeviation(tracedPoints: points, reference: reference)
         guard d.isFinite, d < .greatestFiniteMagnitude else { return nil }
         return d
     }
@@ -259,6 +280,7 @@ final class FreeWritePhaseRecorder {
         activePhaseStart = 0
         checkpointsPerSecond = 0
         lastFrechetDistance = nil
+        lastSpatialDeviation = nil
         lastAssessment = nil
         lastGuidedScore = nil
     }

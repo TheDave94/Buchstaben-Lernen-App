@@ -183,8 +183,8 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
 
     // MARK: - 2c. Both measures reach the record and the CSV
 
-    @Test("freeWrite row stores Fréchet distance + checkpoint coverage")
-    func storeRecordsBothAccuracyMeasures() throws {
+    @Test("freeWrite row stores Fréchet distance + checkpoint coverage + spatial deviation")
+    func storeRecordsAllThreeAccuracyMeasures() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -194,31 +194,34 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
             schedulerPriority: 0.4, condition: .threePhase, audioCondition: .phoneme,
             assessment: nil, recognition: nil, inputDevice: "finger",
             rawTraceID: nil, trainedSubset: "AIM", phaseDurationSeconds: 6.25,
-            frechetDistance: 0.083412, checkpointCoverage: 1.0)
+            frechetDistance: 0.083412, checkpointCoverage: 1.0,
+            spatialDeviation: 0.067321)
 
         let rec = try #require(store.snapshot.phaseSessionRecords.last)
         #expect(rec.frechetDistance == 0.083412)
         #expect(rec.checkpointCoverage == 1.0)
+        #expect(rec.spatialDeviation == 0.067321)
     }
 
-    @Test("per-phase CSV gains frechetDistance + checkpointCoverage columns")
-    func csvCarriesBothAccuracyMeasures() {
+    @Test("per-phase CSV gains frechetDistance + checkpointCoverage + spatialDeviation columns")
+    func csvCarriesAllThreeAccuracyMeasures() {
         var snap = DashboardSnapshot()
         snap.phaseSessionRecords.append(PhaseSessionRecord(
             letter: "I", phase: "freeWrite", completed: true, score: 0.6,
             schedulerPriority: 0, recordedAt: Date(timeIntervalSince1970: 1_770_000_000),
             phaseDurationSeconds: 4.5, frechetDistance: 0.123456,
-            checkpointCoverage: 0.875))
+            checkpointCoverage: 0.875, spatialDeviation: 0.098765))
         let csv = String(data: ParentDashboardExporter.csvData(
             from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
 
-        #expect(csv.contains("phaseDurationSeconds,frechetDistance,checkpointCoverage"),
-                "the two measures append after the existing trailing column")
+        #expect(csv.contains("phaseDurationSeconds,frechetDistance,checkpointCoverage,spatialDeviation"),
+                "the three measures append after the existing trailing column, newest last")
         #expect(csv.contains("0.123456"), "Fréchet exports at 6 dp — 0–1 letter space")
         #expect(csv.contains("0.8750"))
+        #expect(csv.contains("0.098765"), "spatial deviation exports at 6 dp — same letter space")
     }
 
-    @Test("non-freeWrite and legacy rows leave both columns empty")
+    @Test("non-freeWrite and legacy rows leave all three columns empty")
     func nonFreeWriteRowsLeaveMeasuresEmpty() throws {
         var snap = DashboardSnapshot()
         snap.phaseSessionRecords.append(PhaseSessionRecord(
@@ -234,10 +237,12 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         #expect(fields.count == names.count, "row and header must stay aligned")
         let frechetIdx = try #require(names.firstIndex(of: "frechetDistance"))
         let coverageIdx = try #require(names.firstIndex(of: "checkpointCoverage"))
+        let deviationIdx = try #require(names.firstIndex(of: "spatialDeviation"))
         // Empty, never a defaulted 0 — a 0 distance reads as a perfect
         // overlay and a 0 coverage as a blank page.
         #expect(fields[frechetIdx].isEmpty)
         #expect(fields[coverageIdx].isEmpty)
+        #expect(fields[deviationIdx].isEmpty)
     }
 
     @Test("legacy JSON without the new keys decodes to nil, not 0")
@@ -251,6 +256,7 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         let rec = try JSONDecoder().decode(PhaseSessionRecord.self, from: legacy)
         #expect(rec.frechetDistance == nil)
         #expect(rec.checkpointCoverage == nil)
+        #expect(rec.spatialDeviation == nil)
     }
 
     // MARK: - 3. End-inclusive freeWrite time

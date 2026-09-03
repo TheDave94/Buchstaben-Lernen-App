@@ -132,12 +132,18 @@ struct ParentDashboardExporter {
         // excluding the trailing 2.0 s quiet-window auto-advance) are
         // appended last, newest-last, so the legacy column order is
         // preserved for existing consumers.
-        // `frechetDistance` is the study's PRIMARY accuracy outcome (raw,
-        // unclamped, lower = better) and `checkpointCoverage` the
-        // SECONDARY one (bounded 0–1, saturates at ceiling). Both are
-        // freeWrite-only. They ride at the end for the same
-        // column-order reason.
-        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage"].joined(separator: sep))
+        // `spatialDeviation` is the study's PRIMARY accuracy outcome
+        // (2026-09-03: order-invariant Hausdorff distance, raw,
+        // unclamped, lower = better). `frechetDistance` is now a named
+        // SECONDARY, sequence-sensitive process outcome — same raw/
+        // unclamped convention, unchanged computation, reclassified
+        // role only. `checkpointCoverage` is a SECONDARY outcome too
+        // (bounded 0–1, saturates at ceiling). All three are freeWrite-
+        // only. `spatialDeviation` rides at the very end, after
+        // `checkpointCoverage`, for the same newest-last column-order
+        // reason the others do — it is the newest field, not because it
+        // is least important.
+        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage","spatialDeviation"].joined(separator: sep))
         // D11#1: filtered ONCE, here, and every aggregate below —
         // including the arm-split ones — reads `enrolledRecords`, never
         // `snapshot.phaseSessionRecords` directly. The raw-row loop and
@@ -182,7 +188,9 @@ struct ParentDashboardExporter {
                 // space, where meaningful between-child differences show
                 // up in the 3rd–4th decimal.
                 rec.frechetDistance.map { String(format: "%.6f", $0) } ?? "",
-                rec.checkpointCoverage.map { String(format: "%.4f", $0) } ?? ""
+                rec.checkpointCoverage.map { String(format: "%.4f", $0) } ?? "",
+                // Same 6 dp precision as frechetDistance, same space.
+                rec.spatialDeviation.map { String(format: "%.6f", $0) } ?? ""
             ].joined(separator: sep))
         }
         lines.append("")

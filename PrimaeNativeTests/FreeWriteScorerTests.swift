@@ -66,15 +66,43 @@ struct FreeWriteScorerTests {
         #expect(assessment.formAccuracy < 0.3)
     }
 
-    @Test("Reversed trace penalises direction")
-    func reversedTrace() {
-        let traced: [CGPoint] = [
-            CGPoint(x: 0.5, y: 0.8), CGPoint(x: 0.5, y: 0.65),
-            CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.35),
-            CGPoint(x: 0.5, y: 0.2),
+    // (2026-09-03) formAccuracy is now order-invariant (Hausdorff, not
+    // Fréchet) — this used to assert the OPPOSITE of what's below: that a
+    // reversed trace scored below 0.5. That was the exact defect the
+    // primary-outcome change fixes: a spatially perfect letter written in
+    // an unusual stroke order should not cost Form accuracy, because
+    // direction/sequence is a process property, not a product one.
+    @Test("Reversed trace does NOT penalise formAccuracy — order-invariant by design")
+    func reversedTraceDoesNotPenaliseFormAccuracy() {
+        let forward: [CGPoint] = [
+            CGPoint(x: 0.5, y: 0.2), CGPoint(x: 0.5, y: 0.35),
+            CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.65),
+            CGPoint(x: 0.5, y: 0.8),
         ]
-        let assessment = FreeWriteScorer.score(tracedPoints: traced, reference: verticalLineStrokes)
-        #expect(assessment.formAccuracy < 0.5)
+        let reversed = forward.reversed().map { $0 }
+        let s1 = FreeWriteScorer.score(tracedPoints: forward, reference: verticalLineStrokes).formAccuracy
+        let s2 = FreeWriteScorer.score(tracedPoints: reversed, reference: verticalLineStrokes).formAccuracy
+        #expect(abs(s1 - s2) < 1e-6,
+                "formAccuracy must be order-invariant; forward=\(s1) reversed=\(s2)")
+        #expect(s2 > 0.9, "a reversed but spatially perfect trace must still score high")
+    }
+
+    // The property formAccuracy deliberately no longer has: Fréchet (the
+    // retained SECONDARY, sequence-sensitive outcome) still penalises
+    // reversal, because that is exactly the process property it now
+    // exists to measure instead of conflating with form.
+    @Test("Reversed trace still penalises rawDistance (Fréchet) — the retained process measure")
+    func reversedTracePenalisesFrechet() {
+        let forward: [CGPoint] = [
+            CGPoint(x: 0.5, y: 0.2), CGPoint(x: 0.5, y: 0.35),
+            CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.65),
+            CGPoint(x: 0.5, y: 0.8),
+        ]
+        let reversed = forward.reversed().map { $0 }
+        let forwardFrechet = FreeWriteScorer.rawDistance(tracedPoints: forward, reference: verticalLineStrokes)
+        let reversedFrechet = FreeWriteScorer.rawDistance(tracedPoints: reversed, reference: verticalLineStrokes)
+        #expect(reversedFrechet > forwardFrechet + 0.1,
+                "Fréchet must still cost a reversed trace: forward=\(forwardFrechet) reversed=\(reversedFrechet)")
     }
 
     @Test("Multi-stroke L-shape scores well")
@@ -176,6 +204,70 @@ struct FreeWriteScorerTests {
         let emptyRef = LetterStrokes(letter: "X", checkpointRadius: 0.04, strokes: [])
         let traced = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.6)]
         #expect(FreeWriteScorer.formAccuracyShape(tracedPoints: traced, reference: emptyRef) == 0)
+    }
+
+    // MARK: - Spatial deviation (order-invariant PRIMARY outcome)
+
+    /// `rawSpatialDeviation` is the pilot's primary accuracy outcome
+    /// (2026-09-03). Unlike `formAccuracyShape` it is NOT normalised to
+    /// a unit bounding box — position and scale carry real signal in
+    /// the guided/freeWrite task's fixed reference frame — but it shares
+    /// the same order-free Hausdorff guarantee, which is the property
+    /// under test here.
+    @Test("rawSpatialDeviation: identical trace has near-zero deviation")
+    func spatialDeviationIdentical() {
+        let traced = (0...20).map { CGPoint(x: 0.5, y: 0.2 + 0.6 * Double($0) / 20) }
+        let d = FreeWriteScorer.rawSpatialDeviation(tracedPoints: traced, reference: verticalLineStrokes)
+        #expect(d < 0.01, "a dense trace along the reference line should have ~zero deviation, got \(d)")
+    }
+
+    @Test("rawSpatialDeviation: off-path trace has large deviation")
+    func spatialDeviationOffPath() {
+        let traced: [CGPoint] = [
+            CGPoint(x: 0.1, y: 0.1), CGPoint(x: 0.15, y: 0.15),
+            CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.1, y: 0.3),
+            CGPoint(x: 0.05, y: 0.1),
+        ]
+        let d = FreeWriteScorer.rawSpatialDeviation(tracedPoints: traced, reference: verticalLineStrokes)
+        #expect(d > 0.2, "a trace nowhere near the reference should have large deviation, got \(d)")
+    }
+
+    @Test("rawSpatialDeviation: order-free — reversed trace deviates identically")
+    func spatialDeviationOrderFree() {
+        let forward = (0...20).map { CGPoint(x: 0.5, y: 0.2 + 0.6 * Double($0) / 20) }
+        let reversed = forward.reversed().map { $0 }
+        let d1 = FreeWriteScorer.rawSpatialDeviation(tracedPoints: forward, reference: verticalLineStrokes)
+        let d2 = FreeWriteScorer.rawSpatialDeviation(tracedPoints: reversed, reference: verticalLineStrokes)
+        #expect(abs(d1 - d2) < 1e-6,
+                "Hausdorff is order-free; reversed trace must deviate identically: forward=\(d1) reversed=\(d2)")
+    }
+
+    @Test("rawSpatialDeviation: multi-stroke L-shape has near-zero deviation regardless of stroke order")
+    func spatialDeviationMultiStrokeOrderFree() {
+        // Same L, drawn as the vertical leg then the horizontal leg
+        // (matches reference stroke order) and as the reverse (horizontal
+        // leg first) — an ORDER a Fréchet-based measure would penalise.
+        let vertThenHoriz: [CGPoint] =
+            (0...10).map { CGPoint(x: 0.4, y: 0.2 + 0.6 * Double($0) / 10) } +
+            (0...10).map { CGPoint(x: 0.4 + 0.4 * Double($0) / 10, y: 0.8) }
+        let horizThenVert: [CGPoint] =
+            (0...10).map { CGPoint(x: 0.4 + 0.4 * Double($0) / 10, y: 0.8) } +
+            (0...10).map { CGPoint(x: 0.4, y: 0.2 + 0.6 * Double($0) / 10) }
+        let d1 = FreeWriteScorer.rawSpatialDeviation(tracedPoints: vertThenHoriz, reference: lStrokes)
+        let d2 = FreeWriteScorer.rawSpatialDeviation(tracedPoints: horizThenVert, reference: lStrokes)
+        #expect(d1 < 0.05, "reference-order trace should have near-zero deviation, got \(d1)")
+        #expect(abs(d1 - d2) < 1e-6,
+                "stroke order must not affect spatial deviation: reference-order=\(d1) reversed-order=\(d2)")
+    }
+
+    @Test("rawSpatialDeviation: sentinel for empty inputs")
+    func spatialDeviationEmptyInputs() {
+        #expect(FreeWriteScorer.rawSpatialDeviation(tracedPoints: [], reference: verticalLineStrokes)
+                == .greatestFiniteMagnitude)
+        let emptyRef = LetterStrokes(letter: "X", checkpointRadius: 0.04, strokes: [])
+        let traced = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.6)]
+        #expect(FreeWriteScorer.rawSpatialDeviation(tracedPoints: traced, reference: emptyRef)
+                == .greatestFiniteMagnitude)
     }
 
     // MARK: - Fréchet distance
