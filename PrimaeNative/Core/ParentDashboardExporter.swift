@@ -143,7 +143,10 @@ struct ParentDashboardExporter {
         // `checkpointCoverage`, for the same newest-last column-order
         // reason the others do — it is the newest field, not because it
         // is least important.
-        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage","spatialDeviation"].joined(separator: sep))
+        // `strokeCount`/`strokeOrder`/`reversedStrokeCount` are the
+        // process-measure secondaries, appended after spatialDeviation
+        // for the same newest-last reason, in that order.
+        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage","spatialDeviation","strokeCount","strokeOrder","reversedStrokeCount"].joined(separator: sep))
         // D11#1: filtered ONCE, here, and every aggregate below —
         // including the arm-split ones — reads `enrolledRecords`, never
         // `snapshot.phaseSessionRecords` directly. The raw-row loop and
@@ -190,7 +193,10 @@ struct ParentDashboardExporter {
                 rec.frechetDistance.map { String(format: "%.6f", $0) } ?? "",
                 rec.checkpointCoverage.map { String(format: "%.4f", $0) } ?? "",
                 // Same 6 dp precision as frechetDistance, same space.
-                rec.spatialDeviation.map { String(format: "%.6f", $0) } ?? ""
+                rec.spatialDeviation.map { String(format: "%.6f", $0) } ?? "",
+                rec.strokeCount.map(String.init) ?? "",
+                rec.strokeOrder ?? "",
+                rec.reversedStrokeCount.map(String.init) ?? ""
             ].joined(separator: sep))
         }
         lines.append("")

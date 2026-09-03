@@ -56,6 +56,11 @@ final class FreeWritePhaseRecorder {
     /// Fréchet. Lower is better; nil when no assessment has produced a
     /// finite one this session.
     private(set) var lastSpatialDeviation: CGFloat?
+    /// Stroke count/order/direction — the process-measure secondary
+    /// outcomes (2026-09-03), computed alongside `lastSpatialDeviation`
+    /// from the same normalised points. Nil under the same conditions
+    /// `StrokeProcessScorer.analyze` reports nil (nothing comparable).
+    private(set) var lastStrokeProcess: StrokeProcessMeasures?
     /// Non-optional mirror of `lastFrechetDistance` for the debug
     /// overlay, which wants a displayable number rather than a
     /// "not measured" state. 0 reads as "perfect" — never record this;
@@ -104,6 +109,7 @@ final class FreeWritePhaseRecorder {
         checkpointsPerSecond = 0
         lastFrechetDistance = nil
         lastSpatialDeviation = nil
+        lastStrokeProcess = nil
         lastAssessment = nil
     }
 
@@ -243,6 +249,11 @@ final class FreeWritePhaseRecorder {
         lastAssessment = assessment
         lastFrechetDistance = Self.measuredDistance(normalised, reference)
         lastSpatialDeviation = Self.measuredSpatialDeviation(normalised, reference)
+        lastStrokeProcess = StrokeProcessScorer.analyze(
+            points: normalised,
+            strokeStartIndices: strokeStartIndices,
+            reference: reference
+        )
         return assessment
     }
 
@@ -281,6 +292,7 @@ final class FreeWritePhaseRecorder {
         checkpointsPerSecond = 0
         lastFrechetDistance = nil
         lastSpatialDeviation = nil
+        lastStrokeProcess = nil
         lastAssessment = nil
         lastGuidedScore = nil
     }

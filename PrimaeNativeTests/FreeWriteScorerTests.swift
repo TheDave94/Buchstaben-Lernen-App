@@ -33,24 +33,29 @@ struct FreeWriteScorerTests {
 
     // MARK: - Scoring
 
+    // (2026-09-03) formAccuracy switched from Fréchet to Hausdorff, whose
+    // one-sided components are independently density-sensitive — see
+    // rawSpatialDeviation's DENSITY ASSUMPTION note. The old 5-point
+    // fixture matched Fréchet's own internal resampling but is sparser
+    // than real touch sampling (60-120 Hz); CI caught it. Densified to
+    // match what a real touch trace actually looks like, not to dodge
+    // the finding.
     @Test("Perfect trace scores above 0.9")
     func perfectTrace() {
-        let traced: [CGPoint] = [
-            CGPoint(x: 0.5, y: 0.2), CGPoint(x: 0.5, y: 0.35),
-            CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.65),
-            CGPoint(x: 0.5, y: 0.8),
-        ]
+        let traced = (0...60).map { CGPoint(x: 0.5, y: 0.2 + 0.6 * Double($0) / 60) }
         let assessment = FreeWriteScorer.score(tracedPoints: traced, reference: verticalLineStrokes)
         #expect(assessment.formAccuracy > 0.9)
     }
 
     @Test("Near-perfect trace scores above 0.8")
     func nearPerfectTrace() {
-        let traced: [CGPoint] = [
-            CGPoint(x: 0.51, y: 0.2), CGPoint(x: 0.49, y: 0.35),
-            CGPoint(x: 0.52, y: 0.5), CGPoint(x: 0.48, y: 0.65),
-            CGPoint(x: 0.51, y: 0.8),
-        ]
+        let traced = (0...60).map { i -> CGPoint in
+            let t = Double(i) / 60
+            // Small alternating jitter around x = 0.5, same shape the
+            // original 5-point fixture used, just densified.
+            let jitter = (i % 2 == 0) ? 0.01 : -0.01
+            return CGPoint(x: 0.5 + jitter, y: 0.2 + 0.6 * t)
+        }
         let assessment = FreeWriteScorer.score(tracedPoints: traced, reference: verticalLineStrokes)
         #expect(assessment.formAccuracy > 0.8)
     }
@@ -74,11 +79,7 @@ struct FreeWriteScorerTests {
     // direction/sequence is a process property, not a product one.
     @Test("Reversed trace does NOT penalise formAccuracy — order-invariant by design")
     func reversedTraceDoesNotPenaliseFormAccuracy() {
-        let forward: [CGPoint] = [
-            CGPoint(x: 0.5, y: 0.2), CGPoint(x: 0.5, y: 0.35),
-            CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.65),
-            CGPoint(x: 0.5, y: 0.8),
-        ]
+        let forward = (0...60).map { CGPoint(x: 0.5, y: 0.2 + 0.6 * Double($0) / 60) }
         let reversed = forward.reversed().map { $0 }
         let s1 = FreeWriteScorer.score(tracedPoints: forward, reference: verticalLineStrokes).formAccuracy
         let s2 = FreeWriteScorer.score(tracedPoints: reversed, reference: verticalLineStrokes).formAccuracy
@@ -107,12 +108,11 @@ struct FreeWriteScorerTests {
 
     @Test("Multi-stroke L-shape scores well")
     func multiStroke() {
-        let traced: [CGPoint] = [
-            CGPoint(x: 0.4, y: 0.2), CGPoint(x: 0.4, y: 0.4),
-            CGPoint(x: 0.4, y: 0.6), CGPoint(x: 0.4, y: 0.8),
-            CGPoint(x: 0.5, y: 0.8), CGPoint(x: 0.6, y: 0.8),
-            CGPoint(x: 0.7, y: 0.8), CGPoint(x: 0.8, y: 0.8),
-        ]
+        // Densified for the same reason perfectTrace was — see the note
+        // above reversedTraceDoesNotPenaliseFormAccuracy.
+        let vertical = (0...30).map { CGPoint(x: 0.4, y: 0.2 + 0.6 * Double($0) / 30) }
+        let horizontal = (0...30).map { CGPoint(x: 0.4 + 0.4 * Double($0) / 30, y: 0.8) }
+        let traced = vertical + horizontal
         let assessment = FreeWriteScorer.score(tracedPoints: traced, reference: lStrokes)
         #expect(assessment.formAccuracy > 0.7)
     }
@@ -216,7 +216,9 @@ struct FreeWriteScorerTests {
     /// under test here.
     @Test("rawSpatialDeviation: identical trace has near-zero deviation")
     func spatialDeviationIdentical() {
-        let traced = (0...20).map { CGPoint(x: 0.5, y: 0.2 + 0.6 * Double($0) / 20) }
+        // Densified for the same reason perfectTrace was — see the note
+        // above reversedTraceDoesNotPenaliseFormAccuracy.
+        let traced = (0...60).map { CGPoint(x: 0.5, y: 0.2 + 0.6 * Double($0) / 60) }
         let d = FreeWriteScorer.rawSpatialDeviation(tracedPoints: traced, reference: verticalLineStrokes)
         #expect(d < 0.01, "a dense trace along the reference line should have ~zero deviation, got \(d)")
     }

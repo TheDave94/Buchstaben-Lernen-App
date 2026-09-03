@@ -100,6 +100,27 @@ struct FreeWriteScorer {
     /// `PhaseSessionRecord.frechetDistance`'s note): a clamped,
     /// saturating score is worse for a continuous pilot outcome than an
     /// unbounded one.
+    ///
+    /// DENSITY ASSUMPTION, NAMED RATHER THAN HIDDEN (found by CI,
+    /// 2026-09-03): `tracedPoints` is used raw, unlike `formAccuracyShape`'s
+    /// trace (also raw, by the same "touch samples are already dense"
+    /// reasoning) — but unlike Fréchet's `rawDistance`, which resamples
+    /// BOTH sides to a matching count internally, Hausdorff's one-sided
+    /// components are independently density-sensitive: a sparse trace
+    /// leaves gaps the dense reference's own points can be "far from",
+    /// inflating the one-sided distance FROM the reference even when the
+    /// trace is spatially correct. Real captured touch traces (60–120 Hz
+    /// sampling) are dense enough that this doesn't bite in production —
+    /// CI caught it specifically on sparse SYNTHETIC test fixtures sized
+    /// for Fréchet's own internal resampling. Per-stroke resampling the
+    /// trace to fix this at the source was considered and deliberately
+    /// deferred: it would need `strokeStartIndices` threaded through to
+    /// avoid the exact cross-lift phantom-diagonal risk `formAccuracyShape`
+    /// already densifies the reference to avoid, and Hausdorff (unlike
+    /// Fréchet's DP coupling) has no proven bound on how much a phantom
+    /// bridge point could inflate a one-sided distance — an unvalidated
+    /// robustness change is a worse trade than a named, true-in-production
+    /// assumption under time pressure.
     static func rawSpatialDeviation(
         tracedPoints: [CGPoint],
         reference: LetterStrokes
@@ -152,20 +173,25 @@ struct FreeWriteScorer {
 
     /// Resample each reference stroke's checkpoint polyline to a dense
     /// sequence of unit-space points without crossing pen-lift gaps.
-    private static func densifyReferenceStrokes(_ reference: LetterStrokes) -> [CGPoint] {
-        var result: [CGPoint] = []
-        for stroke in reference.strokes {
+    /// Flattened across strokes — callers that need per-stroke
+    /// boundaries (stroke-to-stroke matching) use
+    /// `densifyReferenceStrokesPerStroke` instead, which this wraps.
+    static func densifyReferenceStrokes(_ reference: LetterStrokes) -> [CGPoint] {
+        densifyReferenceStrokesPerStroke(reference).flatMap { $0 }
+    }
+
+    /// Same densification as `densifyReferenceStrokes`, kept as one
+    /// dense point array PER reference stroke rather than flattened —
+    /// what stroke-to-stroke matching (order/direction process measures)
+    /// needs and shape/spatial-deviation scoring doesn't.
+    static func densifyReferenceStrokesPerStroke(_ reference: LetterStrokes) -> [[CGPoint]] {
+        reference.strokes.map { stroke in
             let pts = stroke.checkpoints.map { CGPoint(x: $0.x, y: $0.y) }
-            guard pts.count >= 2 else {
-                result.append(contentsOf: pts)
-                continue
-            }
+            guard pts.count >= 2 else { return pts }
             // ~24 samples per stroke gives smooth coverage on long
             // sloped legs without ballooning the Hausdorff cost.
-            let dense = resample(pts, targetCount: max(24, pts.count))
-            result.append(contentsOf: dense)
+            return resample(pts, targetCount: max(24, pts.count))
         }
-        return result
     }
 
     /// Map a path so its axis-aligned bounding box fills the unit
@@ -189,8 +215,10 @@ struct FreeWriteScorer {
 
     /// Asymmetric Hausdorff distance: the maximum, over points in `a`,
     /// of each point's distance to the nearest point in `b`. O(|a|·|b|).
-    private static func oneSidedHausdorff(_ a: [CGPoint],
-                                          _ b: [CGPoint]) -> CGFloat {
+    /// Not `private` — `StrokeProcessMeasures` reuses this for
+    /// stroke-to-stroke matching rather than re-implementing it.
+    static func oneSidedHausdorff(_ a: [CGPoint],
+                                  _ b: [CGPoint]) -> CGFloat {
         var maxMin: CGFloat = 0
         for p in a {
             var minD: CGFloat = .greatestFiniteMagnitude
@@ -339,8 +367,9 @@ struct FreeWriteScorer {
         }
     }
 
-    /// Euclidean distance between two points.
-    private static func dist(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+    /// Euclidean distance between two points. Not `private` —
+    /// `StrokeProcessMeasures` reuses this rather than re-implementing it.
+    static func dist(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
         hypot(a.x - b.x, a.y - b.y)
     }
 

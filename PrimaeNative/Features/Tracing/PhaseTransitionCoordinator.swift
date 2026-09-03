@@ -250,8 +250,12 @@ final class PhaseTransitionCoordinator {
         // with earlier rounds, not as the primary.
         let freeWriteCoverage: Double? = didFreeWrite
             ? Double(vm.grid.aggregateProgress) : nil
+        // SECONDARY process outcomes (2026-09-03): stroke count/order/
+        // direction — see StrokeProcessMeasures and
+        // PhaseSessionRecord.strokeCount.
+        let freeWriteStrokeProcess = vm.lastFreeWriteStrokeProcess
         for (phase, phaseScore) in phaseScores {
-            // One typed comparison gates all six measurement fields. A
+            // One typed comparison gates all measurement fields. A
             // wrong phase here is the defect PhaseRecordAttachmentTests
             // exists to catch; a wrong *spelling* is no longer possible.
             let isFreeWrite = phase == .freeWrite
@@ -271,7 +275,10 @@ final class PhaseTransitionCoordinator {
                 phaseDurationSeconds: isFreeWrite ? freeWriteDuration : nil,
                 frechetDistance: isFreeWrite ? freeWriteFrechet : nil,
                 checkpointCoverage: isFreeWrite ? freeWriteCoverage : nil,
-                spatialDeviation: isFreeWrite ? freeWriteSpatialDeviation : nil
+                spatialDeviation: isFreeWrite ? freeWriteSpatialDeviation : nil,
+                strokeCount: isFreeWrite ? freeWriteStrokeProcess?.strokeCount : nil,
+                strokeOrder: isFreeWrite ? freeWriteStrokeProcess?.matchedReferenceOrderField : nil,
+                reversedStrokeCount: isFreeWrite ? freeWriteStrokeProcess?.reversedStrokeCount : nil
             )
         }
         commitCompletion(letter: vm.currentLetterName,

@@ -221,7 +221,44 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         #expect(csv.contains("0.098765"), "spatial deviation exports at 6 dp — same letter space")
     }
 
-    @Test("non-freeWrite and legacy rows leave all three columns empty")
+    @Test("store records stroke count/order/direction")
+    func storeRecordsStrokeProcessMeasures() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = JSONParentDashboardStore(fileURL: tmp)
+        store.recordPhaseSession(
+            letter: "M", phase: "freeWrite", completed: true, score: 0.72,
+            schedulerPriority: 0.4, condition: .threePhase, audioCondition: .phoneme,
+            assessment: nil, recognition: nil, inputDevice: "finger",
+            rawTraceID: nil, trainedSubset: "AIM", phaseDurationSeconds: 6.25,
+            frechetDistance: 0.083412, checkpointCoverage: 1.0,
+            spatialDeviation: 0.067321, strokeCount: 2, strokeOrder: "0,1",
+            reversedStrokeCount: 1)
+
+        let rec = try #require(store.snapshot.phaseSessionRecords.last)
+        #expect(rec.strokeCount == 2)
+        #expect(rec.strokeOrder == "0,1")
+        #expect(rec.reversedStrokeCount == 1)
+    }
+
+    @Test("per-phase CSV gains strokeCount + strokeOrder + reversedStrokeCount columns")
+    func csvCarriesStrokeProcessMeasures() {
+        var snap = DashboardSnapshot()
+        snap.phaseSessionRecords.append(PhaseSessionRecord(
+            letter: "I", phase: "freeWrite", completed: true, score: 0.6,
+            schedulerPriority: 0, recordedAt: Date(timeIntervalSince1970: 1_770_000_000),
+            phaseDurationSeconds: 4.5, strokeCount: 3, strokeOrder: "1,0,2",
+            reversedStrokeCount: 2))
+        let csv = String(data: ParentDashboardExporter.csvData(
+            from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
+
+        #expect(csv.contains("spatialDeviation,strokeCount,strokeOrder,reversedStrokeCount"),
+                "the three process measures append after spatialDeviation, newest last")
+        #expect(csv.contains("1,0,2"), "the raw matched-order correspondence exports verbatim")
+    }
+
+    @Test("non-freeWrite and legacy rows leave all measurement columns empty")
     func nonFreeWriteRowsLeaveMeasuresEmpty() throws {
         var snap = DashboardSnapshot()
         snap.phaseSessionRecords.append(PhaseSessionRecord(
@@ -238,11 +275,17 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         let frechetIdx = try #require(names.firstIndex(of: "frechetDistance"))
         let coverageIdx = try #require(names.firstIndex(of: "checkpointCoverage"))
         let deviationIdx = try #require(names.firstIndex(of: "spatialDeviation"))
+        let strokeCountIdx = try #require(names.firstIndex(of: "strokeCount"))
+        let strokeOrderIdx = try #require(names.firstIndex(of: "strokeOrder"))
+        let reversedIdx = try #require(names.firstIndex(of: "reversedStrokeCount"))
         // Empty, never a defaulted 0 — a 0 distance reads as a perfect
         // overlay and a 0 coverage as a blank page.
         #expect(fields[frechetIdx].isEmpty)
         #expect(fields[coverageIdx].isEmpty)
         #expect(fields[deviationIdx].isEmpty)
+        #expect(fields[strokeCountIdx].isEmpty)
+        #expect(fields[strokeOrderIdx].isEmpty)
+        #expect(fields[reversedIdx].isEmpty)
     }
 
     @Test("legacy JSON without the new keys decodes to nil, not 0")
@@ -256,6 +299,9 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         let rec = try JSONDecoder().decode(PhaseSessionRecord.self, from: legacy)
         #expect(rec.frechetDistance == nil)
         #expect(rec.checkpointCoverage == nil)
+        #expect(rec.strokeCount == nil)
+        #expect(rec.strokeOrder == nil)
+        #expect(rec.reversedStrokeCount == nil)
         #expect(rec.spatialDeviation == nil)
     }
 

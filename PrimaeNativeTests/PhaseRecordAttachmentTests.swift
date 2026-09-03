@@ -38,8 +38,9 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         let condition: ThesisCondition
         let audioCondition: PilotAudioCondition
         let trainedSubset: String?
-        // The seven freeWrite-only measurement fields (2026-09-03: added
-        // spatialDeviation, the order-invariant primary outcome).
+        // The ten freeWrite-only measurement fields (2026-09-03: added
+        // spatialDeviation, the order-invariant primary outcome, and the
+        // three stroke process fields).
         let assessment: WritingAssessment?
         let recognition: RecognitionSample?
         let rawTraceID: UUID?
@@ -47,12 +48,17 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         let frechetDistance: Double?
         let checkpointCoverage: Double?
         let spatialDeviation: Double?
+        let strokeCount: Int?
+        let strokeOrder: String?
+        let reversedStrokeCount: Int?
 
-        /// How many of the seven are populated. 7 on freeWrite, 0 elsewhere.
+        /// How many of the ten are populated. 10 on freeWrite, 0 elsewhere.
         var measurementFieldCount: Int {
             [assessment != nil, recognition != nil, rawTraceID != nil,
              phaseDurationSeconds != nil, frechetDistance != nil,
-             checkpointCoverage != nil, spatialDeviation != nil].filter { $0 }.count
+             checkpointCoverage != nil, spatialDeviation != nil,
+             strokeCount != nil, strokeOrder != nil,
+             reversedStrokeCount != nil].filter { $0 }.count
         }
 
         /// Names of the populated fields — makes a failure say *which*
@@ -66,6 +72,9 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
             if frechetDistance != nil { out.insert("frechetDistance") }
             if checkpointCoverage != nil { out.insert("checkpointCoverage") }
             if spatialDeviation != nil { out.insert("spatialDeviation") }
+            if strokeCount != nil { out.insert("strokeCount") }
+            if strokeOrder != nil { out.insert("strokeOrder") }
+            if reversedStrokeCount != nil { out.insert("reversedStrokeCount") }
             return out
         }
     }
@@ -91,7 +100,10 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
                             phaseDurationSeconds: Double?,
                             frechetDistance: Double?,
                             checkpointCoverage: Double?,
-                            spatialDeviation: Double?) {
+                            spatialDeviation: Double?,
+                            strokeCount: Int?,
+                            strokeOrder: String?,
+                            reversedStrokeCount: Int?) {
         calls.append(Call(letter: letter, phase: phase, completed: completed,
                           score: score, condition: condition,
                           audioCondition: audioCondition,
@@ -101,7 +113,10 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
                           phaseDurationSeconds: phaseDurationSeconds,
                           frechetDistance: frechetDistance,
                           checkpointCoverage: checkpointCoverage,
-                          spatialDeviation: spatialDeviation))
+                          spatialDeviation: spatialDeviation,
+                          strokeCount: strokeCount,
+                          strokeOrder: strokeOrder,
+                          reversedStrokeCount: reversedStrokeCount))
     }
 
     func reset() {}
@@ -209,10 +224,10 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         }
     }
 
-    // MARK: - 2. freeWrite carries all seven
+    // MARK: - 2. freeWrite carries all ten
 
-    @Test("the freeWrite row carries all seven measurement fields")
-    func freeWriteRowCarriesAllSevenMeasurementFields() async throws {
+    @Test("the freeWrite row carries all ten measurement fields")
+    func freeWriteRowCarriesAllTenMeasurementFields() async throws {
         let s = try await runSession()
         let fw = try row(.freeWrite, in: s.calls)
 
@@ -225,9 +240,20 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         #expect(fw.frechetDistance != nil, "frechetDistance missing — the SECONDARY, sequence-sensitive outcome")
         #expect(fw.checkpointCoverage != nil, "checkpointCoverage missing — a SECONDARY outcome")
         #expect(fw.spatialDeviation != nil, "spatialDeviation missing — the PRIMARY, order-invariant outcome")
+        #expect(fw.strokeCount != nil, "strokeCount missing — a SECONDARY process outcome")
+        #expect(fw.strokeOrder != nil, "strokeOrder missing — a SECONDARY process outcome")
+        #expect(fw.reversedStrokeCount != nil, "reversedStrokeCount missing — a SECONDARY process outcome")
 
-        #expect(fw.measurementFieldCount == 7,
-                "freeWrite row carries \(fw.measurementFieldCount)/7: \(fw.populatedFields.sorted())")
+        #expect(fw.measurementFieldCount == 10,
+                "freeWrite row carries \(fw.measurementFieldCount)/10: \(fw.populatedFields.sorted())")
+
+        // The fixture traces ONE continuous stroke (no beginStroke()
+        // calls) — well-formed process fields should say so.
+        #expect(fw.strokeCount == 1, "fixture traces one continuous stroke, got \(fw.strokeCount as Any)")
+        let order = try #require(fw.strokeOrder)
+        #expect(!order.isEmpty, "strokeOrder must name at least the one matched stroke")
+        let reversed = try #require(fw.reversedStrokeCount)
+        #expect((0...1).contains(reversed), "at most the one traced stroke can be reversed, got \(reversed)")
 
         // Well-formed, not merely present.
         let span = try #require(fw.phaseDurationSeconds)
@@ -279,6 +305,9 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
             #expect(call.frechetDistance == nil, "\(phase.rawName) picked up frechetDistance")
             #expect(call.checkpointCoverage == nil, "\(phase.rawName) picked up checkpointCoverage")
             #expect(call.spatialDeviation == nil, "\(phase.rawName) picked up spatialDeviation")
+            #expect(call.strokeCount == nil, "\(phase.rawName) picked up strokeCount")
+            #expect(call.strokeOrder == nil, "\(phase.rawName) picked up strokeOrder")
+            #expect(call.reversedStrokeCount == nil, "\(phase.rawName) picked up reversedStrokeCount")
         }
 
         // Exactly one row in the session owns the measurement fields.

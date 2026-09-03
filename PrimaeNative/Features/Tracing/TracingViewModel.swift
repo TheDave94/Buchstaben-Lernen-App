@@ -363,6 +363,10 @@ public final class TracingViewModel {
     /// trace, or nil if none was measured. The study's PRIMARY accuracy
     /// outcome (2026-09-03) — see `PhaseSessionRecord.spatialDeviation`.
     var lastFreeWriteSpatialDeviation: CGFloat? { freeWriteRecorder.lastSpatialDeviation }
+    /// Stroke count/order/direction of the measured freeWrite trace, or
+    /// nil if none was measured. The study's SECONDARY process outcomes
+    /// (2026-09-03) — see `PhaseSessionRecord.strokeCount` and siblings.
+    var lastFreeWriteStrokeProcess: StrokeProcessMeasures? { freeWriteRecorder.lastStrokeProcess }
     /// Most recent four-dimension Schreibmotorik assessment.
     var lastWritingAssessment: WritingAssessment? { freeWriteRecorder.lastAssessment }
     /// Last guided-phase score, captured for the "Nachspuren fertig"

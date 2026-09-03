@@ -43,3 +43,6 @@ vcpkg/
 __pycache__/
 *.pyc
 tmp_overlays/
+
+# session-handoff skill scratch — within-seat clear/resume only, never landed
+HANDOFF.md
