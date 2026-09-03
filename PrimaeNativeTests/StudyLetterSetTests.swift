@@ -25,6 +25,14 @@ import CoreGraphics
     private func makeVM(studyMode: Bool) -> TracingViewModel {
         var deps = TracingDependencies.stub
         deps.studyMode = studyMode
+        // Pinned rather than left at .defaultForInstall, which reads
+        // ParticipantStore's persisted UserDefaults state and is not
+        // deterministic across a test run. .threePhase also matches the
+        // real precondition every study device must run under — see
+        // DECISIONS.md: guidedOnly/control omit freeWrite entirely, which
+        // is what CI caught here (learningPhase stayed .guided instead of
+        // .freeWrite because activePhases didn't contain it).
+        deps.thesisCondition = .threePhase
         let vm = TracingViewModel(deps)
         vm.letters = [
             makeAsset("A", base: "A", letterCase: .upper),
@@ -97,5 +105,59 @@ import CoreGraphics
         let vm = makeVM(studyMode: false)
         vm.showAllLetters = false
         #expect(Set(vm.visibleLetterNames) == ["A", "F", "I", "L", "M", "a", "f", "m"])
+    }
+
+    // MARK: - H6 post-test reachability
+    //
+    // The trained 3 (visibleLetterNames) and the untrained 2 (reachable
+    // ONLY through startPostTest) are complementary halves of the same
+    // 5-letter set. Stub subset is AFI, so L and M are untrained.
+
+    @Test("startPostTest loads an untrained letter directly into freeWrite")
+    func startPostTest_untrainedLetter_jumpsToFreeWrite() {
+        let vm = makeVM(studyMode: true)
+        vm.startPostTest(letter: "L")
+        #expect(vm.currentLetterName == "L")
+        #expect(vm.learningPhase == .freeWrite,
+                "observe/guided must be skipped entirely — reaching either would train the letter")
+    }
+
+    @Test("startPostTest refuses a TRAINED letter — state unchanged")
+    func startPostTest_trainedLetter_isNoOp() {
+        let vm = makeVM(studyMode: true)
+        let letterBefore = vm.currentLetterName
+        let phaseBefore = vm.learningPhase
+        vm.startPostTest(letter: "A")  // A is trained in the stub subset (AFI)
+        #expect(vm.currentLetterName == letterBefore,
+                "a trained letter must not be reachable via the post-test entry point")
+        #expect(vm.learningPhase == phaseBefore)
+    }
+
+    @Test("startPostTest is a no-op outside studyMode")
+    func startPostTest_outsideStudyMode_isNoOp() {
+        let vm = makeVM(studyMode: false)
+        let letterBefore = vm.currentLetterName
+        let phaseBefore = vm.learningPhase
+        vm.startPostTest(letter: "L")
+        #expect(vm.currentLetterName == letterBefore)
+        #expect(vm.learningPhase == phaseBefore)
+    }
+
+    @Test("startPostTest override does not leak into the NEXT letter load")
+    func startPostTest_overrideDoesNotLeak() {
+        let vm = makeVM(studyMode: true)
+        vm.startPostTest(letter: "L")
+        #expect(vm.learningPhase == .freeWrite)
+        // A normal load right after — e.g. the proctor picking a trained
+        // letter again — must not inherit the one-shot freeWrite override.
+        // Asserting != .freeWrite rather than pinning to .observe
+        // specifically: makeAsset's fixture letters carry empty strokes,
+        // which load(letter:)'s own (unrelated, pre-existing) "nothing to
+        // demonstrate" skip auto-advances past observe/direct to .guided —
+        // correct fixture behaviour, not a leak, and not what this test is
+        // about.
+        vm.loadLetter(name: "A")
+        #expect(vm.learningPhase != .freeWrite,
+                "the one-shot override must not leak into a later normal load")
     }
 }

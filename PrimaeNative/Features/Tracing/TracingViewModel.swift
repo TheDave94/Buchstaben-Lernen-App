@@ -612,6 +612,11 @@ public final class TracingViewModel {
     var adaptationPolicy: any AdaptationPolicy
     private var onboardingCoordinator: OnboardingCoordinator
     var phaseController: LearningPhaseController
+    /// Set immediately before a `startPostTest(letter:)` load and consumed
+    /// at the top of `load(letter:)` — see H6 there. Kept as a one-shot
+    /// flag rather than a parameter threaded through every `load` call
+    /// site, since only one caller ever needs it.
+    private var pendingPostTestOverride = false
     private let letterScheduler: LetterScheduler
     private let calibrationStore: CalibrationStore
     private let letterRecognizer: LetterRecognizerProtocol
@@ -915,6 +920,28 @@ public final class TracingViewModel {
         letterIndex = idx
         load(letter: letters[idx])
         toast("Buchstabe: \(currentLetterName)")
+    }
+
+    /// H6 post-test: load one of the two study letters this participant
+    /// does NOT train, for a single COLD `freeWrite` pass. `load(letter:)`
+    /// normally resets into `observe` (or `guided`, per thesis condition);
+    /// this jumps straight to `freeWrite` instead, because reaching
+    /// observe or guided at all would BE training the letter — the exact
+    /// thing the within-child trained-vs-untrained contrast depends on
+    /// not happening. No new export tagging is needed: `trainedSubset` is
+    /// already stamped on every `PhaseSessionRecord`, so a freeWrite row
+    /// for a letter outside it is already legible as untrained.
+    ///
+    /// Guarded on `studyMode` and on the letter actually being untrained —
+    /// the researcher UI only ever offers the untrained pair, but the VM
+    /// re-checks so a stale UI state can't start a real practice session
+    /// under the post-test label. `loadLetter` itself is NOT gated by
+    /// `visibleLetterNames` (that filter is UI-only), which is what makes
+    /// this reachable at all.
+    func startPostTest(letter: String) {
+        guard studyMode, trainedSubset.untrainedLetters.contains(letter) else { return }
+        pendingPostTestOverride = true
+        loadLetter(name: letter)
     }
 
     var allLetterNames: [String] { letters.map(\.name) }
@@ -1545,6 +1572,16 @@ public final class TracingViewModel {
     /// `playPhaseCue: true` because by then the app is settled.
     private func load(letter: LetterAsset, playPhaseCue: Bool = true) {
         phaseController.reset()
+        // H6 post-test override, consumed here so it never leaks into the
+        // NEXT letter load. Landing directly in freeWrite is already a
+        // supported shape below (activePhases requires .threePhase, which
+        // studyMode always runs under) — the "if phaseController.currentPhase
+        // == .freeWrite" checks further down already handle starting the
+        // freeWriteRecorder session correctly for a phase reached this way.
+        if pendingPostTestOverride {
+            pendingPostTestOverride = false
+            phaseController.resume(at: .freeWrite)
+        }
         freeWriteRecorder.clearAll()
         showingVariant = false
         variantStrokeCache = nil

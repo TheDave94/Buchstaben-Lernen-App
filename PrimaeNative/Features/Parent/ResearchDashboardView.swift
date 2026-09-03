@@ -10,6 +10,7 @@ import AVFoundation
 
 struct ResearchDashboardView: View {
     @Environment(TracingViewModel.self) private var vm
+    @Environment(\.dismiss) private var dismiss
     @State private var showClearCalibrationConfirm = false
     /// Live headphone-route check for the spatial arm (read-only session
     /// query — never touches AudioEngine). Refreshed on route changes.
@@ -37,6 +38,9 @@ struct ResearchDashboardView: View {
                 schreibmotorikSection
                 recognitionSection
                 conditionSection
+                if vm.studyMode {
+                    postTestSection
+                }
                 schedulerSection
                 phaseRecordsSection
                 letterTableSection
@@ -412,6 +416,35 @@ struct ResearchDashboardView: View {
                     .background(Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 8))
                 }
+            }
+        }
+    }
+
+    // MARK: - Post-test (H6)
+
+    /// Reachability for the participant's two UNTRAINED study letters —
+    /// the within-child post-test the design depends on and that has no
+    /// other entry point (`visibleLetterNames` filters them out of the
+    /// normal practice pool by design). Tapping one starts a single COLD
+    /// `freeWrite` pass (see `startPostTest(letter:)`) and leaves the
+    /// parent area so the child sees the tracing canvas directly.
+    private var postTestSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(title: "Post-Test (ungeübte Buchstaben)",
+                          subtitle: "Einmaliger, ungeübter Schreibversuch — kein Vorführen, kein Nachspuren")
+            Text("Diese \(vm.trainedSubset.untrainedLetters.count) Buchstaben hat das Kind NICHT geübt. Ein Antippen startet direkt einen einzigen freien Schreibversuch — Anschauen- und Nachspuren-Phase werden übersprungen, da sie selbst bereits Übung wären.")
+                .font(.caption)
+                .foregroundStyle(Color.inkSoft)
+            ForEach(Array(vm.trainedSubset.untrainedLetters).sorted(), id: \.self) { letter in
+                Button {
+                    vm.startPostTest(letter: letter)
+                    dismiss()
+                } label: {
+                    Label("Post-Test starten: \(letter)", systemImage: "pencil.and.outline")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
             }
         }
     }
