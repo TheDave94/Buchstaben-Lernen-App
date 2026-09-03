@@ -952,7 +952,14 @@ public final class TracingViewModel {
         case .phoneme:
             guard let first = activeAudioFiles(for: letter).first else { return }
             preTaskDemoTask = Task { [weak self] in
-                guard let self else { return }
+                // `.cancel()` only flips this flag — it does NOT stop
+                // the closure from starting, so a task cancelled before
+                // it ever ran (e.g. superseded by another
+                // `armPreTaskDemonstration` call before this one got a
+                // scheduler turn) would otherwise still fire the load
+                // below. Checked BEFORE any side effect, not just before
+                // the sleep.
+                guard let self, !Task.isCancelled else { return }
                 self.audio.loadAudioFile(named: first, autoplay: true)
                 try? await Task.sleep(for: .seconds(duration))
             }
@@ -960,7 +967,7 @@ public final class TracingViewModel {
             let samples = PreTaskDemonstration.axisSweep(duration: duration)
             guard !samples.isEmpty else { return }
             preTaskDemoTask = Task { [weak self] in
-                guard let self else { return }
+                guard let self, !Task.isCancelled else { return }
                 self.audio.loadAudioFile(named: SpatialSonification.carrierToneFile, autoplay: true)
                 var previousElapsed: TimeInterval = 0
                 for sample in samples {
