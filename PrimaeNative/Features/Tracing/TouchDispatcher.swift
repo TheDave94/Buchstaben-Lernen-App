@@ -62,6 +62,9 @@ final class TouchDispatcher {
         // Re-touch cancels a pending freeWrite auto-advance.
         freeWriteAutoAdvanceTask?.cancel()
         freeWriteAutoAdvanceTask = nil
+        // A real touch beginning always supersedes an in-flight
+        // pre-task demonstration — see PreTaskDemonstration.
+        vm.cancelPreTaskDemonstration()
 
         isSingleTouchInteractionActive = true
         vm.playback.resumeIntent       = true

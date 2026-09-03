@@ -626,6 +626,13 @@ public final class TracingViewModel {
     /// flag rather than a parameter threaded through every `load` call
     /// site, since only one caller ever needs it.
     private var pendingPostTestOverride = false
+    /// In-flight pre-task sound-arm demonstration (see
+    /// `PreTaskDemonstration` and `armPreTaskDemonstration`). Cancelled
+    /// on every fresh letter load and the moment a real touch begins
+    /// (`TouchDispatcher.beginTouch`), so a scripted demo point is never
+    /// still writing to `setAdaptivePlayback`/`setSpatialPitch` once the
+    /// child's own trace starts driving them.
+    private var preTaskDemoTask: Task<Void, Never>?
     private let letterScheduler: LetterScheduler
     private let calibrationStore: CalibrationStore
     private let letterRecognizer: LetterRecognizerProtocol
@@ -903,6 +910,73 @@ public final class TracingViewModel {
                 return asset.phonemeAudioFiles
             }
             return asset.audioFiles
+        }
+    }
+
+    // MARK: - Pre-task sound-arm demonstration
+
+    /// Cancel any in-flight pre-task demonstration. Called the moment a
+    /// real touch begins so the child's own trace is never racing a
+    /// scripted demo point for the shared `setAdaptivePlayback`/
+    /// `setSpatialPitch` calls — `TouchDispatcher.beginTouch` already
+    /// reloads the real per-touch audio file regardless, which alone
+    /// would supersede the demo's own file, but cancelling here also
+    /// stops the demo's own sweep loop from continuing to run at all.
+    func cancelPreTaskDemonstration() {
+        preTaskDemoTask?.cancel()
+        preTaskDemoTask = nil
+    }
+
+    /// Arm the pre-task sound-arm demonstration for a freshly loaded
+    /// letter. Pilot-only (gated on `studyMode`, same gate H2.1 uses to
+    /// force phoneme content) — casual, non-study sessions are
+    /// unaffected. See `PreTaskDemonstration`'s header for the full
+    /// rationale and the per-arm content. `duration` defaults to
+    /// `PreTaskDemonstration.duration`; overridable so tests don't have
+    /// to wait out the full production window.
+    ///
+    /// Not `private` — called from `load(letter:)`'s two fresh-letter
+    /// entry points (observe and direct-to-guided), and directly from
+    /// tests.
+    func armPreTaskDemonstration(for letter: LetterAsset,
+                                 duration: TimeInterval = PreTaskDemonstration.duration) {
+        preTaskDemoTask?.cancel()
+        preTaskDemoTask = nil
+        guard studyMode else { return }
+        switch audioCondition {
+        case .silent:
+            // No added audio — the unchanged ghost-letter animation
+            // already running for this letter load IS the matched
+            // non-auditory equivalent. See PreTaskDemonstration header.
+            return
+        case .phoneme:
+            guard let first = activeAudioFiles(for: letter).first else { return }
+            preTaskDemoTask = Task { [weak self] in
+                guard let self else { return }
+                self.audio.loadAudioFile(named: first, autoplay: true)
+                try? await Task.sleep(for: .seconds(duration))
+            }
+        case .spatial:
+            let samples = PreTaskDemonstration.axisSweep(duration: duration)
+            guard !samples.isEmpty else { return }
+            preTaskDemoTask = Task { [weak self] in
+                guard let self else { return }
+                self.audio.loadAudioFile(named: SpatialSonification.carrierToneFile, autoplay: true)
+                var previousElapsed: TimeInterval = 0
+                for sample in samples {
+                    if Task.isCancelled { break }
+                    let dt = sample.elapsed - previousElapsed
+                    if dt > 0 { try? await Task.sleep(for: .seconds(dt)) }
+                    previousElapsed = sample.elapsed
+                    if Task.isCancelled { break }
+                    self.audio.setAdaptivePlayback(
+                        speed: 1.0,
+                        horizontalBias: Float(max(-1.0, min(1.0, sample.point.x * 2.0 - 1.0))))
+                    self.audio.setSpatialPitch(
+                        cents: SpatialSonification.pitchCents(forNormalizedY: sample.point.y))
+                }
+                if !Task.isCancelled { self.audio.stop() }
+            }
         }
     }
 
@@ -1665,15 +1739,23 @@ public final class TracingViewModel {
                 }
             } else {
                 animation.startAfterDelay(0.3, strokes: observeStrokes)
+                armPreTaskDemonstration(for: letter)
             }
         }
         // If we land directly in guided or freeWrite (e.g. after skipping phases or
         // for thesis conditions that omit observe/direct), start the speed clock now.
         if phaseController.currentPhase == .freeWrite {
             freeWriteRecorder.startSession()
+            // H6 post-test: deliberately NO demonstration — reaching
+            // this letter at all is a cold, untrained probe, and a
+            // demonstration would train the very thing the probe
+            // depends on not having happened.
+            preTaskDemoTask?.cancel()
+            preTaskDemoTask = nil
         } else if phaseController.currentPhase == .guided {
             freeWriteRecorder.startGuidedSpeedTracking()
             startGuideAnimation()
+            armPreTaskDemonstration(for: letter)
         }
         if let firstAudio = activeAudioFiles(for: letter).first {
             audio.loadAudioFile(named: firstAudio, autoplay: false)

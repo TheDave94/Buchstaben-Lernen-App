@@ -188,9 +188,24 @@ struct FreeWriteScorer {
         reference.strokes.map { stroke in
             let pts = stroke.checkpoints.map { CGPoint(x: $0.x, y: $0.y) }
             guard pts.count >= 2 else { return pts }
-            // ~24 samples per stroke gives smooth coverage on long
-            // sloped legs without ballooning the Hausdorff cost.
-            return resample(pts, targetCount: max(24, pts.count))
+            // 64 samples per stroke (found by CI, 2026-09-03 — see
+            // rawSpatialDeviation's DENSITY ASSUMPTION note above): the
+            // one-sided Hausdorff distance FROM a dense trace TO this
+            // reference is bounded below by roughly half the
+            // REFERENCE's own point spacing, however dense the trace
+            // gets — a trace point densifies its own side for nothing
+            // once it's already denser than the reference, because the
+            // worst-case nearest-reference-point gap is set by the
+            // reference's sampling, not the trace's. 24 samples left a
+            // ~0.013 floor on a 0.6-unit stroke (visible as a perfect
+            // trace capping at formAccuracy ≈ 0.89, never reaching the
+            // high 90s no matter how precisely it was traced) — a real
+            // precision ceiling on the primary outcome, not a test
+            // artifact. 64 pushes that floor under 0.005 on the same
+            // stroke while staying cheap (Hausdorff is O(trace×ref); a
+            // ~2.7× reference-side increase is negligible against the
+            // per-completion, not per-frame, call frequency).
+            return resample(pts, targetCount: max(64, pts.count))
         }
     }
 
