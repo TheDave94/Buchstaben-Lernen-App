@@ -36,10 +36,15 @@ vcpkg/
 
 # Claude Code per-developer state. `settings.local.json` follows the
 # `.local` convention — per-machine tool allowlists, never team-shared.
-# A team-wide `settings.json` would be tracked; this repo doesn't use one.
+# `.claude/settings.json` (team-tracked, added 2026-09-03: session-handoff
+# discipline hooks) is NOT ignored — that one ships with the repo.
 .claude/settings.local.json
 
 # Python build artifacts
 __pycache__/
 *.pyc
 tmp_overlays/
+
+# Session handoff (session-handoff skill) — within-seat scratch,
+# overwritten every session, never meant to carry history.
+HANDOFF.md

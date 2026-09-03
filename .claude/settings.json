@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/musicbox/repos/homelab-ops/bin/hooks/h10-handoff-threshold-gate.sh\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/musicbox/repos/homelab-ops/bin/hooks/h6-precompact-gate.sh\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "clear|startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/musicbox/repos/homelab-ops/bin/hooks/h7-handoff-inject.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
