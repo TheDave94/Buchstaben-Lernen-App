@@ -366,26 +366,35 @@ final class PhaseTransitionCoordinator {
                                         condition: vm.thesisCondition,
                                         inputDevice: device)
 
-        // FLAGGED, NOT FIXED (found 2026-09-04 alongside the `score`
-        // audit — see DECISIONS.md D12): unlike the errorless-learning
-        // ramp (`load(letter:)`, explicitly `!studyMode`-gated) and the
-        // reward/streak block just above (`!vm.studyMode`-gated), this
-        // difficulty-tier adaptation is NOT gated on studyMode — it
-        // runs every completion, in every condition, using `accuracy`
-        // (the systematically-inflated `overallScore` under
-        // `.threePhase` — see PhaseSessionRecord.score). "Guided
-        // difficulty is held constant" is the stated study design
-        // intent (see the errorless-ramp comment in `load(letter:)`),
-        // but `strokeTracker.radiusMultiplier` can still drift within a
-        // study session via this path. Left unfixed this pass —
-        // in scope for whoever picks up D12, not silently absorbed into
-        // it.
-        let adaptSample = AdaptationSample(letter: dashboardLabel,
-                                           accuracy: CGFloat(accuracy),
-                                           completionTime: duration)
-        vm.adaptationPolicy.record(adaptSample)
-        vm.currentDifficultyTier         = vm.adaptationPolicy.currentTier
-        vm.strokeTracker.radiusMultiplier = vm.currentDifficultyTier.radiusMultiplier
+        // Difficulty-tier adaptation — gated on studyMode, same shape as
+        // the errorless-learning ramp (`load(letter:)`) and the
+        // reward/streak block just above: "guided difficulty is held
+        // constant" is the stated study design intent. Flagged
+        // 2026-09-04 (DECISIONS.md D12) because this block itself ran
+        // unconditionally with no LOCAL guard — but it never actually
+        // drifted: `TracingViewModel.init` already substitutes
+        // `FixedAdaptationPolicy(currentTier: .standard)` for
+        // `vm.adaptationPolicy` whenever `studyMode` is true (or
+        // condition is `.control`), and `FixedAdaptationPolicy.record`
+        // is a no-op with a constant `currentTier` — so `record()` did
+        // nothing and the two reassignments below were re-writing the
+        // same `.standard` value every time. Confirmed by
+        // `StudyCleanConfigTests.studyMode_fixesDifficulty`
+        // (`vm.adaptationPolicy is FixedAdaptationPolicy`, already
+        // green). This gate is therefore a no-op in the current build,
+        // added for local self-evidence — the invariant no longer
+        // depends on a reader also knowing the DI substitution in
+        // `TracingViewModel.init` — and as a guard against a future
+        // change to that substitution silently reintroducing real
+        // drift.
+        if !vm.studyMode {
+            let adaptSample = AdaptationSample(letter: dashboardLabel,
+                                               accuracy: CGFloat(accuracy),
+                                               completionTime: duration)
+            vm.adaptationPolicy.record(adaptSample)
+            vm.currentDifficultyTier         = vm.adaptationPolicy.currentTier
+            vm.strokeTracker.radiusMultiplier = vm.currentDifficultyTier.radiusMultiplier
+        }
 
         vm.showCompletionHUD()
     }
