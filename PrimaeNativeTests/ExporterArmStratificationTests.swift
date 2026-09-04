@@ -229,7 +229,8 @@ import Foundation
         func proxy(_ data: Data) throws -> Double {
             let lines = String(data: data, encoding: .utf8)!.split(separator: "\n").map(String.init)
             let m = metrics(lines)
-            return try #require(Double(try #require(m["schedulerEffectivenessProxy_threePhase"])))
+            let raw = try #require(m["schedulerEffectivenessProxy_threePhase"])
+            return try #require(Double(raw))
         }
         #expect(abs(try proxy(chronoCSV) - (try proxy(reversedCSV))) < 1e-9,
                 "the per-arm proxy must be keyed on recordedAt, not insertion order")
