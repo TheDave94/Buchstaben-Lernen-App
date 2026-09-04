@@ -66,14 +66,23 @@ struct TrainedLetterSubset: RawRepresentable, Codable, Equatable, Hashable, Send
     var displayName: String { rawValue.map(String.init).joined(separator: " · ") }
 
     /// Deterministically assign a participant to a trained subset from
-    /// the stable UUID. Keys on byte 8 — decorrelated from byte 0
+    /// the stable UUID. Keys on byte 9 — decorrelated from byte 0
     /// (`ThesisCondition`) and byte 15 (`PilotAudioCondition`) so the
-    /// three axes stay independent. As with the arms, 256 % 10 != 0
-    /// leaves a small residual bias (subsets 0–5 get 26/256, 6–9 get
-    /// 25/256, ~4‰ per-cell); the researcher override exists for exact
-    /// small-cohort counterbalancing.
+    /// three axes stay independent.
+    ///
+    /// NOT byte 8 (2026-09-04): `ParticipantStore.participantId` is a
+    /// Foundation `UUID()`, i.e. RFC 4122 version 4, whose byte 6 carries
+    /// the version nibble and whose byte 8 carries the two VARIANT bits
+    /// (`10xxxxxx`) — byte 8 only ever takes the 64 values 128…191, so
+    /// `byte % 10` gave subsets 0, 1, 8, 9 seven of those 64 values and
+    /// the other six subsets six each (~10.9 % vs ~9.4 %; measured over
+    /// 200 000 v4 UUIDs). The earlier claim of a "~4‰ residual bias from
+    /// 256 % 10" assumed a uniform byte. Byte 9 is fully random; the
+    /// residual is the genuine 256 % 10 (subsets 0–5 get 26/256, 6–9 get
+    /// 25/256). The researcher override exists for exact small-cohort
+    /// counterbalancing regardless.
     static func assign(participantId: UUID) -> TrainedLetterSubset {
-        let byte = participantId.uuid.8
+        let byte = participantId.uuid.9
         return allSubsets[Int(byte) % allSubsets.count]
     }
 
