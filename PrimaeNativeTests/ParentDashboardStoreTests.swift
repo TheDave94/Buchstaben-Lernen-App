@@ -174,6 +174,34 @@ private func makeStore() -> JSONParentDashboardStore {
         #expect(abs(series[0].minutes - 1.0) < 1e-9, "oldest first: index 0 is the older day")
         #expect(abs(series[1].minutes - 2.0) < 1e-9)
     }
+
+    // D11#2 regression: the proxy pairs *consecutive* records per letter
+    // to compute a score delta. Before the fix, "consecutive" meant
+    // array (insertion) order, not `recordedAt` order — feeding the same
+    // records in a different insertion order silently repaired/garbled
+    // the pairing. The proxy must now be insertion-order independent.
+    @Test func schedulerEffectivenessProxy_isInsertionOrderIndependent() {
+        let letterARecords = [
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true,
+                                score: 0.2, schedulerPriority: 0.1,
+                                recordedAt: date(2025, 3, 1)),
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true,
+                                score: 0.5, schedulerPriority: 0.5,
+                                recordedAt: date(2025, 3, 2)),
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true,
+                                score: 0.9, schedulerPriority: 0.9,
+                                recordedAt: date(2025, 3, 3)),
+        ]
+        var chronological = DashboardSnapshot()
+        chronological.phaseSessionRecords = letterARecords
+        var reverseInserted = DashboardSnapshot()
+        reverseInserted.phaseSessionRecords = letterARecords.reversed()
+
+        let proxyChrono   = chronological.schedulerEffectivenessProxy
+        let proxyReversed = reverseInserted.schedulerEffectivenessProxy
+        #expect(abs(proxyChrono - proxyReversed) < 1e-9,
+                "proxy must be keyed on recordedAt, not insertion order")
+    }
 }
 
 @Suite struct JSONParentDashboardStoreTests {

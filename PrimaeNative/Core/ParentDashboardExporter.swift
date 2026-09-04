@@ -240,7 +240,12 @@ struct ParentDashboardExporter {
             var pairs: [(priority: Double, delta: Double)] = []
             let lettersInArm = Set(armRecords.map(\.letter))
             for letter in lettersInArm {
-                let chrono = armRecords.filter { $0.letter == letter && $0.completed }
+                // D11#2: actually sorted, not just named `chrono` — see
+                // the identical fix + rationale in
+                // `ParentDashboardStore.schedulerEffectivenessProxy`.
+                let chrono = armRecords
+                    .filter { $0.letter == letter && $0.completed }
+                    .sorted { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }
                 guard chrono.count >= 2 else { continue }
                 for i in 0..<(chrono.count - 1) {
                     pairs.append((priority: chrono[i].schedulerPriority,

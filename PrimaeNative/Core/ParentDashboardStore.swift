@@ -460,7 +460,14 @@ struct DashboardSnapshot: Codable, Equatable {
         var pairs: [(priority: Double, delta: Double)] = []
         let letters = Set(phaseSessionRecords.map { $0.letter })
         for letter in letters {
-            let records = phaseSessionRecords.filter { $0.letter == letter && $0.completed }
+            // D11#2: sorted explicitly by `recordedAt` — `filter` only
+            // preserves `phaseSessionRecords`' own order, which happens
+            // to be chronological today (append-only writes) but was
+            // enforced by nothing. The delta pairing below depends on
+            // true chronological order.
+            let records = phaseSessionRecords
+                .filter { $0.letter == letter && $0.completed }
+                .sorted { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }
             guard records.count >= 2 else { continue }
             for i in 0..<(records.count - 1) {
                 pairs.append((priority: records[i].schedulerPriority,

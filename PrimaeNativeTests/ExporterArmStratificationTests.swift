@@ -198,6 +198,43 @@ import Foundation
         #expect(m["schedulerEffectivenessProxy_control"] == nil)
     }
 
+    // D11#2 regression, exporter side: the per-arm proxy's `chrono` local
+    // used to be array (insertion) order, not `recordedAt` order. The
+    // fixture above happens to insert already in chronological order, so
+    // it can't tell the two apart — this one deliberately doesn't.
+    @Test("schedulerEffectivenessProxy_ is independent of record insertion order")
+    func schedulerProxyPerArm_insertionOrderIndependent() throws {
+        func snap(_ records: [PhaseSessionRecord]) -> DashboardSnapshot {
+            var s = DashboardSnapshot()
+            s.phaseSessionRecords = records
+            return s
+        }
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let chronological = [
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true,
+                                score: 0.2, schedulerPriority: 0.1,
+                                condition: .threePhase, recordedAt: base),
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true,
+                                score: 0.6, schedulerPriority: 0.5,
+                                condition: .threePhase, recordedAt: base.addingTimeInterval(60)),
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true,
+                                score: 0.5, schedulerPriority: 0.9,
+                                condition: .threePhase, recordedAt: base.addingTimeInterval(120)),
+        ]
+        let chronoCSV = ParentDashboardExporter.csvData(
+            from: snap(chronological), participantId: pid, progress: [:], enrolledAt: nil)
+        let reversedCSV = ParentDashboardExporter.csvData(
+            from: snap(chronological.reversed()), participantId: pid, progress: [:], enrolledAt: nil)
+
+        func proxy(_ data: Data) throws -> Double {
+            let lines = String(data: data, encoding: .utf8)!.split(separator: "\n").map(String.init)
+            let m = metrics(lines)
+            return try #require(Double(try #require(m["schedulerEffectivenessProxy_threePhase"])))
+        }
+        #expect(abs(try proxy(chronoCSV) - (try proxy(reversedCSV))) < 1e-9,
+                "the per-arm proxy must be keyed on recordedAt, not insertion order")
+    }
+
     // MARK: - 5. letterByArm
 
     @Test("letterByArm carries its header and one well-formed row per (arm, letter)")

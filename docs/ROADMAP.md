@@ -159,21 +159,19 @@ If any of those fails on device, the fix is a tweak in `Coordinator.pencilIntera
 ## 4. TECHNICAL DEBT
 
 ### D11 — Measurement-layer correctness residuals
-**Effort:** S each · **Priority:** P1 (pilot-blocking for the two data-integrity items)
+**Effort:** S each · **Priority:** P1 for the two data-integrity items — both now CLOSED (#1, #2)
 
 Found by the 2026-08-19 reconciliation; none of these was previously tracked.
 
-1. **Pre-enrolment filter guards only the raw rows.** `ParentDashboardExporter.swift:147`
-   filters `recordedAt < enrolledAt` inside the per-row loop. Every aggregate below it
-   (`averageFreeWriteScore_<arm>`, `schedulerEffectivenessProxy_<arm>`, `letterByArm`,
-   `letterByAudioArm`, from `:199`) reads `snapshot.phaseSessionRecords` unfiltered, so
-   pre-enrolment activity lands in the arm aggregates — the exact attribution the filter
-   exists to prevent. `csvFiltersPreEnrolmentRows` passes because it asserts on a raw-row
-   substring only. **Pilot-blocking: it corrupts between-arm comparisons.**
-2. **Scheduler proxy assumes array order is chronological.** `ParentDashboardStore.swift:376`
-   and `ParentDashboardExporter.swift:207` both compute `records[i+1].score - records[i].score`
-   without sorting; the exporter's local is named `chrono` and is not. `PhaseSessionRecord`
-   already carries `recordedAt`. Correct by construction today, enforced by nothing.
+1. ~~**Pre-enrolment filter guards only the raw rows.**~~ **CLOSED (`881116b`, 2026-09-03,
+   found already merged to `main` — this entry was just never marked).** `ParentDashboardExporter
+   .swift` now filters ONCE into `enrolledRecords` and every aggregate (`averageFreeWriteScore_<arm>`,
+   `schedulerEffectivenessProxy_<arm>`, `letterByArm`, `letterByAudioArm`) reads that, never
+   `snapshot.phaseSessionRecords` directly — see the `D11#1` comment at the filter site.
+2. ~~**Scheduler proxy assumes array order is chronological.**~~ **CLOSED (this pass, 2026-09-04).**
+   Both `ParentDashboardStore.schedulerEffectivenessProxy` and `ParentDashboardExporter`'s per-arm
+   proxy now `.sorted { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }` before
+   pairing consecutive records — see the `D11#2` comments at both sites.
 3. **Export failure policy is implemented but undecided.** All three call sites are fail-loud
    and the destructive new-participant path is correctly gated behind a successful export.
    Missing is the DECISIONS entry recording that as policy — see DEFER 23. Doc-only.
