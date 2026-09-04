@@ -170,8 +170,16 @@ import Foundation
             vm.studyMode = target
             #expect(UserDefaults.standard.object(forKey: key) as? Bool == target,
                     "studyMode: didSet did not persist \(target) under '\(key)'")
+            #if STUDY_BUILD
+            // Ruling Q1 (2026-09-04): a study binary cannot leave study
+            // mode. The stored OFF is persisted (asserted above) but is
+            // NOT read back — `resolveStudyMode` is unconditionally true.
+            #expect(StudyBuild.resolveStudyMode(),
+                    "study build: a stored OFF must not be able to turn study mode off")
+            #else
             #expect(StudyBuild.resolveStudyMode() == target,
                     "studyMode: stored value must win over the build default")
+            #endif
         }
     }
 }
