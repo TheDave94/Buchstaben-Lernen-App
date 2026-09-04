@@ -52,7 +52,10 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         let strokeOrder: String?
         let reversedStrokeCount: Int?
 
-        /// How many of the ten are populated. 10 on freeWrite, 0 elsewhere.
+        /// How many of the ten declared fields are populated. 9 on
+        /// freeWrite (frechetDistance is RETIRED as of 2026-09-04 — kept
+        /// declared for Codable backward compat, never populated — see
+        /// PhaseSessionRecord.frechetDistance), 0 elsewhere.
         var measurementFieldCount: Int {
             [assessment != nil, recognition != nil, rawTraceID != nil,
              phaseDurationSeconds != nil, frechetDistance != nil,
@@ -224,10 +227,10 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         }
     }
 
-    // MARK: - 2. freeWrite carries all ten
+    // MARK: - 2. freeWrite carries all nine active measurement fields
 
-    @Test("the freeWrite row carries all ten measurement fields")
-    func freeWriteRowCarriesAllTenMeasurementFields() async throws {
+    @Test("the freeWrite row carries all nine active measurement fields")
+    func freeWriteRowCarriesAllNineMeasurementFields() async throws {
         let s = try await runSession()
         let fw = try row(.freeWrite, in: s.calls)
 
@@ -237,15 +240,17 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         #expect(fw.recognition != nil, "recognition missing from freeWrite row")
         #expect(fw.rawTraceID != nil, "rawTraceID missing from freeWrite row")
         #expect(fw.phaseDurationSeconds != nil, "phaseDurationSeconds missing from freeWrite row")
-        #expect(fw.frechetDistance != nil, "frechetDistance missing — the SECONDARY, sequence-sensitive outcome")
+        // frechetDistance is RETIRED (2026-09-04) — must stay nil even on
+        // a well-formed freeWrite row; see PhaseSessionRecord.frechetDistance.
+        #expect(fw.frechetDistance == nil, "frechetDistance is retired and must never be populated")
         #expect(fw.checkpointCoverage != nil, "checkpointCoverage missing — a SECONDARY outcome")
         #expect(fw.spatialDeviation != nil, "spatialDeviation missing — the PRIMARY, order-invariant outcome")
         #expect(fw.strokeCount != nil, "strokeCount missing — a SECONDARY process outcome")
         #expect(fw.strokeOrder != nil, "strokeOrder missing — a SECONDARY process outcome")
         #expect(fw.reversedStrokeCount != nil, "reversedStrokeCount missing — a SECONDARY process outcome")
 
-        #expect(fw.measurementFieldCount == 10,
-                "freeWrite row carries \(fw.measurementFieldCount)/10: \(fw.populatedFields.sorted())")
+        #expect(fw.measurementFieldCount == 9,
+                "freeWrite row carries \(fw.measurementFieldCount)/9 active fields: \(fw.populatedFields.sorted())")
 
         // The fixture traces ONE continuous stroke (no beginStroke()
         // calls) — well-formed process fields should say so.
@@ -260,18 +265,8 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         #expect(span > 0, "measured span must be positive, got \(span)")
         #expect(abs(span - 1.8) < 0.001, "19 samples at 0.1 s → 1.8 s, got \(span)")
 
-        let frechet = try #require(fw.frechetDistance)
-        #expect(frechet.isFinite, "frechetDistance must be finite, got \(frechet)")
-        // A distance is >= 0 by construction, so that bound held whether the
-        // pipeline was right or wrong. The bound that CAN fail is the upper
-        // one: a value past the unit-square diagonal is not normalised letter
-        // space, which is how an unnormalised pixel distance would surface.
-        #expect(frechet <= 2.0.squareRoot(),
-                "frechetDistance outside normalised letter space: \(frechet)")
-
-        // Same shape of bound, same reason, for the primary outcome: a
-        // Hausdorff distance in normalised letter space cannot exceed the
-        // unit square's diagonal either.
+        // A Hausdorff/Fréchet-family distance in normalised letter space
+        // cannot exceed the unit square's diagonal.
         let deviation = try #require(fw.spatialDeviation)
         #expect(deviation.isFinite, "spatialDeviation must be finite, got \(deviation)")
         #expect(deviation <= 2.0.squareRoot(),

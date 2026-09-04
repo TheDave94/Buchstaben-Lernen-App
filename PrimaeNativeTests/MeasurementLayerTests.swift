@@ -39,21 +39,19 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
 
 @Suite @MainActor struct MeasurementLayerTests {
 
-    // MARK: - 2a. Fréchet is captured, not just displayed
+    // MARK: - 2a. spatialDeviation is captured, not just displayed
 
-    @Test("no assessment yet → no Fréchet distance to record")
-    func frechetNilBeforeAssessment() {
+    @Test("no assessment yet → no spatial deviation to record")
+    func spatialDeviationNilBeforeAssessment() {
         let r = FreeWritePhaseRecorder()
-        #expect(r.lastFrechetDistance == nil)
+        #expect(r.lastSpatialDeviation == nil)
         r.startSession(now: 0)
-        #expect(r.lastFrechetDistance == nil,
+        #expect(r.lastSpatialDeviation == nil,
                 "a fresh session has measured nothing")
-        // The debug mirror still hands the overlay a drawable 0.
-        #expect(r.lastDistance == 0)
     }
 
-    @Test("single-cell assess records the raw Fréchet distance")
-    func singleCellAssessRecordsFrechet() throws {
+    @Test("single-cell assess records the raw spatial deviation")
+    func singleCellAssessRecordsSpatialDeviation() throws {
         let ref = lineReference()
         let r = FreeWritePhaseRecorder()
         r.startSession(now: 0)
@@ -65,10 +63,11 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         }
         _ = r.assess(reference: ref, canvasSize: canvas, now: 1.0)
 
-        let recorded = try #require(r.lastFrechetDistance)
-        let expected = FreeWriteScorer.rawDistance(
-            tracedPoints: r.points.map { CGPoint(x: $0.x / 100, y: $0.y / 100) },
-            reference: ref)
+        let recorded = try #require(r.lastSpatialDeviation)
+        let normalised = r.points.map { CGPoint(x: $0.x / 100, y: $0.y / 100) }
+        let expected = try #require(StrokeProcessScorer.analyze(
+            points: normalised, strokeStartIndices: r.strokeStartIndices, reference: ref
+        )).spatialDeviation
         #expect(abs(recorded - expected) < 1e-9,
                 "the recorded value must be the scorer's raw distance, untransformed")
         #expect(recorded > 0, "an offset trace is not a perfect overlay")
@@ -82,9 +81,10 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         let canvas = CGSize(width: 100, height: 100)
         r.record(point: CGPoint(x: 10, y: 50), timestamp: 0, force: 0, canvasSize: canvas)
         _ = r.assess(reference: ref, canvasSize: canvas, now: 1.0)
-        // rawDistance signals "not comparable" with .greatestFiniteMagnitude,
-        // which is isFinite — it must never reach the export as a number.
-        #expect(r.lastFrechetDistance == nil)
+        // A single point can't form a stroke comparable to the
+        // reference — StrokeProcessScorer.analyze reports nil, which
+        // must never reach the export as a defaulted number.
+        #expect(r.lastSpatialDeviation == nil)
     }
 
     @Test("clearAll drops the distance so it can't bleed to the next letter")
@@ -98,40 +98,15 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
                      timestamp: Double(i) * 0.05, force: 0, canvasSize: canvas)
         }
         _ = r.assess(reference: ref, canvasSize: canvas, now: 1.0)
-        #expect(r.lastFrechetDistance != nil)
+        #expect(r.lastSpatialDeviation != nil)
         r.clearAll()
-        #expect(r.lastFrechetDistance == nil)
+        #expect(r.lastSpatialDeviation == nil)
     }
 
-    @Test("multi-cell assess records the mean per-cell distance")
-    func multiCellAssessRecordsMeanDistance() throws {
-        let ref = lineReference()
-        let r = FreeWritePhaseRecorder()
-        r.startSession(now: 0)
-        let canvas = CGSize(width: 200, height: 100)
-        let left  = CGRect(x: 0, y: 0, width: 100, height: 100)
-        let right = CGRect(x: 100, y: 0, width: 100, height: 100)
-        // Ink in both cells, each offset from its cell-local reference.
-        for i in 0...8 {
-            r.record(point: CGPoint(x: 10 + 10 * Double(i), y: 60),
-                     timestamp: Double(i) * 0.05, force: 0, canvasSize: canvas)
-        }
-        for i in 0...8 {
-            r.record(point: CGPoint(x: 110 + 10 * Double(i), y: 65),
-                     timestamp: 1.0 + Double(i) * 0.05, force: 0, canvasSize: canvas)
-        }
-        _ = r.assess(cellReferences: [(frame: left, reference: ref),
-                                      (frame: right, reference: ref)],
-                     canvasSize: canvas, now: 2.0)
-        let mean = try #require(r.lastFrechetDistance)
-        #expect(mean > 0)
-        #expect(mean.isFinite && mean < .greatestFiniteMagnitude)
-    }
+    // MARK: - 2b. Why spatialDeviation is primary: coverage saturates, it doesn't
 
-    // MARK: - 2b. Why Fréchet is primary: coverage saturates, it doesn't
-
-    @Test("two traces both saturate checkpoint coverage at 1.0 but differ in Fréchet")
-    func coverageSaturatesWhereFrechetDiscriminates() {
+    @Test("two traces both saturate checkpoint coverage at 1.0 but differ in spatialDeviation")
+    func coverageSaturatesWhereSpatialDeviationDiscriminates() throws {
         let ref = lineReference(checkpointRadius: 0.2)
 
         // Tidy trace: straight along the reference.
@@ -155,14 +130,16 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         #expect(coverage(sloppy) == 1.0,
                 "the sloppy trace still reaches every checkpoint — coverage is at ceiling")
 
-        let dTidy = FreeWriteScorer.rawDistance(tracedPoints: tidy, reference: ref)
-        let dSloppy = FreeWriteScorer.rawDistance(tracedPoints: sloppy, reference: ref)
+        let dTidy = try #require(StrokeProcessScorer.analyze(
+            points: tidy, strokeStartIndices: [], reference: ref)).spatialDeviation
+        let dSloppy = try #require(StrokeProcessScorer.analyze(
+            points: sloppy, strokeStartIndices: [], reference: ref)).spatialDeviation
         #expect(dSloppy > dTidy,
-                "Fréchet must still separate two traces that coverage calls identical")
+                "spatialDeviation must still separate two traces that coverage calls identical")
     }
 
-    @Test("Fréchet keeps ranking traces after formAccuracy has clamped to 0")
-    func frechetDiscriminatesBelowTheFormAccuracyFloor() {
+    @Test("spatialDeviation keeps ranking traces after formAccuracy has clamped to 0")
+    func spatialDeviationDiscriminatesBelowTheFormAccuracyFloor() throws {
         let ref = lineReference(checkpointRadius: 0.05)
         // Both traces sit far outside checkpointRadius * 3 (= 0.15), so
         // the clamped formAccuracy reads 0 for each and loses the
@@ -175,8 +152,10 @@ private func lineReference(checkpointRadius: CGFloat = 0.2) -> LetterStrokes {
         #expect(aBad.formAccuracy == 0)
         #expect(aWorse.formAccuracy == 0)
 
-        let dBad = FreeWriteScorer.rawDistance(tracedPoints: bad, reference: ref)
-        let dWorse = FreeWriteScorer.rawDistance(tracedPoints: worse, reference: ref)
+        let dBad = try #require(StrokeProcessScorer.analyze(
+            points: bad, strokeStartIndices: [], reference: ref)).spatialDeviation
+        let dWorse = try #require(StrokeProcessScorer.analyze(
+            points: worse, strokeStartIndices: [], reference: ref)).spatialDeviation
         #expect(dWorse > dBad,
                 "the raw distance is the only one of the two that still ranks these")
     }

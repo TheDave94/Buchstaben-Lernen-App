@@ -20,7 +20,7 @@ import CoreGraphics
         #expect(r.sessionStart == 0)
         #expect(r.activePhaseStart == 0)
         #expect(r.checkpointsPerSecond == 0)
-        #expect(r.lastDistance == 0)
+        #expect(r.lastSpatialDeviation == nil)
         #expect(r.lastAssessment == nil)
         #expect(r.lastGuidedScore == nil)
     }
@@ -39,7 +39,7 @@ import CoreGraphics
         #expect(r.sessionStart == 42.0)
         #expect(r.activePhaseStart == 42.0)
         #expect(r.checkpointsPerSecond == 0)
-        #expect(r.lastDistance == 0)
+        #expect(r.lastSpatialDeviation == nil)
         #expect(r.lastAssessment == nil)
     }
 
@@ -199,7 +199,7 @@ import CoreGraphics
         #expect(r.sessionStart == 0)
         #expect(r.activePhaseStart == 0)
         #expect(r.checkpointsPerSecond == 0)
-        #expect(r.lastDistance == 0)
+        #expect(r.lastSpatialDeviation == nil)
         #expect(r.lastAssessment == nil)
         #expect(r.lastGuidedScore == nil)
     }

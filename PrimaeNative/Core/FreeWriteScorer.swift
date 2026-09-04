@@ -4,10 +4,15 @@
 // Scores a freehand drawn path against a reference letter definition.
 // Returns a WritingAssessment with four Schreibmotorik dimensions
 // (Marquardt & Söhl 2016): Form, Tempo, Druck, Rhythmus.
-// Form scoring uses symmetric Hausdorff distance (2026-09-03; order-
-// invariant — see `rawSpatialDeviation`). Discrete Fréchet distance
-// (Eiter & Mannila 1994) is retained as `rawDistance`, feeding the
-// sequence-sensitive secondary outcome `PhaseSessionRecord.frechetDistance`.
+// Form scoring (2026-09-04) is order-invariant via STROKE
+// CORRESPONDENCE — matching each traced stroke to its best-fitting
+// reference stroke, then measuring discrete Fréchet distance (Eiter &
+// Mannila 1994) WITHIN each matched pair — see `StrokeProcessMeasures`
+// for the full design and why whole-trace Hausdorff and whole-path
+// Fréchet were both superseded by it. `formAccuracyShape` (freeform/
+// Werkstatt, blank canvas, no fixed reference frame) is unaffected —
+// its unit-box-normalised whole-trace Hausdorff is unchanged and still
+// the right tool for that different problem.
 
 import CoreGraphics
 import Foundation
@@ -39,8 +44,14 @@ struct FreeWriteScorer {
 
     /// Scores a traced path against reference strokes, returning a
     /// four-dimension assessment with each dimension in 0–1.
+    /// `strokeStartIndices` feeds Form's stroke correspondence
+    /// (`StrokeProcessMeasures`) — defaults to `[]` (the whole trace as
+    /// one stroke), the right behaviour for a genuinely single-stroke
+    /// trace and a safe simplification for a caller that doesn't track
+    /// stroke boundaries at all.
     static func score(
         tracedPoints: [CGPoint],
+        strokeStartIndices: [Int] = [],
         reference: LetterStrokes,
         timestamps: [CFTimeInterval] = [],
         forces: [CGFloat] = [],
@@ -48,88 +59,15 @@ struct FreeWriteScorer {
         sessionEnd: CFTimeInterval = 0
     ) -> WritingAssessment {
         WritingAssessment(
-            formAccuracy:     formAccuracy(tracedPoints: tracedPoints, reference: reference),
+            formAccuracy:     formAccuracy(tracedPoints: tracedPoints,
+                                           strokeStartIndices: strokeStartIndices,
+                                           reference: reference),
             tempoConsistency: tempoConsistency(timestamps: timestamps),
             pressureControl:  pressureControl(forces: forces),
             rhythmScore:      rhythmScore(timestamps: timestamps,
                                           sessionStart: sessionStart,
                                           sessionEnd: sessionEnd)
         )
-    }
-
-    /// Raw Fréchet distance (exposed for debug overlay and testing).
-    /// Sequence-sensitive — see the note on `PhaseSessionRecord.frechetDistance`.
-    static func rawDistance(
-        tracedPoints: [CGPoint],
-        reference: LetterStrokes
-    ) -> CGFloat {
-        let refPoints = referencePolyline(from: reference)
-        guard refPoints.count >= 2, tracedPoints.count >= 2 else { return .greatestFiniteMagnitude }
-        let targetCount = max(refPoints.count, 20)
-        return discreteFrechetDistance(
-            resample(tracedPoints, targetCount: targetCount),
-            resample(refPoints, targetCount: targetCount)
-        )
-    }
-
-    /// Raw, ORDER-INVARIANT spatial deviation — the pilot's primary
-    /// accuracy outcome (2026-09-03). Symmetric Hausdorff distance
-    /// between the traced points and the reference strokes, the strokes
-    /// densified per-stroke first so cross-lift gaps can't absorb sample
-    /// points (same technique `formAccuracyShape` uses). Deliberately
-    /// NOT normalised to a unit bounding box the way `formAccuracyShape`
-    /// is: that normalisation is right for freeform/Werkstatt, where
-    /// there is no fixed reference frame to be accurate WITHIN, but the
-    /// guided/freeWrite task traces onto one, so position and scale
-    /// carry real signal here — the same space `rawDistance` (Fréchet)
-    /// already measures in, which is what makes the two comparable as a
-    /// primary/secondary pair rather than two measures on different
-    /// scales.
-    ///
-    /// Hausdorff over Fréchet because it is symmetric in point
-    /// CORRESPONDENCE, not just endpoint direction: Fréchet's DP walk
-    /// couples trace-order to reference-order monotonically, so writing
-    /// a spatially perfect letter in an unusual stroke order still
-    /// costs Fréchet distance — the two properties (shape, sequence)
-    /// were never actually separable inside one number. Hausdorff asks
-    /// only "is every traced point near some reference point, and vice
-    /// versa" — true for any traversal order — which is exactly the
-    /// product/process split the handwriting literature draws (form and
-    /// legibility vs. stroke count/order/direction). Not normalised or
-    /// clamped for the same statistical reason `rawDistance` isn't (see
-    /// `PhaseSessionRecord.frechetDistance`'s note): a clamped,
-    /// saturating score is worse for a continuous pilot outcome than an
-    /// unbounded one.
-    ///
-    /// DENSITY ASSUMPTION, NAMED RATHER THAN HIDDEN (found by CI,
-    /// 2026-09-03): `tracedPoints` is used raw, unlike `formAccuracyShape`'s
-    /// trace (also raw, by the same "touch samples are already dense"
-    /// reasoning) — but unlike Fréchet's `rawDistance`, which resamples
-    /// BOTH sides to a matching count internally, Hausdorff's one-sided
-    /// components are independently density-sensitive: a sparse trace
-    /// leaves gaps the dense reference's own points can be "far from",
-    /// inflating the one-sided distance FROM the reference even when the
-    /// trace is spatially correct. Real captured touch traces (60–120 Hz
-    /// sampling) are dense enough that this doesn't bite in production —
-    /// CI caught it specifically on sparse SYNTHETIC test fixtures sized
-    /// for Fréchet's own internal resampling. Per-stroke resampling the
-    /// trace to fix this at the source was considered and deliberately
-    /// deferred: it would need `strokeStartIndices` threaded through to
-    /// avoid the exact cross-lift phantom-diagonal risk `formAccuracyShape`
-    /// already densifies the reference to avoid, and Hausdorff (unlike
-    /// Fréchet's DP coupling) has no proven bound on how much a phantom
-    /// bridge point could inflate a one-sided distance — an unvalidated
-    /// robustness change is a worse trade than a named, true-in-production
-    /// assumption under time pressure.
-    static func rawSpatialDeviation(
-        tracedPoints: [CGPoint],
-        reference: LetterStrokes
-    ) -> CGFloat {
-        let denseRef = densifyReferenceStrokes(reference)
-        guard denseRef.count >= 2, tracedPoints.count >= 2 else { return .greatestFiniteMagnitude }
-        let d1 = oneSidedHausdorff(tracedPoints, denseRef)
-        let d2 = oneSidedHausdorff(denseRef, tracedPoints)
-        return max(d1, d2)
     }
 
     // MARK: - Shape-only accuracy (freeform writing)
@@ -188,23 +126,18 @@ struct FreeWriteScorer {
         reference.strokes.map { stroke in
             let pts = stroke.checkpoints.map { CGPoint(x: $0.x, y: $0.y) }
             guard pts.count >= 2 else { return pts }
-            // 64 samples per stroke (found by CI, 2026-09-03 — see
-            // rawSpatialDeviation's DENSITY ASSUMPTION note above): the
-            // one-sided Hausdorff distance FROM a dense trace TO this
-            // reference is bounded below by roughly half the
+            // 64 samples per stroke (found by CI, 2026-09-03, against
+            // the whole-trace Hausdorff design this file used before
+            // 2026-09-04's stroke-correspondence redesign — the
+            // one-sided Hausdorff distance FROM a dense trace TO a
+            // sparse reference is bounded below by roughly half the
             // REFERENCE's own point spacing, however dense the trace
-            // gets — a trace point densifies its own side for nothing
-            // once it's already denser than the reference, because the
-            // worst-case nearest-reference-point gap is set by the
-            // reference's sampling, not the trace's. 24 samples left a
-            // ~0.013 floor on a 0.6-unit stroke (visible as a perfect
-            // trace capping at formAccuracy ≈ 0.89, never reaching the
-            // high 90s no matter how precisely it was traced) — a real
-            // precision ceiling on the primary outcome, not a test
-            // artifact. 64 pushes that floor under 0.005 on the same
-            // stroke while staying cheap (Hausdorff is O(trace×ref); a
-            // ~2.7× reference-side increase is negligible against the
-            // per-completion, not per-frame, call frequency).
+            // gets). Still the right density for `formAccuracyShape`
+            // (unchanged) and for the reference side of each
+            // `StrokeProcessMeasures` pairwise Fréchet comparison, where
+            // the same "match the reference's own sampling" reasoning
+            // applies to the traced-stroke side via its own per-pair
+            // resample (see `StrokeProcessScorer.analyze`).
             return resample(pts, targetCount: max(64, pts.count))
         }
     }
@@ -249,25 +182,25 @@ struct FreeWriteScorer {
     // MARK: - Dimension: Form accuracy
 
     /// The recorded `WritingAssessment.formAccuracy` — clamped, scaled
-    /// companion to `PhaseSessionRecord.spatialDeviation` (2026-09-03:
-    /// re-pointed from Fréchet to order-invariant Hausdorff; see
-    /// `rawSpatialDeviation` for why). "Form" is a product measure —
-    /// does the shape match — and should not cost a child anything for
-    /// tracing a spatially correct letter in an unusual stroke order;
-    /// that is a process property, recorded separately (stroke count/
-    /// order/direction) alongside the retained Fréchet distance, which
-    /// remains exactly as it was as the named sequence-sensitive
-    /// secondary — see `PhaseSessionRecord.frechetDistance`.
+    /// companion to `PhaseSessionRecord.spatialDeviation`. Both read the
+    /// SAME `StrokeProcessMeasures.spatialDeviation` (2026-09-04: stroke
+    /// correspondence, order-invariant by construction — see that
+    /// type's header). "Form" is a product measure — does the shape
+    /// match — and should not cost a child anything for tracing a
+    /// spatially correct letter in an unusual stroke order; that is a
+    /// process property, recorded separately (`matchedReferenceOrder`,
+    /// `reversedStrokeCount`, `strokeCount`).
     ///
-    /// Same clamp convention as the prior Fréchet-based version
+    /// Same clamp convention as the historical Fréchet-based version
     /// (`checkpointRadius * 3.0`) for continuity in the UI's displayed
-    /// range; the cross-pen-lift concern that motivated an earlier
-    /// investigation of the old Fréchet path doesn't apply here — this
-    /// measure densifies the reference per-stroke (`densifyReferenceStrokes`),
-    /// which sidesteps cross-lift phantom segments entirely rather than
-    /// relying on them being provably harmless.
-    private static func formAccuracy(tracedPoints: [CGPoint], reference: LetterStrokes) -> CGFloat {
-        let distance = rawSpatialDeviation(tracedPoints: tracedPoints, reference: reference)
+    /// range.
+    private static func formAccuracy(tracedPoints: [CGPoint],
+                                     strokeStartIndices: [Int],
+                                     reference: LetterStrokes) -> CGFloat {
+        guard let measures = StrokeProcessScorer.analyze(
+            points: tracedPoints, strokeStartIndices: strokeStartIndices, reference: reference
+        ) else { return 0 }
+        let distance = measures.spatialDeviation
         guard distance.isFinite, distance < .greatestFiniteMagnitude else { return 0 }
         let maxAcceptable = reference.checkpointRadius * 3.0
         guard maxAcceptable > 0 else { return 0 }
@@ -336,7 +269,10 @@ struct FreeWriteScorer {
     // MARK: - Discrete Fréchet Distance
 
     /// O(nm) DP discrete Fréchet distance (Eiter & Mannila 1994).
-    /// Flat array + iterative for cache and stack-safety.
+    /// Flat array + iterative for cache and stack-safety. Not `private`
+    /// — `StrokeProcessMeasures` reuses this as the WITHIN-PAIR distance
+    /// for its stroke correspondence (2026-09-04) rather than
+    /// re-implementing it.
     static func discreteFrechetDistance(
         _ p: [CGPoint], _ q: [CGPoint]
     ) -> CGFloat {
@@ -371,16 +307,6 @@ struct FreeWriteScorer {
     }
 
     // MARK: - Helpers
-
-    /// Converts a LetterStrokes definition into a single polyline of
-    /// normalised points. Concatenates across pen-lifts; this is
-    /// Fréchet-safe for the primary measure — see the cross-pen-lift note
-    /// on `formAccuracy`.
-    private static func referencePolyline(from strokes: LetterStrokes) -> [CGPoint] {
-        strokes.strokes.flatMap { stroke in
-            stroke.checkpoints.map { CGPoint(x: $0.x, y: $0.y) }
-        }
-    }
 
     /// Euclidean distance between two points. Not `private` —
     /// `StrokeProcessMeasures` reuses this rather than re-implementing it.

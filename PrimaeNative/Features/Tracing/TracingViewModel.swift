@@ -350,18 +350,10 @@ public final class TracingViewModel {
     /// the unit: checkpoints, not strokes — the name matters for
     /// motor-rhythm correlations.
     var checkpointsPerSecond: CGFloat { freeWriteRecorder.checkpointsPerSecond }
-    /// Last computed Fréchet distance (debug overlay). 0 when nothing
-    /// was measured — use `lastFreeWriteFrechetDistance` for anything
-    /// that gets recorded.
-    var lastFreeWriteDistance: CGFloat { freeWriteRecorder.lastDistance }
-    /// Raw discrete-Fréchet distance of the measured freeWrite trace in
-    /// reference-normalised units, or nil if none was measured. The
-    /// study's SECONDARY (sequence-sensitive) accuracy outcome — see
-    /// `PhaseSessionRecord.frechetDistance`.
-    var lastFreeWriteFrechetDistance: CGFloat? { freeWriteRecorder.lastFrechetDistance }
     /// Raw, order-invariant spatial deviation of the measured freeWrite
-    /// trace, or nil if none was measured. The study's PRIMARY accuracy
-    /// outcome (2026-09-03) — see `PhaseSessionRecord.spatialDeviation`.
+    /// trace via stroke correspondence, or nil if none was measured. The
+    /// study's PRIMARY accuracy outcome — see
+    /// `PhaseSessionRecord.spatialDeviation` and `StrokeProcessMeasures`.
     var lastFreeWriteSpatialDeviation: CGFloat? { freeWriteRecorder.lastSpatialDeviation }
     /// Stroke count/order/direction of the measured freeWrite trace, or
     /// nil if none was measured. The study's SECONDARY process outcomes

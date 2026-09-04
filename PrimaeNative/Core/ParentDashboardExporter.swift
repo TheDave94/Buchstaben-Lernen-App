@@ -133,13 +133,17 @@ struct ParentDashboardExporter {
         // appended last, newest-last, so the legacy column order is
         // preserved for existing consumers.
         // `spatialDeviation` is the study's PRIMARY accuracy outcome
-        // (2026-09-03: order-invariant Hausdorff distance, raw,
-        // unclamped, lower = better). `frechetDistance` is now a named
-        // SECONDARY, sequence-sensitive process outcome — same raw/
-        // unclamped convention, unchanged computation, reclassified
-        // role only. `checkpointCoverage` is a SECONDARY outcome too
-        // (bounded 0–1, saturates at ceiling). All three are freeWrite-
-        // only. `spatialDeviation` rides at the very end, after
+        // (2026-09-04: order-invariant via stroke correspondence, raw,
+        // unclamped, lower = better — see StrokeProcessMeasures).
+        // `frechetDistance` is RETIRED (2026-09-04): the column stays,
+        // for CSV-schema stability, but every row now writes it empty —
+        // see PhaseSessionRecord.frechetDistance for why (Fréchet itself
+        // isn't gone, it moved to the WITHIN-PAIR computation behind
+        // `spatialDeviation`; the sequence signal it used to approximate
+        // is `strokeOrder`/`reversedStrokeCount` now, directly).
+        // `checkpointCoverage` is a SECONDARY outcome (bounded 0–1,
+        // saturates at ceiling). All three are freeWrite-only.
+        // `spatialDeviation` rides at the very end, after
         // `checkpointCoverage`, for the same newest-last column-order
         // reason the others do — it is the newest field, not because it
         // is least important.

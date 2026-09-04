@@ -232,15 +232,11 @@ final class PhaseTransitionCoordinator {
         // `FreeWritePhaseRecorder.measuredSpanSeconds` for why the span
         // must not end at the final stroke's start.
         let freeWriteDuration: Double? = vm.freeWriteRecorder.measuredSpanSeconds
-        // SECONDARY, sequence-sensitive process outcome (2026-09-03: no
-        // longer primary — see PhaseSessionRecord.frechetDistance): the
-        // raw discrete-Fréchet distance the scorer already computed for
-        // this trial. Unlike `formAccuracy` it is unclamped, so it keeps
-        // discriminating at both ends of the scale.
-        let freeWriteFrechet: Double? = vm.lastFreeWriteFrechetDistance.map { Double($0) }
-        // PRIMARY accuracy outcome (2026-09-03): raw, order-invariant
-        // spatial deviation (symmetric Hausdorff) — see
-        // FreeWriteScorer.rawSpatialDeviation and
+        // frechetDistance is RETIRED (2026-09-04) — always nil now, kept
+        // as a parameter only for Codable/protocol backward compat; see
+        // PhaseSessionRecord.frechetDistance for why.
+        // PRIMARY accuracy outcome: order-invariant spatial deviation
+        // via stroke correspondence — see StrokeProcessMeasures and
         // PhaseSessionRecord.spatialDeviation.
         let freeWriteSpatialDeviation: Double? = vm.lastFreeWriteSpatialDeviation.map { Double($0) }
         // SECONDARY: checkpoint coverage of the freeWrite trace.
@@ -273,7 +269,7 @@ final class PhaseTransitionCoordinator {
                 rawTraceID: isFreeWrite ? freeWriteTraceID : nil,
                 trainedSubset: vm.trainedSubset.rawValue,
                 phaseDurationSeconds: isFreeWrite ? freeWriteDuration : nil,
-                frechetDistance: isFreeWrite ? freeWriteFrechet : nil,
+                frechetDistance: nil,
                 checkpointCoverage: isFreeWrite ? freeWriteCoverage : nil,
                 spatialDeviation: isFreeWrite ? freeWriteSpatialDeviation : nil,
                 strokeCount: isFreeWrite ? freeWriteStrokeProcess?.strokeCount : nil,

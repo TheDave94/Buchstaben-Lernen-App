@@ -38,34 +38,17 @@ final class FreeWritePhaseRecorder {
     private(set) var activePhaseStart: CFTimeInterval = 0
     /// Live checkpoints-per-second figure surfaced on the dashboard.
     private(set) var checkpointsPerSecond: CGFloat = 0
-    /// Last raw discrete-Fréchet distance in reference-normalised
-    /// (cell-local 0–1) units, or nil when no assessment has produced a
-    /// finite one this session. SECONDARY outcome (2026-09-03: primary
-    /// moved to `lastSpatialDeviation` below — Fréchet is sequence-
-    /// sensitive, which made it a hybrid of a product measure and a
-    /// process one). Retained exactly as it was: neither clamped nor
-    /// rescaled, so it keeps discriminating above and below the
-    /// `checkpointRadius * 3` band where formAccuracy saturates at 1 / 0.
-    /// Lower is better. `PhaseTransitionCoordinator` records it onto the
-    /// freeWrite row.
-    private(set) var lastFrechetDistance: CGFloat?
-    /// Last raw, ORDER-INVARIANT spatial deviation (symmetric Hausdorff)
-    /// in the same reference-normalised units as `lastFrechetDistance` —
-    /// the study's PRIMARY accuracy outcome (2026-09-03). See
-    /// `FreeWriteScorer.rawSpatialDeviation` for why Hausdorff over
-    /// Fréchet. Lower is better; nil when no assessment has produced a
-    /// finite one this session.
-    private(set) var lastSpatialDeviation: CGFloat?
-    /// Stroke count/order/direction — the process-measure secondary
-    /// outcomes (2026-09-03), computed alongside `lastSpatialDeviation`
-    /// from the same normalised points. Nil under the same conditions
-    /// `StrokeProcessScorer.analyze` reports nil (nothing comparable).
+    /// Stroke count/order/direction, AND the order-invariant PRIMARY
+    /// spatial-deviation outcome — one computation
+    /// (`StrokeProcessScorer.analyze`, 2026-09-04) produces both; see
+    /// that type's header for why. Nil when nothing comparable was
+    /// traced.
     private(set) var lastStrokeProcess: StrokeProcessMeasures?
-    /// Non-optional mirror of `lastFrechetDistance` for the debug
-    /// overlay, which wants a displayable number rather than a
-    /// "not measured" state. 0 reads as "perfect" — never record this;
-    /// record `lastFrechetDistance`.
-    var lastDistance: CGFloat { lastFrechetDistance ?? 0 }
+    /// The PRIMARY accuracy outcome, read off `lastStrokeProcess` — kept
+    /// as its own property rather than inlined at every call site.
+    /// Lower is better; nil when no assessment has produced a finite one
+    /// this session.
+    var lastSpatialDeviation: CGFloat? { lastStrokeProcess?.spatialDeviation }
     /// Latest 4-dimension Schreibmotorik assessment. Set by `assess`.
     private(set) var lastAssessment: WritingAssessment? = nil
     /// Captured guided-phase score so the freeWrite chrome can show a
@@ -107,8 +90,6 @@ final class FreeWritePhaseRecorder {
         sessionStart = now
         activePhaseStart = now
         checkpointsPerSecond = 0
-        lastFrechetDistance = nil
-        lastSpatialDeviation = nil
         lastStrokeProcess = nil
         lastAssessment = nil
     }
@@ -177,7 +158,6 @@ final class FreeWritePhaseRecorder {
             return empty
         }
         var perCell: [WritingAssessment] = []
-        var perCellDistance: [CGFloat] = []
         for cell in cellReferences {
             var pts: [CGPoint] = []
             var ts: [CFTimeInterval] = []
@@ -192,13 +172,19 @@ final class FreeWritePhaseRecorder {
                 if i < forces.count { fs.append(forces[i]) }
             }
             guard pts.count >= 2 else { continue }
+            // Per-cell stroke boundaries aren't tracked separately from
+            // the whole-session `strokeStartIndices` (frame-membership
+            // filtering doesn't preserve them cleanly) — passed empty,
+            // which scores the cell's ink as a single stroke for
+            // correspondence purposes. Acceptable here: word/pencil mode
+            // isn't the pilot instrument (the pilot practises single
+            // letters and never reaches this path); the per-letter
+            // single-cell path below carries the real
+            // `strokeStartIndices`.
             perCell.append(FreeWriteScorer.score(
-                tracedPoints: pts, reference: cell.reference,
+                tracedPoints: pts, strokeStartIndices: [], reference: cell.reference,
                 timestamps: ts, forces: fs,
                 sessionStart: sessionStart, sessionEnd: now))
-            if let d = Self.measuredDistance(pts, cell.reference) {
-                perCellDistance.append(d)
-            }
         }
         guard !perCell.isEmpty else {
             return assess(reference: lastCell.reference,
@@ -213,14 +199,6 @@ final class FreeWritePhaseRecorder {
             rhythmScore:      perCell.map(\.rhythmScore).reduce(0, +) / n
         )
         lastAssessment = avg
-        // Word / multi-cell rows carry the mean per-cell Fréchet
-        // distance. Averaging is legitimate here because every cell's
-        // trace is normalised into its own cell-local 0–1 box, so the
-        // per-cell distances share one scale. The pilot practises single
-        // letters and never reaches this path.
-        lastFrechetDistance = perCellDistance.isEmpty
-            ? nil
-            : perCellDistance.reduce(0, +) / CGFloat(perCellDistance.count)
         return avg
     }
 
@@ -238,8 +216,21 @@ final class FreeWritePhaseRecorder {
             CGPoint(x: (p.x - frame.minX) / max(frame.width, 1),
                     y: (p.y - frame.minY) / max(frame.height, 1))
         }
+        // `score` computes a stroke correspondence internally (for
+        // `formAccuracy`) and this line computes one again for
+        // `lastStrokeProcess` — the same analysis run twice, not once.
+        // Accepted deliberately: `FreeWriteScorer.score` is a general
+        // public API (tests and other callers use it standalone, with
+        // no separate correspondence step), and re-running an
+        // exhaustive search over a handful of strokes once per phase
+        // completion costs nothing worth a more complex shared-result
+        // API for. "One computation" in the design sense — one
+        // MECHANISM produces both the primary and the secondaries —
+        // holds; this is two calls to that one mechanism, not two
+        // mechanisms.
         let assessment = FreeWriteScorer.score(
             tracedPoints: normalised,
+            strokeStartIndices: strokeStartIndices,
             reference: reference,
             timestamps: timestamps,
             forces: forces,
@@ -247,36 +238,12 @@ final class FreeWritePhaseRecorder {
             sessionEnd: now
         )
         lastAssessment = assessment
-        lastFrechetDistance = Self.measuredDistance(normalised, reference)
-        lastSpatialDeviation = Self.measuredSpatialDeviation(normalised, reference)
         lastStrokeProcess = StrokeProcessScorer.analyze(
             points: normalised,
             strokeStartIndices: strokeStartIndices,
             reference: reference
         )
         return assessment
-    }
-
-    /// Raw discrete-Fréchet distance, or nil when the pair isn't
-    /// comparable. `FreeWriteScorer.rawDistance` signals that case with a
-    /// `.greatestFiniteMagnitude` sentinel (fewer than two points on
-    /// either polyline) — which is `isFinite`, so it would sail into the
-    /// export as a real measurement if we only checked finiteness.
-    private static func measuredDistance(_ points: [CGPoint],
-                                         _ reference: LetterStrokes) -> CGFloat? {
-        let d = FreeWriteScorer.rawDistance(tracedPoints: points, reference: reference)
-        guard d.isFinite, d < .greatestFiniteMagnitude else { return nil }
-        return d
-    }
-
-    /// Raw order-invariant spatial deviation, or nil when the pair isn't
-    /// comparable — same sentinel discipline as `measuredDistance`, since
-    /// `rawSpatialDeviation` signals "not comparable" the same way.
-    private static func measuredSpatialDeviation(_ points: [CGPoint],
-                                                 _ reference: LetterStrokes) -> CGFloat? {
-        let d = FreeWriteScorer.rawSpatialDeviation(tracedPoints: points, reference: reference)
-        guard d.isFinite, d < .greatestFiniteMagnitude else { return nil }
-        return d
     }
 
     /// Clear every buffer. Called on letter load and on phase
@@ -290,8 +257,6 @@ final class FreeWritePhaseRecorder {
         sessionStart = 0
         activePhaseStart = 0
         checkpointsPerSecond = 0
-        lastFrechetDistance = nil
-        lastSpatialDeviation = nil
         lastStrokeProcess = nil
         lastAssessment = nil
         lastGuidedScore = nil

@@ -56,32 +56,38 @@ struct PhaseSessionRecord: Codable, Equatable {
     /// quiet-window auto-advance by construction). Nil for other phases
     /// and legacy records.
     let phaseDurationSeconds: Double?
-    /// **SECONDARY, sequence-sensitive process outcome** (2026-09-03:
-    /// no longer primary — see `spatialDeviation` below). Raw discrete-
-    /// Fréchet distance (Eiter & Mannila 1994) between the freeWrite
-    /// trace and the reference glyph, both arc-length resampled to a
-    /// common point count, in reference-normalised 0–1 units. Lower is
-    /// better; 0 is a perfect overlay. Unbounded above and never
-    /// clamped. Fréchet's DP walk couples trace-order to reference-order
-    /// monotonically, so it reports a spatially correct letter written
-    /// in an unusual stroke order as inaccurate — a process property
-    /// (sequence), not the product property (form) its name suggested.
-    /// Retained unchanged, as a named process outcome, rather than
-    /// deleted: still derivable from the same raw traces, so no prior
-    /// session's data is lost by the reclassification. Nil for
-    /// non-freeWrite phases, legacy records, and traces too short to
-    /// compare. See APP_DOCUMENTATION §4.12.
+    /// **RETIRED** (2026-09-04) — kept declared, Codable, and in the
+    /// `recordPhaseSession` signature ONLY for backward-compatible
+    /// decode of any earlier local JSON (same precedent as
+    /// `ThesisCondition`'s deprecated-but-decodable `case direct`); no
+    /// code populates it any more. Was: raw discrete-Fréchet distance
+    /// (Eiter & Mannila 1994) applied to the WHOLE concatenated trace
+    /// vs. the whole concatenated reference. Retired because that
+    /// application conflated two different questions in one number —
+    /// shape accuracy and stroke sequence — which is exactly the defect
+    /// `spatialDeviation`'s stroke-correspondence redesign fixes
+    /// properly: Fréchet distance itself is NOT retired, it is now
+    /// computed WITHIN each matched stroke pair (see
+    /// `StrokeProcessMeasures`), and the sequence signal this field used
+    /// to approximate is now `strokeOrder` / `reversedStrokeCount`
+    /// directly, rather than inferred from an inflated whole-path
+    /// distance number.
     let frechetDistance: Double?
-    /// **PRIMARY accuracy outcome** (2026-09-03). Raw, ORDER-INVARIANT
-    /// spatial deviation: symmetric Hausdorff distance between the
-    /// freeWrite trace and the reference glyph (reference densified
-    /// per-stroke), in the same reference-normalised 0–1 units as
-    /// `frechetDistance` — see `FreeWriteScorer.rawSpatialDeviation` for
-    /// the full rationale. Lower is better; unbounded above and never
-    /// clamped, for the same statistical reason `frechetDistance` isn't
-    /// (unlike `formAccuracy`, a rescaled/clamped transform of this same
-    /// distance, it does not saturate at ceiling). Nil for non-freeWrite
-    /// phases, legacy records, and traces too short to compare.
+    /// **PRIMARY accuracy outcome.** Order-invariant spatial deviation
+    /// via STROKE CORRESPONDENCE (2026-09-04, superseding the
+    /// 2026-09-03 whole-trace-Hausdorff design): each traced stroke is
+    /// matched to its best-fitting reference stroke, and this is the
+    /// mean discrete-Fréchet distance across the matched pairs, in
+    /// reference-normalised 0–1 units — see `StrokeProcessMeasures` for
+    /// the full rationale, including why shape normalisation
+    /// (Procrustes) was rejected: this task has a fixed reference and a
+    /// defined canvas, so position/scale already carry real signal, and
+    /// rotation-invariance would be actively wrong (upside-down is an
+    /// error, not a nuisance parameter). Lower is better; unbounded
+    /// above and never clamped (unlike `formAccuracy`, a rescaled/
+    /// clamped transform of this same distance, it does not saturate at
+    /// ceiling). Nil for non-freeWrite phases, legacy records, and
+    /// traces too short to compare.
     let spatialDeviation: Double?
     /// **Secondary accuracy outcome.** Fraction of the reference's
     /// checkpoints reached during the measured freeWrite phase (0–1),
@@ -99,9 +105,11 @@ struct PhaseSessionRecord: Codable, Equatable {
     let strokeCount: Int?
     /// **SECONDARY process outcome** (2026-09-03). Comma-joined sequence
     /// of matched reference-stroke indices, in the order the child
-    /// traced them — e.g. "0,2,1" — see `StrokeProcessMeasures` for why
-    /// the raw correspondence is recorded rather than one order-
-    /// conformance scalar. Nil under the same conditions as `strokeCount`.
+    /// traced them — e.g. "0,2,1", or "0,-" when a traced stroke had no
+    /// reference counterpart (more traced strokes than the reference
+    /// has) — see `StrokeProcessMeasures` for why the raw correspondence
+    /// is recorded rather than one order-conformance scalar. Nil under
+    /// the same conditions as `strokeCount`.
     let strokeOrder: String?
     /// **SECONDARY process outcome** (2026-09-03). Of the matched
     /// strokes, how many were traced in the reverse direction relative
