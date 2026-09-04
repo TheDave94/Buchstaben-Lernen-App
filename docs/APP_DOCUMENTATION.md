@@ -1417,7 +1417,7 @@ page.
 | `letter` | Per-letter slicing (alphabet effect, frequency analysis). |
 | `phase` | Which phase (observe / direct / guided / freeWrite) the session belonged to; needed for any GRR efficacy claim. |
 | `completed` | Selection criterion for "successful sessions". |
-| `score` | Phase-level accuracy / form score (0–1). |
+| `score` | **NOT one instrument across phase rows** (found 2026-09-04, DECISIONS.md D12): `observe`/`direct` are always exactly `1.0` (completion markers, not measurements); `guided` is checkpoint-proximity coverage; `freeWrite` is `WritingAssessment.overallScore`, a weighted 4-dimension composite. Comparing `score` across phase types compares different quantities under one name — analyse per phase, never pooled. `PhaseSessionRecord.score`'s own doc comment carries the full breakdown. |
 | `schedulerPriority` | Spaced-repetition scheduler's prediction at the time the letter was recommended; used as the IV in the scheduler-effectiveness Pearson r (per-arm proxy below — cross-arm proxy is invalid because `.control` uses `-completionCount` priorities, not Ebbinghaus). |
 | `condition` | Thesis A/B arm — required for between-arm comparisons. |
 | `recordedAt` | ISO-8601 wall-clock timestamp (D-3). Required for time-of-day and dated learning-curve analyses. Empty on legacy pre-D-3 rows. |
@@ -2373,7 +2373,7 @@ One row per phase × letter session, chronological order. Filtered by `enrolledA
 | `letter` | `PhaseSessionRecord.letter` | Per-letter slicing. |
 | `phase` | `PhaseSessionRecord.phase` | `observe` / `direct` / `guided` / `freeWrite`. |
 | `completed` | `PhaseSessionRecord.completed` | Selection criterion. |
-| `score` | `PhaseSessionRecord.score` | Phase-level accuracy / form score (0–1). |
+| `score` | `PhaseSessionRecord.score` | **NOT one instrument across phase rows** — see §6.4's `score` row for the full breakdown (observe/direct constant 1.0, guided coverage, freeWrite composite). Never pool across phase types. |
 | `schedulerPriority` | `PhaseSessionRecord.schedulerPriority` | Scheduler priority at letter selection. |
 | `condition` | `PhaseSessionRecord.condition` | A/B arm. |
 | `recordedAt` | `PhaseSessionRecord.recordedAt` | D-3: dated learning curves. |

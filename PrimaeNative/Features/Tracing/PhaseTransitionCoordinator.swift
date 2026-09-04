@@ -29,11 +29,20 @@ final class PhaseTransitionCoordinator {
     func advance() {
         guard let vm else { return }
         let score: CGFloat
+        // Four structurally different instruments write into this one
+        // `score`, per phase — see PhaseSessionRecord.score and
+        // DECISIONS.md D12 (found 2026-09-04) for the full
+        // characterization and why LearningPhaseController.overallScore
+        // (the average of these) is systematically inflated, not just
+        // an average of incomparable quantities.
         switch vm.phaseController.currentPhase {
         case .observe:
             score = 1.0
         case .direct:
-            score = 1.0  // pass/fail
+            // Genuinely unconditional — no fail path is implemented
+            // despite the "pass/fail" framing; wrong-order taps in
+            // tapDirectDot() never reach this score.
+            score = 1.0
         case .guided:
             score = vm.progress
         case .freeWrite:
@@ -357,6 +366,20 @@ final class PhaseTransitionCoordinator {
                                         condition: vm.thesisCondition,
                                         inputDevice: device)
 
+        // FLAGGED, NOT FIXED (found 2026-09-04 alongside the `score`
+        // audit — see DECISIONS.md D12): unlike the errorless-learning
+        // ramp (`load(letter:)`, explicitly `!studyMode`-gated) and the
+        // reward/streak block just above (`!vm.studyMode`-gated), this
+        // difficulty-tier adaptation is NOT gated on studyMode — it
+        // runs every completion, in every condition, using `accuracy`
+        // (the systematically-inflated `overallScore` under
+        // `.threePhase` — see PhaseSessionRecord.score). "Guided
+        // difficulty is held constant" is the stated study design
+        // intent (see the errorless-ramp comment in `load(letter:)`),
+        // but `strokeTracker.radiusMultiplier` can still drift within a
+        // study session via this path. Left unfixed this pass —
+        // in scope for whoever picks up D12, not silently absorbed into
+        // it.
         let adaptSample = AdaptationSample(letter: dashboardLabel,
                                            accuracy: CGFloat(accuracy),
                                            completionTime: duration)

@@ -89,7 +89,22 @@ struct LearningPhaseController: Equatable {
         }
     }
 
-    /// Overall session score — average across all completed phases.
+    /// Overall session score — unweighted average across all completed
+    /// phases' `score` values.
+    ///
+    /// NOT a clean accuracy signal under `.threePhase` (found
+    /// 2026-09-04 — see `PhaseSessionRecord.score` and DECISIONS.md
+    /// D12): `observe` and `direct` always score exactly `1.0`
+    /// (completion markers, not measurements), so with all 4 phases
+    /// active this average has a mathematical FLOOR of 0.5 — a child
+    /// who traces nothing correctly in `guided`/`freeWrite` (both 0)
+    /// still yields `overallScore` = 0.5. This value feeds
+    /// `LetterProgress.bestAccuracy` and
+    /// `ParentDashboardStoring.recordSession`'s `accuracy` — both
+    /// systematically inflated for that condition, not merely an
+    /// average of incomparable quantities. `.guidedOnly`/`.control`
+    /// (single active phase) don't have this floor, since there's
+    /// nothing else in the average to dilute it.
     var overallScore: CGFloat {
         guard !phaseScores.isEmpty else { return 0 }
         return phaseScores.values.reduce(0, +) / CGFloat(phaseScores.count)

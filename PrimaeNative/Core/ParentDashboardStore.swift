@@ -7,7 +7,33 @@ struct PhaseSessionRecord: Codable, Equatable {
     /// LearningPhase.rawName: "observe", "direct", "guided", or "freeWrite".
     let phase: String
     let completed: Bool
-    /// Phase accuracy score (0–1). For freeWrite equals WritingAssessment.overallScore.
+    /// Phase accuracy score (0–1) — **NOT the same instrument across
+    /// phases, despite sharing this one column** (found 2026-09-04, in
+    /// the same audit that found the confidence-calibrator mixup):
+    ///   - `observe`, `direct`: always exactly `1.0` — a completion
+    ///     marker, not a measurement. `direct`'s dot-tap ordering isn't
+    ///     reflected in this score at all, despite the "pass/fail"
+    ///     framing in `PhaseTransitionCoordinator.advance()`.
+    ///   - `guided`: checkpoint-proximity COVERAGE (`vm.progress` —
+    ///     fraction of reference checkpoints reached within radius).
+    ///     Purely geometric proximity; unrelated to trace SHAPE.
+    ///   - `freeWrite`: `WritingAssessment.overallScore` — a weighted
+    ///     4-dimension composite (Form 40% + Tempo 25% + Druck 15% +
+    ///     Rhythmus 20%), itself a different instrument again from
+    ///     `guided`'s coverage fraction.
+    /// Comparing `score` ACROSS phase-type rows (e.g. "guided vs.
+    /// freeWrite accuracy") compares three structurally different
+    /// quantities under one name. WORSE: `LearningPhaseController
+    /// .overallScore` (which feeds `LetterProgress.bestAccuracy` and
+    /// `ParentDashboardStoring.recordSession`'s own `accuracy`) is the
+    /// unweighted MEAN of every active phase's `score` — under
+    /// `.threePhase` (all 4 phases active), two of the four terms
+    /// (observe, direct) are unconditionally `1.0`, so `overallScore`
+    /// has a mathematical FLOOR of 0.5 regardless of how poorly the
+    /// child actually traced (guided=0, freeWrite=0 still yields
+    /// `overallScore` = 0.5). That value is not merely mismatched
+    /// across phases — under `.threePhase` it is systematically
+    /// inflated by a fixed, uninformative floor. See DECISIONS.md D12.
     let score: Double
     /// Spaced-repetition priority assigned when this session was scheduled.
     let schedulerPriority: Double
