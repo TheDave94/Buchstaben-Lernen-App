@@ -205,6 +205,27 @@ xcodebuild test -project Primae.xcodeproj -scheme Primae \
 > instead of run directly, that handover is itself a finding worth
 > recording (which specific call shape failed, and why) — not a default
 > to fall back on when the first shape tried happens not to be git-led.
+>
+> **The rule generalises past `cd`, and stating it only for `cd` invites
+> the same mistake in a different wrapper.** The exclusion keys on
+> `sandbox.excludedCommands` matching the Bash tool call's LEADING
+> TOP-LEVEL WORD — literally whatever the Bash tool call's command
+> string starts with. `cd /path && git commit -S ...` fails because
+> `cd` is that leading word. **`bash -lc "git commit -S ..."` fails for
+> the identical reason**: the leading word of THAT call is `bash`, not
+> `git`, even though a `git` command sits right there inside the
+> string — the match is on the call shape, not on whether `git` appears
+> anywhere in it. Any other wrapper has the same failure mode: `sh -c
+> "..."`, a shell function that internally runs `git`, a script invoked
+> as `sh some-script.sh` whose body calls `git`. **The one shape that
+> keeps the exclusion is the Bash tool's command string beginning with
+> the literal word `git` — nothing between the start of the string and
+> that word, no shell invoked to interpret it first.** This is why a
+> signing capability can look like it vanished between one attempt and
+> the next when nothing about the sandbox or the key changed: the call
+> SHAPE changed, and that alone flips the outcome. Before concluding
+> signing doesn't work, check the exact command string that was sent,
+> not just that it "used git somewhere."
 
 1. **Swift compilation check** (claudebox Linux — basic syntax check only, SwiftUI/QuartzCore won't link):
    ```bash
