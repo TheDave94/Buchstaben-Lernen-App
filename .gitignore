@@ -46,3 +46,6 @@ tmp_overlays/
 
 # session-handoff skill scratch — within-seat clear/resume only, never landed
 HANDOFF.md
+# Held DECISIONS.md draft entries, pending David's sign-off — scratch,
+# never landed to docs/DECISIONS.md without explicit sign-off per entry.
+DECISIONS_DRAFT.md

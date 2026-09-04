@@ -169,6 +169,42 @@ xcodebuild test -project Primae.xcodeproj -scheme Primae \
 > path specifically to record and investigate on its own terms — not proof
 > the retracted claim was right, and not something to silently retry past
 > without noting it happened.
+>
+> **2026-09-04 — WHY the direct route works, mechanically, and why a
+> diagnostic probe of "signing capability" using `ssh-keygen`/`ssh-add`
+> directly is not a valid test of it.** MEASURED off this machine's own
+> `~/.claude/settings.json` (global, one file, governs every project —
+> confirmed by reading it directly, not relayed):
+> `sandbox.excludedCommands: ["git", "git *"]`. Claude Code's sandbox
+> exclusion is evaluated **per Bash call, over that call's leading
+> top-level statement** — a call whose command STARTS WITH `git` runs
+> **entirely unsandboxed** (full filesystem read, including `~/.ssh`;
+> real agent-socket access), and any other call — including a bare
+> `ssh-keygen -Y sign -f ~/.ssh/id_ed25519_sk_homelab.pub ...` or
+> `ssh-add -l` run directly to "test whether signing works" — does **not** match, stays
+> fully sandboxed, and fails on the exact same `~/.ssh` denyRead this
+> section's finding 1 already named. **That failure is not a capability
+> regression — it is proof the probe wasn't a git-led call, nothing
+> more.** (Cross-referenced against `~/repos/homelab-ops/docs/
+> NOTE-proviant-signing-mechanism-2026-09-02.md` and
+> `~/repos/homelab-ops/docs/systems/git-security.md`, which independently
+> derived and named the identical mechanism against the identical
+> settings file from a sibling project on this machine — corroborating,
+> not the source of this finding.)
+>
+> **Practical corollary: to sign a commit in a DIFFERENT repo than the
+> current working directory without breaking the exclusion, use `git -C
+> /path/to/other-repo commit -S ...`, never `cd /path/to/other-repo &&
+> git commit -S ...`.** `cd` as the leading statement makes the WHOLE
+> compound not git-led, and the commit inside it runs sandboxed and
+> fails — indistinguishable, from the outside, from "signing doesn't
+> work here," when the actual cause is call shape. `git -C
+> /path/to/other-repo ...` keeps `git` as the literal leading word of
+> the call, preserving the exclusion, while still targeting the other
+> repo. If a signing attempt ever needs to be handed to David
+> instead of run directly, that handover is itself a finding worth
+> recording (which specific call shape failed, and why) — not a default
+> to fall back on when the first shape tried happens not to be git-led.
 
 1. **Swift compilation check** (claudebox Linux — basic syntax check only, SwiftUI/QuartzCore won't link):
    ```bash
