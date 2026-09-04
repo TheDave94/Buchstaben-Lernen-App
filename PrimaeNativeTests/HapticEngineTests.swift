@@ -50,9 +50,15 @@ import QuartzCore
 
 @Suite struct HapticEventEquatabilityTests {
 
-    @Test func allCases_selfEqual() {
+    @Test func allCases_pairwiseDistinct() {
+        // Exhaustive pairwise distinctness. (The previous form asserted
+        // `c == c` for each case, which cannot fail — 2026-09-04.)
         let cases: [HapticEvent] = [.strokeBegan, .checkpointHit, .strokeCompleted, .letterCompleted, .offPath]
-        for c in cases { #expect(c == c) }
+        for (i, a) in cases.enumerated() {
+            for (j, b) in cases.enumerated() where i != j {
+                #expect(a != b, "\(a) and \(b) must be distinct haptic events")
+            }
+        }
     }
 
     @Test func differentCases_notEqual() {

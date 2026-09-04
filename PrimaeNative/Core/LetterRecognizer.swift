@@ -230,7 +230,17 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendab
         modelCache.withLock { cache in
             if cache.didAttemptLoad { return cache.model }
             cache.didAttemptLoad = true
+            let started = Date()
             cache.model = loadModel()
+            // Measured on hosted CI simulators (job logs, 2026-09-04): the
+            // first load took ~32 s on the iPad Pro (M5) leg and > 60 s on
+            // iPad (A16), with every caller parked on this lock meanwhile.
+            // Logged so a slow or failed first load is a console fact, not
+            // an inference from a timed-out test.
+            let elapsed = Date().timeIntervalSince(started)
+            let resolved = resolveModelURL()?.url.lastPathComponent ?? "none"
+            recognizerLogger.info(
+                "GermanLetterRecognizer first load: \(cache.model == nil ? "FAILED" : "ok", privacy: .public) after \(elapsed, format: .fixed(precision: 2)) s (resolved: \(resolved, privacy: .public))")
             return cache.model
         }
     }

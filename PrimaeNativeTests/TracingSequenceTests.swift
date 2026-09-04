@@ -75,11 +75,15 @@ import Foundation
         #expect(a.id != b.id)
     }
 
-    @Test func sequence_equalsItselfStructurallyIgnoringID() {
-        // Equatable compares all properties including id; this test documents
-        // that identity matters for sequence equality.
+    @Test func sequence_equalityIncludesIdentity() {
+        // Equatable compares all properties INCLUDING id: two structurally
+        // identical sequences are NOT equal, a copy is. (The previous form
+        // asserted `a == a`, which cannot fail — 2026-09-04.)
         let a = TracingSequence.singleLetter("A")
-        #expect(a == a)
+        let b = TracingSequence.singleLetter("A")
+        #expect(a != b, "different ids must make structurally identical sequences unequal")
+        let copy = a
+        #expect(a == copy)
     }
 
     // MARK: - Audio policy default

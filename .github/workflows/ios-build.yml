@@ -23,8 +23,31 @@ jobs:
         run: pip install --quiet pillow numpy "scikit-image>=0.21" fonttools
       - name: Skeleton audit
         run: |
+          # Without a `shell:` key GitHub runs `bash -e` with NO pipefail,
+          # so this step's status was `tee`'s and the script's exit code
+          # never reached the job — it had been exiting 1 on every run
+          # (37 static-artifact letters reported as anchor errors) while
+          # the job showed green (2026-09-04). The job stays advisory by
+          # design; the exit code is now surfaced as a warning annotation
+          # instead of being lost.
+          set +e
           python3 scripts/skeleton_audit.py --anchor-drift-pct 10 \
             | tee /tmp/skeleton-audit.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning title=Skeleton audit::skeleton_audit.py exited $rc — advisory, job stays green; read the step log"
+          fi
+      # scripts/tests/ (80 pytest-style functions, incl. the design-token
+      # drift gate) were executed by no workflow until 2026-09-04. Advisory
+      # on first wiring — pytest could not be installed from the audit seat
+      # to prove them green — and surfaced as a warning annotation, not
+      # masked; promote to a hard step once one run has been read.
+      - name: Script tests (advisory until first green run is read)
+        run: |
+          pip install --quiet pytest
+          if ! python3 -m pytest scripts/tests -q; then
+            echo "::warning title=scripts/tests::pytest reported failures — advisory; read the step log"
+          fi
       - name: Stroke artifact scan
         run: |
           python3 - <<'PY'

@@ -92,19 +92,21 @@ fileprivate final class RecordingAudio: AudioControlling {
     // MARK: - Full session
 
     @Test func fullSession_progressReachesOne() {
-        guard gridScanUntilComplete() else { return }
-        #expect(vm.progress == 1.0)
+        traceReferencePolyline()
+        #expect(vm.progress == 1.0, "tracing the reference polyline checkpoint by checkpoint must complete the letter")
     }
 
     @Test func fullSession_isPlayingFalseAfterCompletion() {
-        guard gridScanUntilComplete() else { return }
+        traceReferencePolyline()
+        #expect(vm.progress == 1.0, "precondition: the letter must actually complete for the assertion below to mean anything")
         #expect(!vm.isPlaying)
     }
 
     // MARK: - resetLetter restores initial state
 
     @Test func resetLetter_restoresInitialState() {
-        gridScanUntilComplete()
+        traceReferencePolyline()
+        #expect(vm.progress == 1.0, "precondition: complete the letter before resetting it")
         vm.resetLetter()
         #expect(vm.progress == 0.0)
         #expect(!vm.isPlaying)
@@ -169,18 +171,26 @@ fileprivate final class RecordingAudio: AudioControlling {
         for _ in 0..<15 { t += 0.001; p.x += 10; vm.updateTouch(at: p, t: t, canvasSize: canvas) }
     }
 
-    @discardableResult
-    private func gridScanUntilComplete() -> Bool {
-        let t0: CFTimeInterval = 2000.0
-        vm.beginTouch(at: .zero, t: t0); var t = t0
-        for row in stride(from: 0.0, through: 1.0, by: 0.04) {
-            for col in stride(from: 0.0, through: 1.0, by: 0.04) {
-                t += 0.001
-                vm.updateTouch(at: CGPoint(x: col * canvas.width, y: row * canvas.height), t: t, canvasSize: canvas)
-                if vm.progress >= 1.0 { return true }
-            }
+    /// Drives one touch exactly along the tracker's loaded reference
+    /// polyline — every update lands on the next checkpoint — so the
+    /// letter completes regardless of how the fixture was mapped onto
+    /// the canvas. Replaces a raster scan whose completion was never
+    /// asserted: three tests here used to `return` silently when the
+    /// scan missed, and no `progress == 1.0` assertion in the tree
+    /// could then fail (2026-09-04). Callers assert `vm.progress == 1.0`.
+    private func traceReferencePolyline() {
+        // Set the size FIRST — the dispatcher re-maps checkpoints when
+        // the size it is handed differs from `vm.canvasSize`.
+        vm.canvasSize = canvas
+        let cps = vm.strokeTracker.definition?.strokes.flatMap(\.checkpoints) ?? []
+        var t: CFTimeInterval = 2000.0
+        let first = cps.first.map { CGPoint(x: $0.x * canvas.width, y: $0.y * canvas.height) } ?? .zero
+        vm.beginTouch(at: first, t: t)
+        for cp in cps {
+            t += 0.01
+            vm.updateTouch(at: CGPoint(x: cp.x * canvas.width, y: cp.y * canvas.height),
+                           t: t, canvasSize: canvas)
         }
-        return false
     }
 
     private func assertAccessibilityStringsValid(label: String) {

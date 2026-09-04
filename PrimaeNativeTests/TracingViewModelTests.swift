@@ -151,19 +151,22 @@ private func slowDrag(vm: TracingViewModel,
         #expect(audio.playCount == playBefore)
     }
     @Test func strokeCompletion_forcesIdleAndSetsComplete() async {
+        // Drive exactly along the loaded reference polyline so completion
+        // is guaranteed by construction and asserted, not skipped: the
+        // previous raster scan `return`ed silently when it missed, so this
+        // test could never fail (2026-09-04).
         let canvas = CGSize(width: 400, height: 400)
-        vm.beginTouch(at: CGPoint(x: 0, y: 0), t: 1000.0)
-        var t: CFTimeInterval = 1000.0; var didComplete = false
-        outer: for row in stride(from: 0.0, through: 1.0, by: 0.05) {
-            for col in stride(from: 0.0, through: 1.0, by: 0.05) {
-                t += 0.001
-                vm.updateTouch(at: CGPoint(x: col * canvas.width, y: row * canvas.height), t: t, canvasSize: canvas)
-                if vm.progress >= 1.0 { didComplete = true; break outer }
-            }
+        vm.canvasSize = canvas
+        let cps = vm.strokeTracker.definition?.strokes.flatMap(\.checkpoints) ?? []
+        let first = cps.first.map { CGPoint(x: $0.x * canvas.width, y: $0.y * canvas.height) } ?? .zero
+        vm.beginTouch(at: first, t: 1000.0)
+        var t: CFTimeInterval = 1000.0
+        for cp in cps {
+            t += 0.01
+            vm.updateTouch(at: CGPoint(x: cp.x * canvas.width, y: cp.y * canvas.height), t: t, canvasSize: canvas)
         }
-        guard didComplete else { return } // not completable via grid scan — silent skip
         await drainAsyncWork()
-        #expect(vm.progress == 1.0)
+        #expect(vm.progress == 1.0, "tracing every checkpoint in order must complete the letter")
         #expect(!vm.isPlaying)
     }
     @Test func resetLetter_clearsProgressAndStops() async {

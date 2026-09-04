@@ -54,8 +54,14 @@ import CoreGraphics
 
     // MARK: - Equality
 
-    @Test func twoDefaultFingerPresets_areEqual() {
-        #expect(InputPreset.finger == InputPreset.finger)
+    @Test func fingerPreset_pinsItsValues() {
+        // Pins the finger preset's actual geometry against a freshly
+        // constructed value. (The previous form compared the static to
+        // itself, which cannot fail — 2026-09-04.)
+        let expected = InputPreset(kind: .finger, cellCount: 1, cellSpacing: 12,
+                                   lineaturStyle: .none, horizontalInset: 0)
+        #expect(InputPreset.finger == expected)
+        #expect(InputPreset.finger.resolved(forSequenceLength: 1) == expected)
     }
 
     @Test func fingerAndPencil_areNotEqual() {

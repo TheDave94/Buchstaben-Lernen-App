@@ -39,12 +39,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BUNDLE = REPO_ROOT / "PrimaeNative/Resources/Letters"
 
 
-def check_anchor_spec(letter: str, font_path: Path) -> list[str]:
+def check_anchor_spec(letter: str, font_path: Path) -> list[str] | None:
     """Attempt a dry bake to surface anchor-resolution or Dijkstra
     failures. The bake is deterministic, so a passing letter here is
-    guaranteed to bake clean."""
+    guaranteed to bake clean.
+
+    Returns ``None`` when the letter ships as a static artifact — the
+    bake deliberately refuses those (``SHIPPED_AS_STATIC_ARTIFACT``), so
+    there is nothing to check and it is NOT an error. Until 2026-09-04
+    that refusal was reported as an anchor error for every one of the 37
+    entries, so the script exited 1 on every CI run (masked by a pipe)."""
     try:
         bake_letter(letter, font_path)
+    except KeyError as e:
+        if "ships as a static artifact" in str(e):
+            return None
+        return [f"{letter}: {e}"]
     except Exception as e:
         return [f"{letter}: {e}"]
     return []
@@ -117,6 +127,9 @@ def main() -> int:
             print(f"  {L}: skipped (no entry in LETTERS)")
             continue
         errs = check_anchor_spec(L, font_path)
+        if errs is None:
+            print(f"  {L}: skipped (static artifact — no bake authored)")
+            continue
         spec_results.append({"letter": L, "errors": errs})
         if errs:
             for e in errs:
