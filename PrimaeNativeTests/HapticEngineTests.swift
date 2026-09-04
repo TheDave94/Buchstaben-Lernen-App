@@ -179,6 +179,11 @@ private final class TrackingMockAudio: AudioControlling {
         let vm = makeVM(studyMode: true, haptics: haptics)
         #expect(haptics.prepareCallCount == 0,
                 "studyMode must not even prime the injected engine")
+        // studyMode pins the four-phase flow whatever the injected
+        // `.guidedOnly` says (2026-09-04), so a fresh study VM sits in
+        // the touch-disabled observe phase; move to guided as the study
+        // suites do, or the trace cannot advance (CI run 1637).
+        vm.phaseController.resume(at: .guided)
 
         let progress = traceWholeLetter(vm)
         #expect(Double(progress) > 0.0,
