@@ -181,13 +181,16 @@ private final class TrackingMockAudio: AudioControlling {
                 "studyMode must not even prime the injected engine")
         // studyMode pins the four-phase flow whatever the injected
         // `.guidedOnly` says (2026-09-04), so a fresh study VM sits in
-        // the touch-disabled observe phase; move to guided as the study
-        // suites do, or the trace cannot advance (CI run 1637).
+        // the touch-disabled observe phase. Same recipe as the passing
+        // study suites (StudyCleanConfigTests): canvas FIRST — its didSet
+        // re-lays out the grid and reloads the checkpoints — then guided,
+        // then trace (CI runs 1637/1638).
+        vm.canvasSize = CGSize(width: 400, height: 400)
         vm.phaseController.resume(at: .guided)
 
         let progress = traceWholeLetter(vm)
         #expect(Double(progress) > 0.0,
-                "the trace must really advance the tracker, or this proves nothing")
+                "the trace must really advance the tracker, or this proves nothing — precondition=\(vm.studyPreconditionFailure ?? "nil") phase=\(vm.phaseController.currentPhase) touchEnabled=\(vm.phaseController.isTouchEnabled) letter=\(vm.currentLetterName) letters=\(vm.letters.map(\\.name)) visible=\(vm.visibleLetterNames) cells=\(vm.gridCells.count) strokes=\(vm.strokeTracker.definition?.strokes.count ?? -1)")
         #expect(haptics.firedEvents.isEmpty,
                 "no haptics in a study session — got \(haptics.firedEvents)")
     }
