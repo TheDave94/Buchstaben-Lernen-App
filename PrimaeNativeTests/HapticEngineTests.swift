@@ -190,7 +190,7 @@ private final class TrackingMockAudio: AudioControlling {
 
         let progress = traceWholeLetter(vm)
         #expect(Double(progress) > 0.0,
-                "the trace must really advance the tracker, or this proves nothing — precondition=\(vm.studyPreconditionFailure ?? "nil") phase=\(vm.phaseController.currentPhase) touchEnabled=\(vm.phaseController.isTouchEnabled) letter=\(vm.currentLetterName) letters=\(vm.letters.map(\\.name)) visible=\(vm.visibleLetterNames) cells=\(vm.gridCells.count) strokes=\(vm.strokeTracker.definition?.strokes.count ?? -1)")
+                "the trace must really advance the tracker, or this proves nothing — precondition=\(vm.studyPreconditionFailure ?? "nil") phase=\(vm.phaseController.currentPhase) touchEnabled=\(vm.phaseController.isTouchEnabled) letter=\(vm.currentLetterName) letters=\(vm.letters.map(\.name)) visible=\(vm.visibleLetterNames) cells=\(vm.gridCells.count) strokes=\(vm.strokeTracker.definition?.strokes.count ?? -1)")
         #expect(haptics.firedEvents.isEmpty,
                 "no haptics in a study session — got \(haptics.firedEvents)")
     }
