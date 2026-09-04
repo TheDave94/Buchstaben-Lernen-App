@@ -4,7 +4,14 @@
 // Bar chart of daily practice minutes over the last 30 days. Source
 // is `DashboardSnapshot.dailyPracticeMinutes`, which zero-fills
 // skipped days so the timeline reads continuously.
-
+//
+// COMPILED OUT OF THE STUDY BUILD. Its sole consumer, ParentDashboardView,
+// is already excluded — this closes the gap between "unreferenced from
+// any study-build file" and "absent from the study binary" (Swift
+// still compiles an unreferenced top-level type into the target). Same
+// reasoning as the six CanvasOverlay surfaces already excluded. The CI
+// identity scan asserts this via SURFACES (ios-build.yml).
+#if !STUDY_BUILD
 import SwiftUI
 import Charts
 
@@ -57,3 +64,4 @@ struct PracticeTrendChart: View {
         }
     }
 }
+#endif

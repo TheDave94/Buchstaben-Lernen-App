@@ -88,6 +88,13 @@ struct SchuleWorldView: View {
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale))
             }
 
+            // LetterWheelPicker itself is compiled out of the study
+            // build (see its header) — `showLetterPicker` can never
+            // actually be true there once `letterPill` stops setting it
+            // (see letterPill's own comment), but this construction
+            // site needs its own guard regardless since the TYPE is
+            // absent from the study binary.
+            #if !STUDY_BUILD
             if showLetterPicker {
                 LetterWheelPicker(
                     letters: vm.visibleLetterNames,
@@ -110,6 +117,7 @@ struct SchuleWorldView: View {
                 )
                 .zIndex(30)
             }
+            #endif
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: vm.toastMessage)
         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.78),
@@ -290,9 +298,11 @@ struct SchuleWorldView: View {
     private var topRow: some View {
         HStack {
             letterPill
+            #if !STUDY_BUILD
             if vm.currentLetterHasVariants {
                 variantToggle
             }
+            #endif
             Spacer()
             // Persistent star badge is reward-class — off in study mode.
             if !vm.studyMode, totalStars > 0 {
@@ -302,6 +312,15 @@ struct SchuleWorldView: View {
         .padding(.horizontal, 16)
     }
 
+    // COMPILED OUT OF THE STUDY BUILD. `currentLetterHasVariants`
+    // already returns false under studyMode ("a child-reachable variant
+    // toggle would swap F's scorer reference geometry mid-study" — its
+    // own doc comment), so this was already runtime-unreachable there;
+    // gating the declaration too closes the gap between "unreachable"
+    // and "absent from the binary", matching the other compiled-out
+    // overlay surfaces. The CI identity scan asserts this via SURFACES
+    // (ios-build.yml).
+    #if !STUDY_BUILD
     /// Toggle between the standard glyph and its alternate form
     /// (currently only Druckschrift k via OpenType `ss02`).
     private var variantToggle: some View {
@@ -326,6 +345,7 @@ struct SchuleWorldView: View {
         .accessibilityLabel("Buchstaben-Variante umschalten")
         .accessibilityValue(vm.showingVariant ? "Variante" : "Standard")
     }
+    #endif
 
     /// Total stars across all letters — same computation as the
     /// world rail's badge so the two displays always agree.
@@ -355,7 +375,18 @@ struct SchuleWorldView: View {
         .accessibilityLabel("\(count) Sterne gesamt")
     }
 
+    // The free-jump letter picker this pill opens is compiled out of
+    // the study build (see LetterWheelPicker.swift's header) — a
+    // direct-jump shortcut is the same class of risk `letterOrdering`'s
+    // studyMode pin exists to prevent, and `nextLetter()`/
+    // `previousLetter()` (the bottom-bar nav arrows) remain as the
+    // sole, sequence-respecting way to move between letters there. The
+    // current-letter TEXT stays visible either way — that's task
+    // context (which letter am I tracing), not the picker affordance —
+    // just non-interactive and without the "tap to change" chevron
+    // under STUDY_BUILD.
     private var letterPill: some View {
+        #if !STUDY_BUILD
         Button {
             withAnimation { showLetterPicker = true }
         } label: {
@@ -383,6 +414,16 @@ struct SchuleWorldView: View {
         .accessibilityLabel("Aktueller Buchstabe \(vm.currentLetterName)")
         .accessibilityHint("Tippen oder gedrückt halten, um einen anderen Buchstaben zu wählen")
         .accessibilityAddTraits(.isButton)
+        #else
+        Text(vm.currentLetterName)
+            .font(.display(FontSize.lg, weight: .bold))
+            .foregroundStyle(Color.ink)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(AppSurface.card, in: Capsule())
+            .overlay(Capsule().stroke(AppSurface.cardEdge, lineWidth: 1))
+            .shadow(color: Color.ink.opacity(0.08), radius: 5, y: 2)
+            .accessibilityLabel("Aktueller Buchstabe \(vm.currentLetterName)")
+        #endif
     }
 
     // MARK: - Observe overlay

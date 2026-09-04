@@ -3,7 +3,19 @@
 //
 // 4-column overlay picker shown when the child long-presses the
 // current-letter pill in SchuleWorldView.
-
+//
+// COMPILED OUT OF THE STUDY BUILD. Child-reachable (its own consumer
+// comment says so directly: "shown when the child long-presses"), not
+// the tracing task — a free-jump navigation shortcut layered on top of
+// it, not the trace itself — not proctor-facing, not a research
+// surface. Letting a child jump directly to any letter in the pinned
+// pool, out of `letterOrdering`'s sequence, is the same class of risk
+// `schriftArt`/`letterOrdering`'s own studyMode pin exists to prevent —
+// `nextLetter()`/`previousLetter()` (the bottom-bar nav arrows) remain
+// as the sole, sequence-respecting way to move between letters in a
+// study build. The CI identity scan asserts this via SURFACES
+// (ios-build.yml).
+#if !STUDY_BUILD
 import SwiftUI
 
 struct LetterWheelPicker: View {
@@ -112,3 +124,4 @@ struct LetterWheelPicker: View {
         }
     }
 }
+#endif

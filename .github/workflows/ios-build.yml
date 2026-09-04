@@ -433,7 +433,11 @@ jobs:
                     RewardCelebrationOverlay
                     RetrievalPromptView
                     RecognitionFeedbackView
-                    freeWriteKPOverlay"
+                    freeWriteKPOverlay
+                    LetterWheelPicker
+                    FreeformWritingView
+                    PracticeTrendChart
+                    variantToggle"
           if [ -n "$STUDY" ] && [ -n "$NORMAL" ]; then
             for sym in $SURFACES; do
               in_study=$(sym_in_bundle "$STUDY" "$sym")
