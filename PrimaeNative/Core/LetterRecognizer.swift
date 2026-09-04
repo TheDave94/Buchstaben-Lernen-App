@@ -239,8 +239,12 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendab
             // an inference from a timed-out test.
             let elapsed = Date().timeIntervalSince(started)
             let resolved = resolveModelURL()?.url.lastPathComponent ?? "none"
+            // Read the inout cache into locals BEFORE the log call: the
+            // os_log interpolation is an escaping autoclosure and may not
+            // capture `cache` (CI run 1634, 2026-09-04).
+            let outcome = cache.model == nil ? "FAILED" : "ok"
             recognizerLogger.info(
-                "GermanLetterRecognizer first load: \(cache.model == nil ? "FAILED" : "ok", privacy: .public) after \(elapsed, format: .fixed(precision: 2)) s (resolved: \(resolved, privacy: .public))")
+                "GermanLetterRecognizer first load: \(outcome, privacy: .public) after \(elapsed, format: .fixed(precision: 2)) s (resolved: \(resolved, privacy: .public))")
             return cache.model
         }
     }
