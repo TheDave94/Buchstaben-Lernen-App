@@ -29,6 +29,174 @@ Implications:
 - **D1 — Arm structure: audio-only-varies.** Every participant gets the SAME pedagogical flow; the three arms differ ONLY in audio (phoneme / arbitrary-sound / silent). NOT a crossed pedagogical×audio design. Simplifies the arm build to swap-enum + branch-audio.
 - **D5 — `direct` phase: CUT (move to three-phase `observe → guided → freeWrite`).** Decided on a six-paper both-sides evidence read (see "Evidence base for D5"). The pilot will run on the three-phase app — David's standard is methodological soundness, so the studied artifact should match the considered design. Execute as a separate, scoped, tested change. Cut blast-radius: ~12 Swift files + 2 docs + tests; sharpest edge is Codable rawValue backward-compat (preserve `case direct = 1` as deprecated-but-decodable, per the existing `ThesisCondition` precedent). NOT pilot-blocking either way (flow held constant across arms regardless of phase count).
 
+- **D8 — Primary accuracy outcome: order-invariant spatial deviation
+  via STROKE CORRESPONDENCE, not shape normalisation and not discrete
+  Fréchet on a concatenated path.** SUPERSEDES an earlier same-day
+  design (symmetric Hausdorff over the whole trace, `da83821`–`b9f9d16`)
+  that was itself a correction of the original primary outcome (raw
+  discrete Fréchet over the whole concatenated trace, which penalised a
+  spatially correct letter traced in an unusual stroke order).
+  Two shape-normalisation approaches were explicitly REJECTED for this
+  outcome: Procrustes analysis (rotation/scale fitting) and whole-trace
+  Hausdorff. Reasoning: scale and rotation are already controlled by
+  this task's design — a fixed reference and a defined canvas — so
+  normalising them buys nothing, and rotation-invariance is actively
+  WRONG here (a letter drawn upside down is an error, not a nuisance
+  parameter to fit away). Whole-trace Hausdorff was order-invariant at
+  the point-cloud level but still discarded stroke IDENTITY entirely —
+  it could not distinguish "every point is near some reference point"
+  from "each of MY strokes corresponds to one of THE REFERENCE's
+  strokes," which is the invariance this study actually needs.
+  The outcome measure is now `StrokeProcessMeasures.spatialDeviation`
+  (`StrokeProcessScorer.analyze`): each traced stroke is matched to its
+  best-fitting reference stroke — order-invariant by construction, since
+  matching decides pairing, not arrival order — then discrete Fréchet
+  distance (Eiter & Mannila 1994) is measured WITHIN each matched pair.
+  The primary outcome is the mean of the matched pairs' distances.
+  Fréchet is NOT retired by this redesign — its earlier "concatenated
+  whole path" application is; the algorithm itself is now the
+  within-pair engine.
+  ONE computation now produces the primary AND the process secondaries:
+  the recovered pairing IS `strokeOrder` (comma-joined matched-reference-
+  stroke indices, e.g. "1,0" for a reversed-order two-stroke letter,
+  with "-" for an unmatched extra stroke); a stroke-count mismatch
+  (more or fewer traced strokes than the reference) IS `strokeCount`
+  compared against the reference's own per-letter count; and per-pair
+  orientation choice (each candidate pair tried both directions, cheaper
+  wins) IS `reversedStrokeCount` — direction handled IN the pairing
+  decision, not normalised away, because a reversed stroke is a process
+  finding worth recording, not noise to erase from the distance.
+  `PhaseSessionRecord.frechetDistance` (the RETIRED whole-path secondary
+  from the previous design) stays declared and Codable for backward
+  compat but is never populated going forward — the sequence signal it
+  used to approximate is `strokeOrder`/`reversedStrokeCount` directly
+  now, which is exact rather than an inflated-distance proxy.
+  LITERATURE: "stroke correspondence search" is the established term in
+  the handwriting-RECOGNITION literature (not morphometrics, which
+  doesn't treat this problem) — Kaneko et al.'s stroke-order-free/
+  stroke-number-free method (USPTO 5,796,867), surveyed in "Comparative
+  performance analysis of stroke correspondence search methods for
+  stroke-order free online multi-stroke character recognition" (Front.
+  Comput. Sci., Springer), which names five representative methods
+  (cube search, bipartite weighted matching, individual correspondence
+  decision, stable marriage, deviation-expansion). Bipartite weighted
+  matching is the Hungarian/Kuhn-Munkres assignment algorithm; unequal
+  stroke counts are the linear sum assignment problem with error-
+  correction (LSAPE).
+  SIMPLIFIED deliberately for this domain: exhaustive search over the
+  small assignment space (bundled Latin letters have at most a handful
+  of strokes) replaces the Hungarian algorithm — same optimum, no new
+  dependency, runs once per phase completion, not per frame. Matching is
+  FORCED to maximum cardinality (exactly `min(traced, reference)` pairs)
+  rather than using LSAPE's tunable null-match cost — this domain has no
+  calibration evidence for such a threshold, and the count difference
+  alone already reports extra/missing strokes.
+  Implemented: `14e20ff` on `feat/order-invariant-primary-outcome`,
+  full rationale in `StrokeProcessMeasures.swift`'s header.
+
+- **D9 — Pre-task sound-arm demonstration, matched across all three
+  arms.** Both sound arms (`.phoneme`, `.spatial`) now get a brief,
+  scripted demonstration immediately before the tracing task begins for
+  each letter — not audio-coupled to the child's own trace. The
+  `.phoneme` arm gets a sound-letter exposure: the letter's own
+  phoneme, played once. The `.spatial` arm gets an axis demonstration:
+  a scripted pitch/pan sweep across the FULL canvas range (independent
+  of the specific letter's own stroke shape, so every participant hears
+  the same full-range sweep regardless of which letter loads first).
+  Both run for the same fixed 2.0 s window
+  (`PreTaskDemonstration.duration`) so the two are matched in duration
+  even though a phoneme clip's natural length differs from a scripted
+  sweep's.
+  The `.silent` arm gets NO audio added — but NOT nothing: the
+  ghost-letter animation (`LetterAnimationGuide` /
+  `AnimationGuideController`) that already precedes tracing in every
+  arm, unchanged, IS its matched non-auditory equivalent. Every arm
+  already got the same visual demonstration, of the same duration,
+  before this change; the sound arms now layer their own scripted sound
+  onto that same window, and silent doesn't — the same "only audio
+  varies" shape as D1, rather than inventing a new UI element and then
+  having to separately argue it's matched.
+  THE REASON FOR THE SYMMETRY (per the framing this decision arrived
+  with): a demonstration can INSTALL a crossmodal mapping rather than
+  reveal one that was already there. If only one arm's tracing-task
+  audio had been preceded by a demonstration, that arm's later coupling
+  wouldn't just be "the arm's sound" — it would be "the arm's sound,
+  already taught." That would confound the arm contrast with having
+  been taught, not with what the sound itself is. Symmetric
+  demonstration removes that confound the same way D1's "only audio
+  varies, pedagogical flow is identical" removes the analogous one for
+  the tracing task itself.
+  NOT trace-coupled: driven by a fixed scripted timeline
+  (`PreTaskDemonstration.axisSweep`, or a single phoneme play), never
+  by `TouchDispatcher`'s live-touch coupling — a distinct mechanism
+  from the §2.6-governed tracing-task coupling. Cancelled the instant a
+  real touch begins (`TouchDispatcher.beginTouch` →
+  `TracingViewModel.cancelPreTaskDemonstration()`), so a scripted demo
+  point is never still writing to `setAdaptivePlayback`/
+  `setSpatialPitch` once the child's own trace starts driving them.
+  Pilot-only: gated on `studyMode`, the same gate H2.1 uses to force
+  phoneme content — casual, non-study sessions are unaffected.
+  No new persisted field: this is real-time playback only, nothing is
+  recorded to `PhaseSessionRecord` / the CSV export for it.
+  Implemented: `PreTaskDemonstration.swift`,
+  `TracingViewModel.armPreTaskDemonstration`, wired at both of
+  `load(letter:)`'s fresh-letter entry points (`.observe` and
+  direct-to-`.guided`); deliberately NOT wired at the H6 post-test
+  freeWrite entry (`startPostTest`) — reaching that letter at all is a
+  cold, untrained probe, and a demonstration would train the very thing
+  the probe depends on not having happened.
+
+- **D10 — Stroke-correspondence matching-policy parameters: DEFERRED
+  pending pilot data.** D8's exhaustive-search assignment forces
+  maximum cardinality (exactly `min(traced, reference)` pairs always
+  matched) rather than LSAPE's tunable null-match cost, and aggregates
+  matched-pair distances by MEAN rather than MAX. Both are genuine
+  policy choices with real alternatives, not settled facts — and both
+  were made under time pressure, before any child had traced anything
+  on the redesigned instrument.
+  DECISION: do not tune these further now. The right calibration
+  evidence — real traced strokes, real extra/missing-stroke patterns,
+  real per-stroke distance distributions — does not exist yet and
+  guessing a null-cost threshold or an aggregation function ahead of it
+  would be exactly the kind of pre-data guess the pilot exists to
+  replace. What WOULD settle it: pilot (or even pre-pilot calibration-
+  round) freeWrite traces, scored under both the current forced-max-
+  cardinality/mean policy and at least one alternative (e.g. a null-cost
+  LSAPE variant, or max-aggregation), compared for whether they produce
+  materially different spatialDeviation rankings or flag different
+  strokes as extra/missing. If they agree in practice, the choice
+  doesn't matter and the simpler policy (current) stays. If they
+  diverge, that divergence — not a guess — is what should decide.
+  Not blocking: the current, simpler policy is a defensible default
+  (documented in `StrokeProcessMeasures.swift`'s header) and ships as
+  the pilot's primary outcome as-is.
+
+- **D11 — Confidence-calibrator history boost was fed the wrong
+  instrument; fixed.** `ConfidenceCalibrator`'s practised-letter boost
+  requires historical geometric form accuracy but was silently fed CoreML
+  recognition CONFIDENCE (`LetterProgress.recognitionAccuracy`) at both
+  call sites — no channel carrying real form-accuracy history existed
+  anywhere in the codebase before this fix. Same class of defect as the
+  resource-bundle bug that kept the CoreML model from loading (#13): the
+  study's own outcome computed by the wrong instrument, silently, because
+  nothing failed loudly. Consequence: a letter with >= 5 recognition
+  samples averaging >= 80% CONFIDENCE (regardless of actual handwriting
+  quality) triggered a 10% confidence boost that flows directly into
+  `PhaseSessionRecord.recognitionConfidence`/`recognitionConfidenceRaw` —
+  exported study outcome columns. Not deferrable — fixed immediately,
+  not held for sign-off, on the same footing as any other correctness
+  bug: `LetterProgress.formAccuracyHistory` (new field, populated from
+  the freeWrite phase's own `WritingAssessment.formAccuracy`) now feeds
+  the boost instead. Existing-records impact: this sandboxed seat has no
+  device/simulator data to inspect directly; the app is pre-pilot (no
+  participant enrolled yet), and the bug has been present since the
+  CoreML recognition feature's earliest tracked commit
+  (`e9c08f1`, 2026-04-29). `scripts/audit_form_score_confound.py` lets
+  anyone with a real `progress.json` (e.g. pulled from a dev/test
+  device) compute the actual affected letters and confidence inflation,
+  rather than relying on this analytical bound.
+  Implemented: `dfae2de` on `feat/order-invariant-primary-outcome`.
+
 ---
 
 ## Open design decisions (David's, no external gate)
