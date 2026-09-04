@@ -1,11 +1,13 @@
 import Foundation
 
-/// What a cell is "for": currently only `.primary` — `.silent` is reserved
-/// for future decorative letters (e.g. a word's article letter shown but
-/// not traced). V1 only ever emits `.primary` items.
+/// What a cell is "for": currently only `.primary`. A reserved `.silent`
+/// case (decorative, untraced letters in a future word mode) was removed
+/// on 2026-09-04: it was never constructed, and its name collided with
+/// the study's silent AUDIO ARM (`PilotAudioCondition.silent`), which is
+/// the only thing that decides whether a session is silent. Reintroduce
+/// under a name that cannot be read as an audio state (e.g. `.decorative`).
 enum SlotRole: String, Equatable {
     case primary
-    case silent
 }
 
 /// How audio fires across a multi-cell sequence. V1 plays the current

@@ -14,7 +14,16 @@ struct SchuleWorldView: View {
     @State private var showLetterPicker = false
 
     var body: some View {
-        if vm.visibleLetterNames.isEmpty {
+        if let failure = vm.studyPreconditionFailure {
+            // Proctor-facing hard stop (ruling C3-6): the canvas is not
+            // rendered at all, so a phoneme-arm session without its
+            // recordings cannot be run and cannot be missed.
+            ContentUnavailableView(
+                "Studie kann nicht starten",
+                systemImage: "exclamationmark.octagon.fill",
+                description: Text(failure)
+            )
+        } else if vm.visibleLetterNames.isEmpty {
             ContentUnavailableView(
                 "Buchstaben nicht geladen",
                 systemImage: "exclamationmark.triangle",

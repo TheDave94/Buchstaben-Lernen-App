@@ -68,8 +68,9 @@ public enum StudyBuild {
     /// ON in a study build (B2): in a binary where the non-study
     /// surfaces do not exist there is no reason for it to be off, and
     /// a proctor who forgets the toggle would otherwise run an
-    /// unconstrained session that looks fine. The toggle survives for
-    /// device prep, not for switching the study off.
+    /// unconstrained session that looks fine. Since 2026-09-04 (ruling
+    /// Q1) a study build does not merely DEFAULT to study mode — it
+    /// cannot leave it: see `resolveStudyMode`.
     public static var studyModeDefault: Bool { isActive }
 
     /// UserDefaults key holding the device's stored `studyMode`. One
@@ -77,8 +78,18 @@ public enum StudyBuild {
     /// cannot drift apart on the string.
     public static let studyModeDefaultsKey = "de.flamingistan.primae.studyMode"
 
-    /// Resolves the effective `studyMode` for a device: a stored value
-    /// wins, otherwise the build default applies.
+    /// Resolves the effective `studyMode` for a device.
+    ///
+    /// STUDY BUILD: always `true`, whatever is stored (supervisor ruling
+    /// Q1, 2026-09-04). The point of compiling the non-study surfaces out
+    /// is that the study binary cannot be configured into a non-study
+    /// state — the binary either is the instrument or it is not. A
+    /// stored OFF (from an earlier normal build on the same device, or a
+    /// proctor's tap) is ignored, and the toggle that wrote it is
+    /// compiled out of the research dashboard.
+    ///
+    /// NORMAL BUILD: a stored value wins, otherwise the build default
+    /// (OFF) applies — device prep for a casual install is unchanged.
     ///
     /// Split out of `TracingDependencies`' default argument so it can
     /// be tested against a scratch `UserDefaults` — building a real
@@ -89,8 +100,12 @@ public enum StudyBuild {
         in defaults: UserDefaults = .standard,
         key: String = StudyBuild.studyModeDefaultsKey
     ) -> Bool {
+        #if STUDY_BUILD
+        return true
+        #else
         guard defaults.object(forKey: key) != nil else { return studyModeDefault }
         return defaults.bool(forKey: key)
+        #endif
     }
 }
 

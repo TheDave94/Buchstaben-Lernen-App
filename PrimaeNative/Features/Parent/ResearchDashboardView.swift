@@ -23,16 +23,24 @@ struct ResearchDashboardView: View {
     /// Proctor-facing studyMode as STORED, which is not necessarily what
     /// this session is running. See `studyDeviceSection`.
     @State private var studyModePending = StudyBuild.resolveStudyMode()
+    /// "Teilnehmer wiederherstellen" (delayed retention test): the UUID
+    /// typed from the first session's export header, and the inline
+    /// error for a malformed one.
+    @State private var restoreIDText = ""
+    @State private var restoreError: String?
     @State private var showExportError = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 participantHeader
-                // Spatial-arm validity guard: stereo pan is void on the
-                // iPad speakers, so a speaker-run spatial session is
-                // invalid data. Researcher-facing only (parent-gated).
-                if vm.audioCondition == .spatial && !headphonesConnected {
+                // Sound-arm validity guard: stereo pan is void on the iPad
+                // speakers, and BOTH sound arms drive pan (thesis Ch.6:
+                // "the pan axis of both sound arms … otherwise degraded").
+                // Until 2026-09-04 only the spatial arm was warned; a
+                // speaker-run phoneme session was silently accepted.
+                // Researcher-facing only (parent-gated).
+                if vm.audioCondition != .silent && !headphonesConnected {
                     headphoneWarning
                 }
                 schreibmotorikSection
@@ -147,6 +155,25 @@ struct ResearchDashboardView: View {
             // correct from the toggle. The three sibling research
             // controls in SettingsView already say "wirksam beim
             // nächsten App-Start"; this one now behaves that way too.
+            #if STUDY_BUILD
+            // Ruling Q1 (2026-09-04): the study binary IS the instrument
+            // and cannot be configured out of it — no toggle here, and
+            // `StudyBuild.resolveStudyMode` ignores any stored value.
+            HStack(spacing: 10) {
+                Image(systemName: "lock.fill").foregroundStyle(Color.inkSoft)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Studienmodus: An (Studien-Build)")
+                        .font(.body(FontSize.md, weight: .semibold))
+                    Text("In diesem Build fest eingeschaltet und nicht abschaltbar — das Gerät spurt exakt das gebündelte Stimulus-Set nach, sämtliches Nicht-Arm-Feedback ist stumm.")
+                        .font(.caption)
+                        .foregroundStyle(Color.inkSoft)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 8))
+            #else
             Toggle(isOn: Binding(
                 get: { studyModePending },
                 set: {
@@ -176,6 +203,7 @@ struct ResearchDashboardView: View {
             .padding(.vertical, 8)
             .background(Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 8))
+            #endif
 
             Divider().padding(.vertical, 2)
             Text("Neuen Teilnehmer beginnen")
@@ -202,6 +230,37 @@ struct ResearchDashboardView: View {
                     .padding(.vertical, 4)
             }
             .buttonStyle(.borderedProminent)
+
+            Divider().padding(.vertical, 2)
+            Text("Teilnehmer wiederherstellen (Nachtest)")
+                .font(.body(FontSize.md, weight: .semibold))
+            Text("Für den verzögerten Nachtest: die Teilnehmer-ID aus dem Export-Header der ersten Sitzung (`# participantId=…`) eingeben. Studienarm und geübte Buchstaben leiten sich wieder aus der ID ab; ein damals gesetzter Override muss aus dem Export erneut gesetzt werden. Wirksam nach Neustart.")
+                .font(.caption)
+                .foregroundStyle(Color.inkSoft)
+            TextField("Teilnehmer-ID (UUID)", text: $restoreIDText)
+                .textFieldStyle(.roundedBorder)
+                .font(.body(FontSize.sm))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.characters)
+            if let restoreError {
+                Label(restoreError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            Button {
+                if ParticipantStore.restoreParticipant(uuidString: restoreIDText) != nil {
+                    restoreError = nil
+                    showRelaunchAlert = true
+                } else {
+                    restoreError = "Keine gültige UUID — die ID steht in der ersten Zeile des CSV/JSON-Exports der ersten Sitzung."
+                }
+            } label: {
+                Label("Teilnehmer wiederherstellen", systemImage: "person.crop.circle.badge.clock")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.bordered)
+            .disabled(restoreIDText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Divider().padding(.vertical, 2)
             Button(role: .destructive) {
@@ -430,17 +489,38 @@ struct ResearchDashboardView: View {
     /// parent area so the child sees the tracing canvas directly.
     private var postTestSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Three cold probes (2026-09-04): pretest and delayed test on
+            // all five study letters, post-test on the untrained pair.
+            // Each opens the letter directly in the freeWrite phase —
+            // no demonstration, no scaffolding, audio off, letter not
+            // shown — and tags the row with its kind (`probe` column).
+            sectionHeader(title: "Vortest (alle fünf Buchstaben, vor dem Training)",
+                          subtitle: "Einmaliger, kalter Schreibversuch je Buchstabe — Kovariate der Analyse")
+            probeButtons(kind: .pretest, letters: TrainedLetterSubset.studyLetters)
+
             sectionHeader(title: "Post-Test (ungeübte Buchstaben)",
                           subtitle: "Einmaliger, ungeübter Schreibversuch — kein Vorführen, kein Nachspuren")
-            Text("Diese \(vm.trainedSubset.untrainedLetters.count) Buchstaben hat das Kind NICHT geübt. Ein Antippen startet direkt einen einzigen freien Schreibversuch — Anschauen- und Nachspuren-Phase werden übersprungen, da sie selbst bereits Übung wären.")
+            Text("Diese \(vm.trainedSubset.untrainedLetters.count) Buchstaben hat das Kind NICHT geübt. Ein Antippen startet direkt einen einzigen freien Schreibversuch — Anschauen- und Nachspuren-Phase werden übersprungen, da sie selbst bereits Übung wären. Der Post-Test der drei geübten Buchstaben ist die Selbst-schreiben-Phase ihres letzten Durchgangs.")
                 .font(.caption)
                 .foregroundStyle(Color.inkSoft)
-            ForEach(Array(vm.trainedSubset.untrainedLetters).sorted(), id: \.self) { letter in
+            probeButtons(kind: .posttest, letters: Array(vm.trainedSubset.untrainedLetters).sorted())
+
+            sectionHeader(title: "Nachtest (verzögert, alle fünf Buchstaben)",
+                          subtitle: "Wochen später, auf dem wiederhergestellten Teilnehmer (siehe „Teilnehmer wiederherstellen“)")
+            probeButtons(kind: .delayed, letters: TrainedLetterSubset.studyLetters)
+        }
+    }
+
+    /// One button per letter for a cold probe of `kind`; each opens the
+    /// letter directly in freeWrite and leaves the parent area.
+    private func probeButtons(kind: StudyProbe, letters: [String]) -> some View {
+        VStack(spacing: 8) {
+            ForEach(letters, id: \.self) { letter in
                 Button {
-                    vm.startPostTest(letter: letter)
+                    vm.startColdProbe(letter: letter, kind: kind)
                     dismiss()
                 } label: {
-                    Label("Post-Test starten: \(letter)", systemImage: "pencil.and.outline")
+                    Label("\(kind.displayName) starten: \(letter)", systemImage: "pencil.and.outline")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                 }

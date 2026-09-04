@@ -35,6 +35,15 @@ struct RawTrace: Codable, Equatable, Identifiable {
     /// Canvas size at capture — lets `points` be re-normalised to 0–1
     /// offline, losslessly recovering the normalised path.
     let canvasSize: CGSize
+    /// The reference the trial was scored against, exactly as the scorer
+    /// saw it: the bundle's bbox-relative strokes mapped through the
+    /// rendered glyph rect into the SAME canvas-normalised space
+    /// `points / canvasSize` yields (2026-09-04). Without it a trace could
+    /// only be re-scored by re-running the app's CoreText glyph layout for
+    /// that canvas size — the offline re-analysis the thesis promises
+    /// (Ch.3, Ch.6) was not possible from the export alone. Optional so
+    /// traces written before this field decode unchanged.
+    var referenceStrokes: LetterStrokes? = nil
 }
 
 @MainActor
@@ -123,9 +132,24 @@ final class JSONRawTraceStore: RawTraceStoring {
     }
 
     private static func load(from url: URL) -> [RawTrace]? {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([RawTrace].self, from: data)
-        else { return nil }
-        return decoded
+        // No file yet is the ordinary first-launch case and stays quiet.
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        do {
+            // Element-wise: one malformed trace must not cost the rest
+            // (see LossyArray). A whole-file failure is quarantined.
+            let lossy = try JSONDecoder().decode(LossyArray<RawTrace>.self, from: data)
+            if lossy.droppedCount > 0 {
+                storePersistenceLogger.error(
+                    "RawTraceStore: dropped \(lossy.droppedCount) undecodable trace(s); \(lossy.elements.count) kept. Copy \(url.path, privacy: .public) off the device before it is rewritten.")
+            }
+            return lossy.elements
+        } catch {
+            // See ProgressStore.load: these are the re-analysis raw
+            // traces, and an undecodable file used to vanish silently.
+            storePersistenceLogger.error(
+                "RawTraceStore at \(url.path, privacy: .public) exists but failed to decode (\(error.localizedDescription, privacy: .public)) — starting EMPTY.")
+            StoreFileQuarantine.quarantine(url)
+            return nil
+        }
     }
 }

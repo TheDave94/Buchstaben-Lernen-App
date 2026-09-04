@@ -55,6 +55,9 @@ final class TouchDispatcher {
 
     func beginTouch(at p: CGPoint, t: CFTimeInterval) {
         guard let vm else { return }
+        // A study session that cannot deliver its stimulus does not
+        // trace at all — see TracingViewModel.studyPreconditionFailure.
+        guard vm.studyPreconditionFailure == nil       else { return }
         guard vm.phaseController.isTouchEnabled       else { return }
         guard vm.phaseController.currentPhase != .direct else { return }  // handled by DirectPhaseDotsOverlay
         guard !isSingleTouchInteractionActive         else { return }
@@ -297,6 +300,19 @@ final class TouchDispatcher {
             vm.playback.request(.idle, immediate: true)
             return
         }
+        // Sound-off production (locked pilot design: "sound-off
+        // post-test", DECISIONS.md header; thesis Ch.2 §2.5 / Ch.6). In
+        // study mode the freeWrite phase — the study's outcome, and the
+        // H6 post-test route, which enters freeWrite directly — must never
+        // hear the arm's audio. `feedbackIntensity` (0.0 in freeWrite)
+        // fades haptics + ticks only; this coupling was NOT gated, so a
+        // sound arm kept playing during free production (thesis-side
+        // audit, 2026-09-04). Study-mode only: outside the study the
+        // phoneme stays the glyph's auditory anchor in every phase.
+        if vm.studyMode, vm.phaseController.currentPhase == .freeWrite {
+            vm.playback.request(.idle, immediate: true)
+            return
+        }
         let speed       = Self.mapVelocityToSpeed(smoothedVelocity)
         let azimuthBias = vm.pencilPressure != nil ? cos(vm.pencilAzimuth) * 0.2 : 0
         // Pan follows absolute x across the whole canvas (not the
@@ -328,6 +344,21 @@ final class TouchDispatcher {
     /// against vacuous completion on empty stroke definitions.
     private func handleStrokeCompletionIfReached() {
         guard let vm else { return }
+        // Study freeWrite ends ONLY through the pen-lift quiet window
+        // (`scheduleFreeWriteAutoAdvance`) — the contract this file's
+        // own header states ("FreeWrite has no canonical-stroke
+        // completion path") and APP_DOCUMENTATION §6.4.1 / Appendix A
+        // document. The tracker keeps running in freeWrite (it feeds
+        // `checkpointCoverage`), so without this gate an accurate,
+        // canonical-order trace ended the trial the instant its last
+        // checkpoint was hit — mid-gesture — while the recorder kept
+        // appending until the recognizer returned: the SCORED trace and
+        // the PERSISTED raw trace diverged, and the best writers' trials
+        // were truncated (missing stroke tails, shorter
+        // `phaseDurationSeconds`) in a way correlated with the outcome
+        // itself. Study-mode only: the multi-cell word path outside the
+        // study relies on this cell advance (2026-09-04).
+        if vm.studyMode, vm.phaseController.currentPhase == .freeWrite { return }
         let hasStrokes = (vm.strokeTracker.definition?.strokes.isEmpty == false)
         guard hasStrokes, vm.strokeTracker.isComplete else { return }
         // Snapshot BEFORE advancing — after the grid moves the cursor,

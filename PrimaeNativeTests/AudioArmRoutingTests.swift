@@ -20,8 +20,11 @@ fileprivate final class RecordingAudio: AudioControlling {
     /// Every cents value the spatial pitch drive emitted, in order.
     private(set) var spatialPitches: [Float] = []
     private(set) var isPlaying = false
+    /// `play()` arrivals — `isPlaying` alone can't tell "never played"
+    /// from "played then stopped".
+    private(set) var playCount = 0
     func loadAudioFile(named: String, autoplay: Bool) { loadedFiles.append(named) }
-    func play()    { isPlaying = true }
+    func play()    { playCount += 1; isPlaying = true }
     func stop()    { isPlaying = false }
     func restart() {}
     func suspendForLifecycle()        { isPlaying = false }
@@ -62,13 +65,15 @@ fileprivate final class RecordingAudio: AudioControlling {
 
     private func makeVM(arm: PilotAudioCondition,
                         phonemeToggle: Bool,
-                        studyMode: Bool = false) -> TracingViewModel {
+                        studyMode: Bool = false,
+                        audio: AudioControlling? = nil) -> TracingViewModel {
         var deps = TracingDependencies.stub
         deps.audioCondition = arm
         deps.enablePhonemeMode = phonemeToggle
         // Seeded via deps so the VM's didSet (UserDefaults write) never
         // fires — keeps the test from polluting global state.
         deps.studyMode = studyMode
+        if let audio { deps.audio = audio }
         return TracingViewModel(deps)
     }
 
@@ -119,13 +124,44 @@ fileprivate final class RecordingAudio: AudioControlling {
         }
     }
 
-    @Test("studyMode ON + phoneme arm + NO phoneme files → name audio (H5/P6 gap)")
-    func studyMode_phonemelessLetter_degradesToName() {
-        // The one unavoidable residual: a letter with no phoneme
-        // recording can't play one. It degrades to name audio (logged in
-        // production, not silent).
+    @Test("studyMode ON + phoneme arm + NO phoneme files → NO audio at all (fail closed, never name/word audio)")
+    func studyMode_phonemelessLetter_failsClosed() {
+        // Ruling C3-6 (2026-09-04): a letter with no phoneme recording
+        // must not degrade to the name/word population — for M the first
+        // name file is the word "Meer". Nothing is loaded, and the
+        // session is refused (next test).
         let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: true)
-        #expect(vm.activeAudioFiles(for: assetNoPhoneme()) == ["Q_name.mp3"])
+        #expect(vm.activeAudioFiles(for: assetNoPhoneme()).isEmpty)
+    }
+
+    @Test("studyMode ON + phoneme arm: a study letter without recordings refuses the whole session")
+    func studyMode_phonemelessStudyLetter_refusesSession() {
+        let audio = RecordingAudio()
+        let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: true, audio: audio)
+        // Fixture letter A carries a phoneme take → no failure.
+        #expect(vm.studyPreconditionFailure == nil, "the fixture's own phoneme take must satisfy the precondition")
+        // Swap in a phoneme-less A (a study letter) → hard stop.
+        let base = vm.letters[0]
+        vm.letters = [LetterAsset(id: base.id, name: base.name, audioFiles: base.audioFiles,
+                                  strokes: base.strokes, phonemeAudioFiles: [])]
+        #expect(vm.studyPreconditionFailure?.contains("A") == true,
+                "a phoneme-arm study session without A's recording must be refused with the letter named")
+        vm.phaseController.resume(at: .guided)
+        let loadsBefore = audio.loadedFiles.count
+        driveTouch(vm)
+        #expect(vm.debugIsSingleTouchInteractionActive == false, "no trace may start while the precondition fails")
+        #expect(audio.loadedFiles.count == loadsBefore && audio.setAdaptiveCount == 0,
+                "a refused session must not touch the engine")
+    }
+
+    @Test("the precondition is phoneme-arm-and-study-mode specific",
+          arguments: [(PilotAudioCondition.silent, true), (.spatial, true), (.phoneme, false)])
+    func precondition_scope(arm: PilotAudioCondition, studyMode: Bool) {
+        let vm = makeVM(arm: arm, phonemeToggle: true, studyMode: studyMode)
+        let base = vm.letters[0]
+        vm.letters = [LetterAsset(id: base.id, name: base.name, audioFiles: base.audioFiles,
+                                  strokes: base.strokes, phonemeAudioFiles: [])]
+        #expect(vm.studyPreconditionFailure == nil, "\(arm) / studyMode=\(studyMode) must not be blocked by missing phonemes")
     }
 
     @Test("studyMode OFF + phoneme arm → existing toggle behavior preserved")
@@ -157,6 +193,10 @@ fileprivate final class RecordingAudio: AudioControlling {
                 "silent arm must load no audio file — found \(audio.loadedFiles)")
         #expect(audio.setAdaptiveCount == 0,
                 "silent arm must fire no setAdaptivePlayback — coupling gate breached (\(audio.setAdaptiveCount))")
+        // Since 2026-09-04 (C3-2) the injected engine is not merely
+        // unused for the silent arm — it is replaced by a no-op conformer
+        // at the seam, so no path can reach a real engine at all.
+        #expect(vm.audio is SilentAudio)
     }
 
     /// The coupling must remain intact for a sound arm — the silent gate
@@ -224,6 +264,81 @@ fileprivate final class RecordingAudio: AudioControlling {
     func pitchMapping_clamps() {
         #expect(SpatialSonification.pitchCents(forNormalizedY: -0.5) ==  1200)
         #expect(SpatialSonification.pitchCents(forNormalizedY:  1.5) == -1200)
+    }
+
+    // MARK: - Sound-off production (study mode, freeWrite / post-test)
+
+    @Test("study mode, freeWrite: sound arms drive no coupling and never reach play()",
+          arguments: [PilotAudioCondition.phoneme, .spatial])
+    func studyFreeWrite_isSoundOff(arm: PilotAudioCondition) async {
+        let audio = RecordingAudio()
+        let vm = makeVM(arm: arm, phonemeToggle: true, studyMode: true, audio: audio)
+        vm.phaseController.resume(at: .freeWrite)
+        driveTouch(vm)
+        // Drain the playback debounce so a deferred `.active` — the path
+        // the guided positive control below proves is live for the same
+        // drive — has had its chance to fire before asserting.
+        await vm.awaitPlaybackDebounce()
+        #expect(audio.setAdaptiveCount == 0)
+        #expect(audio.spatialPitches.isEmpty)
+        #expect(audio.playCount == 0, "the arm's sound must never start during study free production")
+        #expect(audio.isPlaying == false)
+    }
+
+    @Test("study mode, guided: the same drive DOES couple and DOES play (gate is phase-specific)",
+          arguments: [PilotAudioCondition.phoneme, .spatial])
+    func studyGuided_stillCouples(arm: PilotAudioCondition) async {
+        let audio = RecordingAudio()
+        let vm = makeVM(arm: arm, phonemeToggle: true, studyMode: true, audio: audio)
+        vm.phaseController.resume(at: .guided)
+        driveTouch(vm)
+        await vm.awaitPlaybackDebounce()
+        #expect(audio.setAdaptiveCount > 0)
+        // Positive control for the freeWrite test above: its
+        // `playCount == 0` means nothing unless this identical drive
+        // reaches `play()` when the gate is not in force.
+        #expect(audio.playCount > 0, "the guided drive must reach play() — otherwise the freeWrite sound-off assertion is vacuous")
+    }
+
+    @Test("non-study freeWrite keeps the phonemic anchor (gate is study-mode only)")
+    func nonStudyFreeWrite_stillCouples() {
+        let audio = RecordingAudio()
+        let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: false, audio: audio)
+        vm.phaseController.resume(at: .freeWrite)
+        driveTouch(vm)
+        #expect(audio.setAdaptiveCount > 0)
+    }
+
+    // The three non-touch entries that reach `loadAudioFile(autoplay:
+    // true)` — Pencil squeeze / VoiceOver action (`replayAudio`) and the
+    // two-finger canvas swipe (`next`/`previousAudioVariant`) — bypass
+    // the coupling gate entirely and would loop the arm's sound in any
+    // phase, freeWrite and post-test included. Under studyMode they must
+    // be inert in every phase; the arm's sound reaches the child only via
+    // the coupling and the D9 demonstration.
+    @Test("study mode: replay and take-cycling are inert in every phase",
+          arguments: [LearningPhase.observe, .guided, .freeWrite])
+    func study_replayAndVariantCycling_areInert(phase: LearningPhase) {
+        let audio = RecordingAudio()
+        let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: true, audio: audio)
+        vm.phaseController.resume(at: phase)
+        let loadsBefore = audio.loadedFiles.count
+        let indexBefore = vm.audioIndex
+        vm.replayAudio()
+        vm.nextAudioVariant()
+        vm.previousAudioVariant()
+        #expect(audio.loadedFiles.count == loadsBefore,
+                "study sessions must add no sound exposure outside the trace coupling and the D9 demo (phase \(phase))")
+        #expect(vm.audioIndex == indexBefore, "the take that plays must stay deterministic in a study session")
+    }
+
+    @Test("non-study: replay still loads the arm's file (gate is study-mode only)")
+    func nonStudy_replayStillLoads() {
+        let audio = RecordingAudio()
+        let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: false, audio: audio)
+        let loadsBefore = audio.loadedFiles.count
+        vm.replayAudio()
+        #expect(audio.loadedFiles.count == loadsBefore + 1)
     }
 
     /// Mirrors EndToEndTracingSessionTests.simulateFastTouch: a fast

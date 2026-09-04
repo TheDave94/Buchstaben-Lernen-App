@@ -39,7 +39,12 @@ struct PrimaeApp: App {
         WindowGroup {
             PrimaeNative.MainAppView()
                 .environment(vm)
-                .preferredColorScheme(PrimaeAppearance.resolve(appearance))
+                // Study sessions render the stimulus in light appearance
+                // regardless of the parent-area "Erscheinungsbild" pick:
+                // dark mode changes the letter's and the ink's colours,
+                // and the study configuration is supposed to pin every
+                // setting that could vary between children (2026-09-04).
+                .preferredColorScheme(vm.studyMode ? .light : PrimaeAppearance.resolve(appearance))
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {

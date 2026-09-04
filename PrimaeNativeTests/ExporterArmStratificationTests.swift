@@ -359,6 +359,57 @@ import Foundation
                 "pre-enrolment record inflated letterByAudioArm's sample count: \(byAudioRow)")
     }
 
+    // MARK: - 9. Pre-enrolment rows never reach the HEADLINE aggregates either
+    //
+    // D11#1's second half (2026-09-04): `phaseCompletionRate_*`,
+    // `averageFreeWriteScore`, `schedulerEffectivenessProxy` and the four
+    // Schreibmotorik averages are computed properties of the snapshot and
+    // ran over every record on disk — the filter never reached them, even
+    // after the ticket was marked closed.
+
+    @Test("a pre-enrolment record does not reach phaseCompletionRate, averageFreeWriteScore or the Schreibmotorik averages")
+    func preEnrolmentRowsExcludedFromHeadlineAggregates() throws {
+        let enrolledAt = Date(timeIntervalSince1970: 1_000_000)
+        let enrolled = PhaseSessionRecord(
+            letter: "B", phase: "freeWrite", completed: true,
+            score: 1.0, schedulerPriority: 0.0,
+            condition: .threePhase, audioCondition: .phoneme,
+            recordedAt: enrolledAt.addingTimeInterval(60),
+            assessment: WritingAssessment(formAccuracy: 1, tempoConsistency: 1,
+                                          pressureControl: 1, rhythmScore: 1))
+        // A pre-enrolment freeWrite row at 0.0 on every scale, and a
+        // pre-enrolment observe row — the only observe row in the
+        // snapshot, so its completion-rate key must not appear at all.
+        let strayFreeWrite = PhaseSessionRecord(
+            letter: "B", phase: "freeWrite", completed: true,
+            score: 0.0, schedulerPriority: 0.0,
+            condition: .threePhase, audioCondition: .phoneme,
+            recordedAt: enrolledAt.addingTimeInterval(-1800),
+            assessment: WritingAssessment(formAccuracy: 0, tempoConsistency: 0,
+                                          pressureControl: 0, rhythmScore: 0))
+        let strayObserve = PhaseSessionRecord(
+            letter: "B", phase: "observe", completed: true,
+            score: 1.0, schedulerPriority: 0.0,
+            condition: .threePhase, audioCondition: .phoneme,
+            recordedAt: enrolledAt.addingTimeInterval(-3600))
+        let s = DashboardSnapshot(phaseSessionRecords: [strayObserve, strayFreeWrite, enrolled])
+
+        let data = ParentDashboardExporter.csvData(
+            from: s, participantId: pid, progress: [:], enrolledAt: enrolledAt)
+        let lines = String(data: data, encoding: .utf8)!
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let m = metrics(lines)
+
+        #expect(m["phaseCompletionRate_observe"] == nil,
+                "a phase completed only by pre-enrolment rows must not appear: \(m["phaseCompletionRate_observe"] ?? "nil")")
+        #expect(m["averageFreeWriteScore"].flatMap(Double.init) == 1.0,
+                "pre-enrolment freeWrite score 0.0 leaked into the headline average: \(m["averageFreeWriteScore"] ?? "nil")")
+        #expect(m["averageFormAccuracy"].flatMap(Double.init) == 1.0,
+                "pre-enrolment form 0.0 leaked into averageFormAccuracy: \(m["averageFormAccuracy"] ?? "nil")")
+        #expect(m["averageRhythmScore"].flatMap(Double.init) == 1.0,
+                "pre-enrolment rhythm 0.0 leaked into averageRhythmScore: \(m["averageRhythmScore"] ?? "nil")")
+    }
+
     // MARK: - Shared well-formedness
 
     /// Arity, integer sample count, and a score inside [0,1] with the

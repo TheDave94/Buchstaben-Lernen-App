@@ -28,6 +28,12 @@ final class PhaseTransitionCoordinator {
     /// completion pipeline.
     func advance() {
         guard let vm else { return }
+        // A completed letter session is never advanced again. The
+        // study-mode unload/background path (below) can complete a
+        // freeWrite trial while the dispatcher's quiet-window task is
+        // still scheduled; without this guard that task would re-run the
+        // recognizer and write every phase row a second time.
+        guard !vm.phaseController.isLetterSessionComplete else { return }
         let score: CGFloat
         // Four structurally different instruments write into this one
         // `score`, per phase — see PhaseSessionRecord.score and
@@ -46,38 +52,7 @@ final class PhaseTransitionCoordinator {
         case .guided:
             score = vm.progress
         case .freeWrite:
-            guard let def = vm.strokeTracker.definition else {
-                vm.freeWriteRecorder.clearAll()
-                score = 0
-                break
-            }
-            // Multi-cell (pencil / word): pass each cell's frame so
-            // points normalise into cell-local 0–1 space matching the
-            // reference, and average the four Schreibmotorik dimensions
-            // across cells. Single-cell falls through to the original
-            // finger-mode contract.
-            if vm.grid.cells.count > 1 {
-                let cellRefs = vm.grid.cells.compactMap { cell -> (frame: CGRect, reference: LetterStrokes)? in
-                    guard let ref = cell.tracker.definition else { return nil }
-                    return (frame: cell.frame, reference: ref)
-                }
-                if cellRefs.isEmpty {
-                    score = vm.freeWriteRecorder.assess(
-                        reference: def, canvasSize: vm.canvasSize,
-                        cellFrame: vm.grid.activeCell.frame
-                    ).overallScore
-                } else {
-                    score = vm.freeWriteRecorder.assess(
-                        cellReferences: cellRefs,
-                        canvasSize: vm.canvasSize
-                    ).overallScore
-                }
-            } else {
-                score = vm.freeWriteRecorder.assess(
-                    reference: def, canvasSize: vm.canvasSize,
-                    cellFrame: nil
-                ).overallScore
-            }
+            score = scoreFreeWrite()
         }
 
         let wasInFreeWrite = vm.phaseController.currentPhase == .freeWrite
@@ -113,6 +88,184 @@ final class PhaseTransitionCoordinator {
             // here at end-of-guided). No recognizer; celebrate.
             recordSessionCompletion()
         }
+    }
+
+    /// Score the freeWrite buffer against the loaded reference. Shared by
+    /// `advance()` and the study-mode unload path so one trace is scored
+    /// one way, whichever route records it. Sets the recorder's
+    /// `lastAssessment` / `lastStrokeProcess` as a side effect.
+    private func scoreFreeWrite() -> CGFloat {
+        guard let vm else { return 0 }
+        guard let def = vm.strokeTracker.definition else {
+            vm.freeWriteRecorder.clearAll()
+            return 0
+        }
+        // Multi-cell (pencil / word): pass each cell's frame so
+        // points normalise into cell-local 0–1 space matching the
+        // reference, and average the four Schreibmotorik dimensions
+        // across cells. Single-cell falls through to the original
+        // finger-mode contract. (Study sessions are always single-cell —
+        // see `TracingViewModel.reapplyGridPreset`.)
+        if vm.grid.cells.count > 1 {
+            let cellRefs = vm.grid.cells.compactMap { cell -> (frame: CGRect, reference: LetterStrokes)? in
+                guard let ref = cell.tracker.definition else { return nil }
+                return (frame: cell.frame, reference: ref)
+            }
+            if cellRefs.isEmpty {
+                return vm.freeWriteRecorder.assess(
+                    reference: def, canvasSize: vm.canvasSize,
+                    cellFrame: vm.grid.activeCell.frame
+                ).overallScore
+            }
+            return vm.freeWriteRecorder.assess(
+                cellReferences: cellRefs,
+                canvasSize: vm.canvasSize
+            ).overallScore
+        }
+        return vm.freeWriteRecorder.assess(
+            reference: def, canvasSize: vm.canvasSize,
+            cellFrame: nil
+        ).overallScore
+    }
+
+    // MARK: - Study-mode unload / background safety (2026-09-04)
+
+    /// A finished freeWrite production (ink present, pen up) that has not
+    /// been scored yet — the proctor tapped the next arrow inside the
+    /// 2.0 s quiet window, or while the recognizer was in flight, or the
+    /// app is being backgrounded — used to vanish: `load(letter:)` cleared
+    /// the recorder and cancelled the recognizer token, so no score, no
+    /// row and no raw trace were ever written. Scores and records it now,
+    /// recognition nil. Returns true when it did so. Study mode only.
+    @discardableResult
+    func finalizeFinishedFreeWriteIfPending() -> Bool {
+        guard let vm, vm.studyMode,
+              vm.phaseController.currentPhase == .freeWrite,
+              !vm.phaseController.isLetterSessionComplete,
+              !vm.freeWritePoints.isEmpty,
+              !vm.touchDispatcher.isSingleTouchInteractionActive else { return false }
+        vm.abortInFlightRecognition()
+        // Mark complete BEFORE recording so the dispatcher's quiet-window
+        // task (if still scheduled) sees `didCompleteCurrentLetter` and
+        // stands down; `resetTouchState` cancels it outright.
+        vm.didCompleteCurrentLetter = true
+        vm.touchDispatcher.resetTouchState()
+        completePostFreeWriteRecognition(score: scoreFreeWrite(), result: nil)
+        return true
+    }
+
+    /// Called by `TracingViewModel.load(letter:)` BEFORE the outgoing
+    /// letter's state is reset. First closes the finished-freeWrite window
+    /// above; otherwise, if the letter was worked but left mid-phase,
+    /// writes ONE row for that phase with `completed: false` and the score
+    /// so far (guided: checkpoint coverage; freeWrite: the assessment of
+    /// the ink present, with its measures and raw trace). Nothing else —
+    /// no progress, streak or completion side effects. This is the only
+    /// writer of `completed == false`: the column, and the exported
+    /// `phaseCompletionRate_*`, carried a constant `true` before. Study
+    /// mode only; an untouched letter records nothing.
+    func recordUnloadOfCurrentLetter(touchStillActive: Bool) {
+        guard let vm, vm.studyMode,
+              !vm.phaseController.isLetterSessionComplete else { return }
+        if !touchStillActive, finalizeFinishedFreeWriteIfPending() { return }
+
+        let phase = vm.phaseController.currentPhase
+        let hasFreeWriteInk = !vm.freeWritePoints.isEmpty
+        let hasInput = !vm.phaseController.phaseScores.isEmpty
+            || vm.progress > 0
+            || hasFreeWriteInk
+            || !vm.directTappedDots.isEmpty
+        guard hasInput else { return }
+
+        vm.abortInFlightRecognition()
+        let score: CGFloat
+        switch phase {
+        case .guided:           score = vm.progress
+        case .freeWrite:        score = hasFreeWriteInk ? scoreFreeWrite() : 0
+        case .observe, .direct: score = 0
+        }
+        let didFreeWrite = phase == .freeWrite && hasFreeWriteInk
+        let m = captureFreeWriteMeasurements(didFreeWrite: didFreeWrite)
+        vm.dashboardStore.recordPhaseSession(
+            letter: vm.currentLetterName,
+            phase: phase.rawName,
+            completed: false,
+            score: Double(score),
+            schedulerPriority: vm.lastScheduledLetterPriority,
+            condition: vm.thesisCondition,
+            audioCondition: vm.audioCondition,
+            assessment: m.assessment,
+            recognition: nil,
+            inputDevice: vm.detector.effectiveKind.rawValue,
+            rawTraceID: m.traceID,
+            trainedSubset: vm.trainedSubset.rawValue,
+            phaseDurationSeconds: m.duration,
+            frechetDistance: nil,
+            checkpointCoverage: m.coverage,
+            spatialDeviation: m.spatialDeviation,
+            strokeCount: m.strokeProcess?.strokeCount,
+            strokeOrder: m.strokeProcess?.matchedReferenceOrderField,
+            reversedStrokeCount: m.strokeProcess?.reversedStrokeCount,
+            studyMode: vm.studyMode,
+            probe: vm.currentProbe?.rawValue
+        )
+    }
+
+    /// The freeWrite-only measurement fields of one row. Captured in the
+    /// order that keeps a crash from leaving a record pointing at a
+    /// missing trace (trace first). All nil when `didFreeWrite` is false.
+    private struct FreeWriteMeasurements {
+        var assessment: WritingAssessment?
+        var recognition: RecognitionSample?
+        var traceID: UUID?
+        var duration: Double?
+        var coverage: Double?
+        var spatialDeviation: Double?
+        var strokeProcess: StrokeProcessMeasures?
+    }
+
+    private func captureFreeWriteMeasurements(didFreeWrite: Bool) -> FreeWriteMeasurements {
+        var m = FreeWriteMeasurements()
+        guard let vm, didFreeWrite else { return m }
+        m.assessment = vm.lastWritingAssessment
+        // Attach the latest recognition reading to the freeWrite row so
+        // per-session recognition is recoverable from the CSV.
+        m.recognition = vm.lastRecognitionResult.map { rr in
+            RecognitionSample(
+                predictedLetter: rr.predictedLetter,
+                confidence: Double(rr.confidence),
+                // Was omitted here (2026-09-04): the exported
+                // `recognition_confidence_raw` column — the documented
+                // way to quantify the calibrator's effect (D11) — had
+                // never carried a value on any phase row, while
+                // `ProgressStore.recordRecognitionSample` did carry it.
+                rawConfidence: rr.rawConfidence.map { Double($0) },
+                isCorrect: rr.isCorrect
+            )
+        }
+        // Capture the raw freeWrite trace BEFORE writing the records (so a
+        // crash can't leave a record linked to a missing trace) and BEFORE
+        // the buffer clears on the next letter load.
+        m.traceID = vm.captureFreeWriteTrace()
+        // Measured-phase time: first-to-last raw freeWrite sample
+        // (CACurrentMediaTime deltas), end-inclusive — see
+        // `FreeWritePhaseRecorder.measuredSpanSeconds` for why the span
+        // must not end at the final stroke's start.
+        m.duration = vm.freeWriteRecorder.measuredSpanSeconds
+        // PRIMARY accuracy outcome: order-invariant spatial deviation
+        // via stroke correspondence — see StrokeProcessMeasures and
+        // PhaseSessionRecord.spatialDeviation.
+        m.spatialDeviation = vm.lastFreeWriteSpatialDeviation.map { Double($0) }
+        // SECONDARY: checkpoint coverage of the freeWrite trace.
+        // `resetForPhaseTransition` reset the tracker on entry to
+        // freeWrite, so this reads the freeWrite pass alone and not the
+        // guided pass before it. Saturates at 1.0 — kept for continuity
+        // with earlier rounds, not as the primary.
+        m.coverage = Double(vm.grid.aggregateProgress)
+        // SECONDARY process outcomes (2026-09-03): stroke count/order/
+        // direction — see StrokeProcessMeasures.
+        m.strokeProcess = vm.lastFreeWriteStrokeProcess
+        return m
     }
 
     // MARK: - FreeWrite recognizer-gated completion
@@ -217,49 +370,21 @@ final class PhaseTransitionCoordinator {
         let scores: [String: Double] = Dictionary(
             uniqueKeysWithValues: phaseScores.map { ($0.key.rawName, Double($0.value)) }
         )
-        // Attach the latest recognition reading to the freeWrite row so
-        // per-session recognition is recoverable from the CSV; other
-        // phases pass nil.
-        let freeWriteRecognition: RecognitionSample? = vm.lastRecognitionResult.map { rr in
-            RecognitionSample(
-                predictedLetter: rr.predictedLetter,
-                confidence: Double(rr.confidence),
-                isCorrect: rr.isCorrect
-            )
-        }
         // Capture the input mode so the export can distinguish a finger
         // session's pressureControl == 1.0 (no force data) from a
         // low-variance pencil session.
         let device = vm.detector.effectiveKind.rawValue
-        // Capture the raw freeWrite trace BEFORE writing the records (so a
-        // crash can't leave a record linked to a missing trace) and BEFORE
-        // the buffer clears on the next letter load. freeWrite-only; nil if
-        // no freeWrite phase ran or the buffer is empty.
-        let freeWriteTraceID: UUID? = didFreeWrite ? vm.captureFreeWriteTrace() : nil
-        // Measured-phase time: first-to-last raw freeWrite sample
-        // (CACurrentMediaTime deltas), end-inclusive — see
-        // `FreeWritePhaseRecorder.measuredSpanSeconds` for why the span
-        // must not end at the final stroke's start.
-        let freeWriteDuration: Double? = vm.freeWriteRecorder.measuredSpanSeconds
-        // frechetDistance is RETIRED (2026-09-04) — always nil now, kept
-        // as a parameter only for Codable/protocol backward compat; see
-        // PhaseSessionRecord.frechetDistance for why.
-        // PRIMARY accuracy outcome: order-invariant spatial deviation
-        // via stroke correspondence — see StrokeProcessMeasures and
-        // PhaseSessionRecord.spatialDeviation.
-        let freeWriteSpatialDeviation: Double? = vm.lastFreeWriteSpatialDeviation.map { Double($0) }
-        // SECONDARY: checkpoint coverage of the freeWrite trace.
-        // `resetForPhaseTransition` reset the tracker on entry to
-        // freeWrite, so this reads the freeWrite pass alone and not the
-        // guided pass before it. Saturates at 1.0 — kept for continuity
-        // with earlier rounds, not as the primary.
-        let freeWriteCoverage: Double? = didFreeWrite
-            ? Double(vm.grid.aggregateProgress) : nil
-        // SECONDARY process outcomes (2026-09-03): stroke count/order/
-        // direction — see StrokeProcessMeasures and
-        // PhaseSessionRecord.strokeCount.
-        let freeWriteStrokeProcess = vm.lastFreeWriteStrokeProcess
-        for (phase, phaseScore) in phaseScores {
+        // The freeWrite-only fields, trace captured first; all nil when
+        // no freeWrite phase ran. `frechetDistance` is RETIRED
+        // (2026-09-04) — always nil, kept as a parameter only for
+        // Codable/protocol backward compat.
+        let m = captureFreeWriteMeasurements(didFreeWrite: didFreeWrite)
+        // Rows in canonical phase order (2026-09-04): iterating the
+        // dictionary wrote the four rows of one letter in arbitrary order
+        // under near-identical `recordedAt` stamps, so any consumer
+        // sorting by time saw a per-letter order that changed run to run.
+        for phase in LearningPhase.allCases {
+            guard let phaseScore = phaseScores[phase] else { continue }
             // One typed comparison gates all measurement fields. A
             // wrong phase here is the defect PhaseRecordAttachmentTests
             // exists to catch; a wrong *spelling* is no longer possible.
@@ -272,18 +397,20 @@ final class PhaseTransitionCoordinator {
                 schedulerPriority: vm.lastScheduledLetterPriority,
                 condition: vm.thesisCondition,
                 audioCondition: vm.audioCondition,
-                assessment: isFreeWrite ? vm.lastWritingAssessment : nil,
-                recognition: isFreeWrite ? freeWriteRecognition : nil,
+                assessment: isFreeWrite ? m.assessment : nil,
+                recognition: isFreeWrite ? m.recognition : nil,
                 inputDevice: device,
-                rawTraceID: isFreeWrite ? freeWriteTraceID : nil,
+                rawTraceID: isFreeWrite ? m.traceID : nil,
                 trainedSubset: vm.trainedSubset.rawValue,
-                phaseDurationSeconds: isFreeWrite ? freeWriteDuration : nil,
+                phaseDurationSeconds: isFreeWrite ? m.duration : nil,
                 frechetDistance: nil,
-                checkpointCoverage: isFreeWrite ? freeWriteCoverage : nil,
-                spatialDeviation: isFreeWrite ? freeWriteSpatialDeviation : nil,
-                strokeCount: isFreeWrite ? freeWriteStrokeProcess?.strokeCount : nil,
-                strokeOrder: isFreeWrite ? freeWriteStrokeProcess?.matchedReferenceOrderField : nil,
-                reversedStrokeCount: isFreeWrite ? freeWriteStrokeProcess?.reversedStrokeCount : nil
+                checkpointCoverage: isFreeWrite ? m.coverage : nil,
+                spatialDeviation: isFreeWrite ? m.spatialDeviation : nil,
+                strokeCount: isFreeWrite ? m.strokeProcess?.strokeCount : nil,
+                strokeOrder: isFreeWrite ? m.strokeProcess?.matchedReferenceOrderField : nil,
+                reversedStrokeCount: isFreeWrite ? m.strokeProcess?.reversedStrokeCount : nil,
+                studyMode: vm.studyMode,
+                probe: vm.currentProbe?.rawValue
             )
         }
         commitCompletion(letter: vm.currentLetterName,

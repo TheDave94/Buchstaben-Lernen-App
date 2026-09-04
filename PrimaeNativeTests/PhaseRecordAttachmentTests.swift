@@ -51,6 +51,8 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
         let strokeCount: Int?
         let strokeOrder: String?
         let reversedStrokeCount: Int?
+        let studyMode: Bool?
+        let probe: String?
 
         /// How many of the ten declared fields are populated. 9 on
         /// freeWrite (frechetDistance is RETIRED as of 2026-09-04 — kept
@@ -106,7 +108,9 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
                             spatialDeviation: Double?,
                             strokeCount: Int?,
                             strokeOrder: String?,
-                            reversedStrokeCount: Int?) {
+                            reversedStrokeCount: Int?,
+                            studyMode: Bool?,
+                            probe: String?) {
         calls.append(Call(letter: letter, phase: phase, completed: completed,
                           score: score, condition: condition,
                           audioCondition: audioCondition,
@@ -119,7 +123,9 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
                           spatialDeviation: spatialDeviation,
                           strokeCount: strokeCount,
                           strokeOrder: strokeOrder,
-                          reversedStrokeCount: reversedStrokeCount))
+                          reversedStrokeCount: reversedStrokeCount,
+                          studyMode: studyMode,
+                          probe: probe))
     }
 
     func reset() {}
@@ -224,6 +230,8 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
             #expect(call.letter == "A")
             #expect(call.completed, "\(call.phase) row should be marked completed")
             #expect((0...1).contains(call.score), "\(call.phase) score out of domain")
+            // C3-2 (2026-09-04): every row says which configuration wrote it.
+            #expect(call.studyMode == false, "\(call.phase) row must carry studyMode=false for this non-study fixture")
         }
     }
 
@@ -340,6 +348,14 @@ private final class CapturingDashboardStore: ParentDashboardStoring {
                 "timestamps and points must stay parallel")
         #expect(trace.forces.count == trace.points.count,
                 "forces and points must stay parallel")
+        // The reference the trial was scored against rides with the
+        // trace (2026-09-04) — offline re-scoring needs the mapped
+        // polyline, not the bundle's bbox-relative one.
+        let reference = try #require(trace.referenceStrokes,
+                                     "the raw trace must carry the reference it was scored against")
+        #expect(reference.strokes.count == 1)
+        #expect(reference.strokes.first?.checkpoints.count == 50,
+                "the fixture letter's 50 checkpoints, mapped into canvas space")
     }
 
     // MARK: - 5. Assignment axes stamped on every row

@@ -202,4 +202,36 @@ enum ParticipantStore {
         UserDefaults.standard.removeObject(forKey: retrievalCounterKey)
         return new
     }
+
+    /// Restores an EXISTING participant's identity on this device for a
+    /// later session — the delayed retention test (thesis Ch.6) some
+    /// weeks after training (2026-09-04). Until this existed the only
+    /// identity operation was `startNewParticipant`, so a delayed session
+    /// minted a new UUID and its rows could not be linked to the child's
+    /// training rows except by a hand-kept log.
+    ///
+    /// The UUID comes from the first session's export header
+    /// (`# participantId=…`). Both arm axes and the trained subset
+    /// re-derive from it deterministically; the three researcher
+    /// overrides are CLEARED, because an override the first session used
+    /// is recorded on that session's rows, not on the device, and the
+    /// proctor must re-apply it from the export before the session.
+    /// Enrolment is stamped anew at this instant (rows of the delayed
+    /// session are later than it; the training rows live in the earlier
+    /// export). Takes effect on the next launch, like every identity
+    /// change. Returns nil, and changes nothing, for a malformed id.
+    @discardableResult
+    static func restoreParticipant(uuidString: String) -> UUID? {
+        guard let restored = UUID(uuidString: uuidString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+        UserDefaults.standard.set(restored.uuidString, forKey: key)
+        UserDefaults.standard.removeObject(forKey: conditionOverrideKey)
+        UserDefaults.standard.removeObject(forKey: audioConditionOverrideKey)
+        UserDefaults.standard.removeObject(forKey: trainedSubsetOverrideKey)
+        UserDefaults.standard.set(true, forKey: enrolledKey)
+        UserDefaults.standard.set(Date(), forKey: enrolledAtKey)
+        UserDefaults.standard.removeObject(forKey: retrievalCounterKey)
+        return restored
+    }
 }

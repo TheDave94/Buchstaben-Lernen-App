@@ -150,7 +150,7 @@ struct ParentDashboardExporter {
         // `strokeCount`/`strokeOrder`/`reversedStrokeCount` are the
         // process-measure secondaries, appended after spatialDeviation
         // for the same newest-last reason, in that order.
-        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage","spatialDeviation","strokeCount","strokeOrder","reversedStrokeCount"].joined(separator: sep))
+        lines.append(["letter","phase","completed","score","schedulerPriority","condition","recordedAt","recognition_predicted","recognition_confidence","recognition_confidence_raw","recognition_correct","formAccuracy","tempoConsistency","pressureControl","rhythmScore","inputDevice","audioCondition","trainedSubset","phaseDurationSeconds","frechetDistance","checkpointCoverage","spatialDeviation","strokeCount","strokeOrder","reversedStrokeCount","studyMode","probe"].joined(separator: sep))
         // D11#1: filtered ONCE, here, and every aggregate below —
         // including the arm-split ones — reads `enrolledRecords`, never
         // `snapshot.phaseSessionRecords` directly. The raw-row loop and
@@ -170,6 +170,19 @@ struct ParentDashboardExporter {
                 return ts >= enrolledAt
             }
         }()
+        // D11#1, second half (2026-09-04): the four HEADLINE aggregates
+        // further down (`phaseCompletionRate_*`, `averageFreeWriteScore`,
+        // `schedulerEffectivenessProxy`, `averageForm/Tempo/Pressure/
+        // Rhythm`) are computed properties of the snapshot and ran over
+        // every record on disk — the filter above never reached them,
+        // even after the ticket was marked closed. One filtered view,
+        // built once, so they read exactly the rows the per-row block
+        // and the arm aggregates read.
+        let enrolledSnapshot = DashboardSnapshot(
+            letterStats: snapshot.letterStats,
+            sessionDurations: snapshot.sessionDurations,
+            phaseSessionRecords: enrolledRecords
+        )
         for rec in enrolledRecords {
             let score = String(format: "%.4f", rec.score)
             let prio  = String(format: "%.4f", rec.schedulerPriority)
@@ -207,14 +220,20 @@ struct ParentDashboardExporter {
                 rec.spatialDeviation.map { String(format: "%.6f", $0) } ?? "",
                 rec.strokeCount.map(String.init) ?? "",
                 rec.strokeOrder ?? "",
-                rec.reversedStrokeCount.map(String.init) ?? ""
+                rec.reversedStrokeCount.map(String.init) ?? "",
+                // Whether the study configuration was on for this row
+                // (C3-2, 2026-09-04); empty for legacy rows.
+                rec.studyMode.map(String.init) ?? "",
+                // Cold-probe kind: pretest / posttest / delayed; empty for
+                // a training pass (2026-09-04).
+                rec.probe ?? ""
             ]
             lines.append(row.joined(separator: sep))
         }
         lines.append("")
 
         lines.append(["metric","value"].joined(separator: sep))
-        let rates = snapshot.phaseCompletionRates
+        let rates = enrolledSnapshot.phaseCompletionRates
         // Iterate LearningPhase.allCases so every phase, including
         // `direct`, lands in the export.
         for phase in LearningPhase.allCases.map(\.rawName) {
@@ -222,8 +241,8 @@ struct ParentDashboardExporter {
                 lines.append(["phaseCompletionRate_\(phase)", String(format: "%.4f", rate)].joined(separator: sep))
             }
         }
-        lines.append(["averageFreeWriteScore", String(format: "%.4f", snapshot.averageFreeWriteScore)].joined(separator: sep))
-        lines.append(["schedulerEffectivenessProxy", String(format: "%.4f", snapshot.schedulerEffectivenessProxy)].joined(separator: sep))
+        lines.append(["averageFreeWriteScore", String(format: "%.4f", enrolledSnapshot.averageFreeWriteScore)].joined(separator: sep))
+        lines.append(["schedulerEffectivenessProxy", String(format: "%.4f", enrolledSnapshot.schedulerEffectivenessProxy)].joined(separator: sep))
         // Per-condition aggregates so between-arm comparisons don't
         // have to back out cross-arm contamination. The proxy is
         // meaningful only inside an arm — `.control` uses a different
@@ -314,7 +333,7 @@ struct ParentDashboardExporter {
         // Aggregate Schreibmotorik dimensions across all completed
         // freeWrite sessions. Emitted only when at least one session
         // contributed.
-        if let dims = snapshot.averageWritingDimensions {
+        if let dims = enrolledSnapshot.averageWritingDimensions {
             lines.append(["averageFormAccuracy", String(format: "%.4f", dims.form)].joined(separator: sep))
             lines.append(["averageTempoConsistency", String(format: "%.4f", dims.tempo)].joined(separator: sep))
             lines.append(["averagePressureControl", String(format: "%.4f", dims.pressure)].joined(separator: sep))
@@ -330,16 +349,32 @@ struct ParentDashboardExporter {
     static func jsonData(from snapshot: DashboardSnapshot,
                           participantId: UUID = ParticipantStore.participantId,
                           progress: [String: LetterProgress] = [:],
-                          rawTraces: [RawTrace] = []) throws(ExportError) -> Data {
+                          rawTraces: [RawTrace] = [],
+                          enrolledAt: Date? = ParticipantStore.enrolledAt) throws(ExportError) -> Data {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting    = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
+            // Same pre-enrolment rule as the CSV (2026-09-04): the JSON
+            // archive used to dump every phase row unfiltered and carried
+            // no `enrolledAt`, so its consumer could not even reproduce
+            // the rule the thesis states the exporter applies (Ch.3).
+            // Raw traces stay complete — they are the archive.
+            let filtered: DashboardSnapshot = {
+                guard let enrolledAt else { return snapshot }
+                var s = snapshot
+                s.phaseSessionRecords = snapshot.phaseSessionRecords.filter { rec in
+                    guard let ts = rec.recordedAt else { return false }
+                    return ts >= enrolledAt
+                }
+                return s
+            }()
             let export = SnapshotWithMetrics(
-                snapshot: snapshot,
+                snapshot: filtered,
                 participantId: participantId,
                 progress: progress,
-                rawTraces: rawTraces
+                rawTraces: rawTraces,
+                enrolledAt: enrolledAt
             )
             return try encoder.encode(export)
         } catch {
@@ -351,6 +386,9 @@ struct ParentDashboardExporter {
 
     private struct SnapshotWithMetrics: Encodable {
         let participantId: String
+        /// Enrolment instant the row filter was applied against; nil when
+        /// the install was never enrolled (then nothing was filtered).
+        let enrolledAt: Date?
         let letterStats: [String: LetterAccuracyStat]
         let sessionDurations: [SessionDurationRecord]
         let phaseSessionRecords: [PhaseSessionRecord]
@@ -364,8 +402,10 @@ struct ParentDashboardExporter {
         init(snapshot: DashboardSnapshot,
              participantId: UUID,
              progress: [String: LetterProgress],
-             rawTraces: [RawTrace]) {
+             rawTraces: [RawTrace],
+             enrolledAt: Date?) {
             self.participantId = participantId.uuidString
+            self.enrolledAt = enrolledAt
             letterStats = snapshot.letterStats
             sessionDurations = snapshot.sessionDurations
             phaseSessionRecords = snapshot.phaseSessionRecords

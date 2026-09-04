@@ -160,4 +160,61 @@ import CoreGraphics
         #expect(vm.learningPhase != .freeWrite,
                 "the one-shot override must not leak into a later normal load")
     }
+
+    // MARK: - Cold probes (2026-09-04): pretest / post-test / delayed
+
+    @Test("pretest opens a TRAINED study letter cold in freeWrite and tags it")
+    func pretest_trainedLetter_opensColdAndTagged() {
+        let vm = makeVM(studyMode: true)
+        vm.startColdProbe(letter: "A", kind: .pretest)   // A is trained (stub AFI)
+        #expect(vm.currentLetterName == "A")
+        #expect(vm.learningPhase == .freeWrite, "the pretest is a cold production on every study letter, trained included")
+        #expect(vm.currentProbe == .pretest)
+    }
+
+    @Test("delayed probe opens any study letter cold; post-test still refuses a trained one")
+    func delayed_anyLetter_postTest_untrainedOnly() {
+        let vm = makeVM(studyMode: true)
+        vm.startColdProbe(letter: "A", kind: .delayed)
+        #expect(vm.learningPhase == .freeWrite && vm.currentProbe == .delayed)
+        let before = vm.currentLetterName
+        vm.startColdProbe(letter: "A", kind: .posttest)   // trained → refused
+        #expect(vm.currentLetterName == before && vm.currentProbe == .delayed,
+                "the post-test on a trained letter is its final training pass, not a cold entry")
+        vm.startColdProbe(letter: "L", kind: .posttest)   // untrained → allowed
+        #expect(vm.currentLetterName == "L" && vm.currentProbe == .posttest)
+    }
+
+    @Test("a probe refuses a letter outside the study set and is cleared by the next training load")
+    func probe_scopeAndClearing() {
+        let vm = makeVM(studyMode: true)
+        let before = vm.currentLetterName
+        vm.startColdProbe(letter: "Z", kind: .pretest)
+        #expect(vm.currentLetterName == before && vm.currentProbe == nil, "Z is not a study letter")
+        vm.startColdProbe(letter: "A", kind: .pretest)
+        #expect(vm.currentProbe == .pretest)
+        vm.loadLetter(name: "A")
+        #expect(vm.currentProbe == nil, "a training load must not inherit the probe tag")
+        #expect(vm.learningPhase != .freeWrite)
+    }
+
+    @Test("startPostTest reaches freeWrite even when the injected pedagogical condition omits it")
+    func startPostTest_survivesGuidedOnlyDeps() {
+        // Exactly the failure CI once caught here and the fixture then
+        // papered over by pinning `.threePhase` in makeVM. An enrolled
+        // install can draw `.guidedOnly` / `.control` from UUID byte 0;
+        // the VM's own studyMode pin — not a test fixture — is what keeps
+        // the post-test (and every training letter's freeWrite phase)
+        // reachable (2026-09-04).
+        var deps = TracingDependencies.stub   // carries .guidedOnly
+        deps.studyMode = true
+        let vm = TracingViewModel(deps)
+        vm.letters = TrainedLetterSubset.studyLetters.map {
+            makeAsset($0, base: $0, letterCase: .upper)
+        }
+        vm.startPostTest(letter: "L")
+        #expect(vm.currentLetterName == "L")
+        #expect(vm.learningPhase == .freeWrite,
+                "with the stub's .guidedOnly, resume(at: .freeWrite) silently no-ops unless the VM pins the flow")
+    }
 }

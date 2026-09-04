@@ -204,7 +204,12 @@ public final class TracingViewModel {
     func pencilDidTouchDown() {
         let priorKind = detector.effectiveKind
         detector.observeTouchBegan(isPencil: true)
-        if priorKind != detector.effectiveKind,
+        // The detector still records the device (it stamps
+        // `inputDevice` on every row), but under studyMode the grid
+        // preset is pinned to a single cell (see `reapplyGridPreset`),
+        // so a promotion must not rebuild the grid — that would drop
+        // the in-flight tracker mid-session for no layout change.
+        if !studyMode, priorKind != detector.effectiveKind,
            letters.indices.contains(letterIndex) {
             reapplyGridPreset()
             reloadStrokeCheckpoints(for: letters[letterIndex])
@@ -224,7 +229,20 @@ public final class TracingViewModel {
     func reapplyGridPreset() {
         guard letters.indices.contains(letterIndex) else { return }
         let letter = letters[letterIndex]
-        let usePencil = detector.effectiveKind == .pencil
+        // Study pin (2026-09-04): ONE cell, always. The `.pencil` preset
+        // is a 4-cell repetition layout with four-line Lineatur — a
+        // different stimulus (letter rendered at a quarter of the size,
+        // proportionally tighter checkpoint radius) — and, worse, its
+        // multi-cell freeWrite scoring path (`assess(cellReferences:)`)
+        // never sets `lastStrokeProcess`, so `spatialDeviation`,
+        // `strokeCount`, `strokeOrder` and `reversedStrokeCount` are all
+        // nil on the freeWrite row, and `formAccuracy` is computed with
+        // the whole cell's ink as ONE stroke. A single Apple Pencil touch
+        // promoted the detector and switched every later trial of the
+        // session onto that path, silently. The pilot's task is one
+        // letter, one trace (thesis Ch.3/Ch.6); pencil input stays
+        // allowed and is still recorded as `inputDevice`.
+        let usePencil = !studyMode && detector.effectiveKind == .pencil
         let preset: InputPreset = usePencil ? .pencil : .finger
         let sequence: TracingSequence = usePencil
             ? .repetition(letter.name, count: preset.cellCount)
@@ -439,7 +457,10 @@ public final class TracingViewModel {
             timestamps: freeWriteTimestamps,
             forces: freeWriteForces,
             strokeStartIndices: freeWriteStrokeStartIndices,
-            canvasSize: canvasSize
+            canvasSize: canvasSize,
+            // The reference the trial was scored against, in the same
+            // canvas-normalised space the scorer used — see RawTrace.
+            referenceStrokes: strokeTracker.definition
         )
         rawTraceStore.append(trace)
         return trace.id
@@ -666,11 +687,16 @@ public final class TracingViewModel {
     var adaptationPolicy: any AdaptationPolicy
     private var onboardingCoordinator: OnboardingCoordinator
     var phaseController: LearningPhaseController
-    /// Set immediately before a `startPostTest(letter:)` load and consumed
-    /// at the top of `load(letter:)` — see H6 there. Kept as a one-shot
-    /// flag rather than a parameter threaded through every `load` call
-    /// site, since only one caller ever needs it.
-    private var pendingPostTestOverride = false
+    /// Set immediately before a `startColdProbe(letter:kind:)` load and
+    /// consumed at the top of `load(letter:)` — see there. Kept as a
+    /// one-shot rather than a parameter threaded through every `load`
+    /// call site, since only one caller ever needs it.
+    private var pendingProbeOverride: StudyProbe?
+    /// The cold probe the CURRENT letter was opened as, or nil for a
+    /// training pass. Stamped on every phase row the letter writes
+    /// (`PhaseSessionRecord.probe`), so pretest, post-test and delayed
+    /// rows on the same letter are distinguishable in the export.
+    private(set) var currentProbe: StudyProbe?
     /// In-flight pre-task sound-arm demonstration (see
     /// `PreTaskDemonstration` and `armPreTaskDemonstration`). Cancelled
     /// on every fresh letter load and the moment a real touch begins
@@ -739,7 +765,14 @@ public final class TracingViewModel {
 
     @MainActor
     init(_ deps: TracingDependencies = .live) {
-        self.audio                  = deps.audio
+        // The silent ARM is authoritative (ruling C3-2, 2026-09-04): its
+        // engine is a no-op object, so no audio path — coupling,
+        // demonstration, replay, load, playback controller — can make a
+        // sound whatever study mode or any pedagogical parameter says.
+        // Speech and prompts are nulled for it below on the same footing.
+        let armIsSilent             = deps.audioCondition == .silent
+        let effectiveAudio: AudioControlling = armIsSilent ? SilentAudio() : deps.audio
+        self.audio                  = effectiveAudio
         self.progressStore          = deps.progressStore
         // Study sessions: the ONLY audio is the arm's designated sound.
         // Silencing at the injection seam kills every other feedback
@@ -754,7 +787,22 @@ public final class TracingViewModel {
         self.rawTraceStore          = deps.rawTraceStore
         self.onboardingStore        = deps.onboardingStore
         self.notificationScheduler  = deps.notificationScheduler
-        self.thesisCondition        = deps.thesisCondition
+        // Study pin (2026-09-04): the pedagogical flow is held constant
+        // across arms (DECISIONS.md D1) and the pilot's outcome is the
+        // freeWrite phase, which `.guidedOnly` / `.control` omit
+        // entirely (`activePhases == [.guided]`). An enrolled install
+        // otherwise derives this axis from UUID byte 0, so without this
+        // pin ~2/3 of study participants would run a flow with NO
+        // freeWrite phase — no primary outcome, no raw trace — and
+        // `startPostTest`'s `resume(at: .freeWrite)` would silently
+        // no-op on its `activePhases` guard. CI once caught exactly that
+        // shape and the fix landed in a test fixture
+        // (`StudyLetterSetTests` pins `.threePhase`), never in the app.
+        // `ParticipantStore.conditionOverride` still governs the
+        // non-study A/B flow; under studyMode it is moot.
+        let effectiveCondition: ThesisCondition =
+            deps.studyMode ? .threePhase : deps.thesisCondition
+        self.thesisCondition        = effectiveCondition
         self.audioCondition         = deps.audioCondition
         self.trainedSubset          = deps.trainedSubset
         self.enablePaperTransfer    = deps.enablePaperTransfer
@@ -764,9 +812,10 @@ public final class TracingViewModel {
         self.enableRetrievalPrompts = deps.enableRetrievalPrompts
         self.enableBackwardChaining = deps.enableBackwardChaining
         self.letterRecognizer       = deps.letterRecognizer
-        // Same studyMode silencing rationale as `haptics` above.
-        self.speech                 = deps.studyMode ? NullSpeechSynthesizer() : deps.speech
-        self.prompts                = deps.studyMode ? NullPromptPlayer() : deps.makePromptPlayer(deps.speech)
+        // Same studyMode silencing rationale as `haptics` above — and the
+        // silent arm hears no speech or prompt in ANY mode (C3-2).
+        self.speech                 = (deps.studyMode || armIsSilent) ? NullSpeechSynthesizer() : deps.speech
+        self.prompts                = (deps.studyMode || armIsSilent) ? NullPromptPlayer() : deps.makePromptPlayer(deps.speech)
         // Control condition uses fixed difficulty so the manipulation
         // can't confound the phase-progression IV. Study devices pin
         // difficulty at the standard tier for the same reason — the
@@ -794,7 +843,7 @@ public final class TracingViewModel {
         self.onboardingCoordinator = coordinator
         self.onboardingStep        = coordinator.currentStep
         self.isOnboardingComplete  = deps.onboardingStore.hasCompletedOnboarding
-        self.phaseController = LearningPhaseController(condition: deps.thesisCondition)
+        self.phaseController = LearningPhaseController(condition: effectiveCondition)
         // Study pins: the pilot is Druckschrift-only and its letter
         // order must be identical across children/devices — a stray
         // device setting must not swap the stimulus geometry or the
@@ -813,7 +862,7 @@ public final class TracingViewModel {
         haptics.prepare()
         // Two-phase init: build with a no-op callback, wire the real
         // `[weak self]` once every stored property is assigned.
-        let pb = deps.makePlaybackController(deps.audio) { _ in }
+        let pb = deps.makePlaybackController(effectiveAudio) { _ in }
         self.playback = pb
         // Same pattern for touchDispatcher / phaseTransitions.
         let td = TouchDispatcher()
@@ -823,12 +872,21 @@ public final class TracingViewModel {
         pb.onIsPlayingChanged = { [weak self] in self?.isPlaying = $0 }
         td.vm = self
         ptc.vm = self
-        letters = repo.loadLettersFast()
+        // Study devices always parse the bundle. `loadLettersFast()`
+        // serves the on-disk letter cache whenever its sentinel matches
+        // `CFBundleShortVersionString-CFBundleVersion` — which is the
+        // constant "1.0-1" in every configuration of this project — so a
+        // study build re-deployed over an existing install would keep
+        // tracing and SCORING the previous build's strokes.json while
+        // `resolvedStrokes(for:)` reports "bundle geometry". The frozen-
+        // stimulus claim (thesis Ch.5) rests on the bundle, not on a
+        // cache keyed by a version string nobody bumps (2026-09-04).
+        letters = deps.studyMode ? repo.loadLetters() : repo.loadLettersFast()
         // Seed the mirror so the rail badge + gallery pick up
         // pre-existing progress on first render.
         allProgress = progressStore.allProgress
         // Surface startup audio failures as a brief toast.
-        if let audioError = deps.audio.initializationError {
+        if let audioError = effectiveAudio.initializationError {
             messages.show(toast: audioError)
         }
         guard let first = letters.first else { return }
@@ -900,6 +958,16 @@ public final class TracingViewModel {
     }
 
     func replayAudio() {
+        // Study sessions: no on-demand replay. The arm's sound reaches
+        // the child ONLY through the trace coupling (thesis Ch.4) and
+        // the one scripted pre-task demonstration (D9). This entry is
+        // wired to the Apple Pencil squeeze / double-tap, a VoiceOver
+        // custom action, and the retrieval prompt — none of which the
+        // design describes, all of which would add sound-arm-only
+        // exposure the silent arm cannot match, and which bypass the
+        // freeWrite sound-off gate outright (`loadAudioFile(autoplay:
+        // true)` loops the file regardless of phase). Gated 2026-09-04.
+        guard !studyMode else { return }
         // Reloads and autoplays the active cell's letter audio.
         // Silence is acceptable for letters without audio assets.
         let activeLetter = gridCellLetter(at: gridActiveCellIndex)
@@ -940,14 +1008,18 @@ public final class TracingViewModel {
                 if !asset.phonemeAudioFiles.isEmpty {
                     return asset.phonemeAudioFiles
                 }
-                // Residual, unavoidable confound: this letter has no
-                // phoneme recording (the H5/P6 gap), so the phoneme arm
-                // degrades to name audio. Logged — not silent — at
-                // letter-load frequency so a study run isn't quietly
-                // confounded. The real fix is recording the phoneme (H5).
-                pilotAudioLogger.warning(
-                    "Phoneme-arm study device: letter '\(asset.name, privacy: .public)' has no phoneme recording — degrading to name audio (H5/P6 gap).")
-                return asset.audioFiles
+                // FAIL CLOSED (ruling C3-6, 2026-09-04). This letter has
+                // no phoneme recording (the H5 gap). Degrading to the
+                // name/word audio used to play a WRONG stimulus under the
+                // phoneme label (for M the first name file is the word
+                // "Meer"); returning nothing here alone would make a
+                // second silent arm nobody notices. So: no file, AND the
+                // session is refused before any trace can start — see
+                // `studyPreconditionFailure`, which the Schule surface
+                // shows and `beginTouch` honours.
+                pilotAudioLogger.error(
+                    "Phoneme-arm study device: letter '\(asset.name, privacy: .public)' has no phoneme recording — REFUSING (H5). No name/word audio is substituted.")
+                return []
             }
             // Off study devices: preserve the exact pre-pilot toggle so
             // casual users are byte-identical.
@@ -1005,8 +1077,23 @@ public final class TracingViewModel {
                 // below. Checked BEFORE any side effect, not just before
                 // the sleep.
                 guard let self, !Task.isCancelled else { return }
+                // Rate/pan reset before playing — mirrors the .spatial
+                // branch below. Without this, the phoneme plays at
+                // whatever rate/pan the PREVIOUS letter's touch coupling
+                // left the engine in, from the second letter on.
+                self.audio.setAdaptivePlayback(speed: 1.0, horizontalBias: 0)
                 self.audio.loadAudioFile(named: first, autoplay: true)
                 try? await Task.sleep(for: .seconds(duration))
+                // loadAudioFile(autoplay: true) schedules LOOPING
+                // playback (AudioEngine.scheduleLooping) — without this
+                // stop, the phoneme keeps looping past the intended
+                // 2.0 s window for the rest of the (touch-disabled)
+                // observe phase. Guarded like .spatial's own stop below:
+                // a cancelled task (superseded by the next letter, or a
+                // real touch beginning) skips it, since a fresher demo
+                // or the real touch coupling is already driving the
+                // engine by then.
+                if !Task.isCancelled { self.audio.stop() }
             }
         case .spatial:
             let samples = PreTaskDemonstration.axisSweep(duration: duration)
@@ -1074,9 +1161,33 @@ public final class TracingViewModel {
     /// `visibleLetterNames` (that filter is UI-only), which is what makes
     /// this reachable at all.
     func startPostTest(letter: String) {
-        guard studyMode, trainedSubset.untrainedLetters.contains(letter) else { return }
-        pendingPostTestOverride = true
+        startColdProbe(letter: letter, kind: .posttest)
+    }
+
+    /// Open a study letter COLD in the freeWrite phase as the given probe
+    /// (2026-09-04, generalising the H6 post-test route). `.pretest` and
+    /// `.delayed` accept any of the five study letters — the thesis's
+    /// pretest covers all five, trained included, and so does the delayed
+    /// retention test; `.posttest` keeps H6's restriction to the untrained
+    /// pair. The kind is stamped on the letter's rows. Refused outside
+    /// study mode and for any letter outside the study set.
+    func startColdProbe(letter: String, kind: StudyProbe) {
+        guard studyMode,
+              kind.permits(letter: letter,
+                           untrained: trainedSubset.untrainedLetters,
+                           studyLetters: studyBaseLetters) else { return }
+        pendingProbeOverride = kind
         loadLetter(name: letter)
+    }
+
+    /// Whether the filled reference glyph is drawn on the canvas. Study
+    /// freeWrite — training pass or cold probe — writes the letter FROM
+    /// MEMORY (thesis Ch.3, Ch.6, Abstract): until 2026-09-04 the filled
+    /// font outline stayed on screen in every phase, so the "from memory"
+    /// outcome was copying over a visible model. Outside the study the
+    /// casual app keeps its outline.
+    var showsReferenceGlyph: Bool {
+        !(studyMode && learningPhase == .freeWrite)
     }
 
     var allLetterNames: [String] { letters.map(\.name) }
@@ -1122,6 +1233,14 @@ public final class TracingViewModel {
     }
 
     func nextAudioVariant() {
+        // Study sessions: the two-finger canvas swipe that cycles takes
+        // would (a) autoplay the arm's sound in any phase, freeWrite and
+        // post-test included, bypassing the sound-off gate, and (b) let
+        // the child pick which take plays, unrecorded. Every study load
+        // resets `audioIndex` to 0, so the realised file is a
+        // deterministic function of (letter, arm, bundle). Gated
+        // 2026-09-04, same reasoning as `replayAudio`.
+        guard !studyMode else { return }
         guard !letters.isEmpty else { return }
         let files = activeAudioFiles(for: letters[letterIndex])
         guard !files.isEmpty else { return }
@@ -1134,6 +1253,8 @@ public final class TracingViewModel {
     }
 
     func previousAudioVariant() {
+        // See `nextAudioVariant`.
+        guard !studyMode else { return }
         guard !letters.isEmpty else { return }
         let files = activeAudioFiles(for: letters[letterIndex])
         guard !files.isEmpty else { return }
@@ -1173,7 +1294,17 @@ public final class TracingViewModel {
         guard playback.appIsForeground else { return }
         playback.appIsForeground = false
         playback.cancelPending()
+        // Study mode: a freeWrite production that is finished (pen up)
+        // but not yet scored — quiet window pending, or recognizer in
+        // flight — is scored and recorded now, before the stores drain
+        // below. The trial most at risk is the last one of a session:
+        // the proctor closes the app right after the child lifts the
+        // pen, and the async completion never ran. A production with the
+        // finger still down is left alone; the child may resume
+        // (2026-09-04).
+        let wasTouching = touchDispatcher.isSingleTouchInteractionActive
         endTouch()
+        if !wasTouching { phaseTransitions.finalizeFinishedFreeWriteIfPending() }
         // Stop the active-time timer so backgrounded time isn't
         // counted; the accumulator survives the round-trip.
         if let start = letterLoadTime {
@@ -1359,6 +1490,15 @@ public final class TracingViewModel {
         }
     }
 
+    /// Drop any in-flight recognizer completion so it cannot land after
+    /// the trial has been recorded by another route. Used by the
+    /// study-mode unload / background path
+    /// (`PhaseTransitionCoordinator.finalizeFinishedFreeWriteIfPending`).
+    func abortInFlightRecognition() {
+        recognitionTokens.cancel()
+        freeform.isRecognizing = false
+    }
+
     /// Record the paper-transfer self-assessment and advance the queue.
     func submitPaperTransfer(score: Double) {
         progressStore.recordPaperTransferScore(for: currentLetterName, score: score)
@@ -1538,6 +1678,28 @@ public final class TracingViewModel {
     /// or continuants, so every study letter is loopable (moots D6).
     private let studyBaseLetters = Set(TrainedLetterSubset.studyLetters)
 
+    /// Non-nil when a study session MUST NOT start (ruling C3-6,
+    /// 2026-09-04): a phoneme-arm study device whose bundled study
+    /// letters lack phoneme recordings. Computed from the loaded letters
+    /// so a device with the recordings clears it. The Schule surface
+    /// replaces the canvas with this message and `beginTouch` refuses
+    /// every trace while it is set — a phoneme session that measures
+    /// nothing must be impossible to run by mistake, the same shape as
+    /// the CoreML model that never loaded. Proctor-facing text (the
+    /// child never sees a session in this state).
+    var studyPreconditionFailure: String? {
+        guard studyMode, audioCondition == .phoneme else { return nil }
+        let missing = letters
+            .filter { studyBaseLetters.contains($0.baseLetter) && $0.letterCase == .upper
+                      && $0.phonemeAudioFiles.isEmpty }
+            .map(\.name)
+            .sorted()
+        guard !missing.isEmpty else { return nil }
+        return "Phonem-Arm ohne Phonem-Aufnahmen für: \(missing.joined(separator: ", ")). "
+            + "Die Sitzung wird nicht gestartet — es würde ein falscher oder gar kein Laut gespielt. "
+            + "Aufnahmen als <Buchstabe>_phoneme<n>.mp3 in Resources/Letters/<Buchstabe>/ ablegen (H5)."
+    }
+
     /// Visible letters, sorted by `letterOrdering`. `studyMode` pins the
     /// pool to the 5-letter UPPERCASE pilot stimulus set regardless of
     /// `showAllLetters`; outside study sessions the app stays
@@ -1710,15 +1872,26 @@ public final class TracingViewModel {
     /// scheduler advances after a celebration) all default to
     /// `playPhaseCue: true` because by then the app is settled.
     private func load(letter: LetterAsset, playPhaseCue: Bool = true) {
+        // Study mode: the OUTGOING letter's trial must not vanish — a
+        // finished-but-unscored freeWrite is scored and recorded, a
+        // letter left mid-phase gets a `completed: false` row. Runs
+        // BEFORE anything below resets state; a no-op at init and for an
+        // untouched letter. See PhaseTransitionCoordinator
+        // .recordUnloadOfCurrentLetter (2026-09-04).
+        phaseTransitions.recordUnloadOfCurrentLetter(
+            touchStillActive: touchDispatcher.isSingleTouchInteractionActive)
         phaseController.reset()
-        // H6 post-test override, consumed here so it never leaks into the
-        // NEXT letter load. Landing directly in freeWrite is already a
-        // supported shape below (activePhases requires .threePhase, which
-        // studyMode always runs under) — the "if phaseController.currentPhase
-        // == .freeWrite" checks further down already handle starting the
-        // freeWriteRecorder session correctly for a phase reached this way.
-        if pendingPostTestOverride {
-            pendingPostTestOverride = false
+        // Cold-probe override (pretest / post-test / delayed), consumed
+        // here so it never leaks into the NEXT letter load. Landing
+        // directly in freeWrite is a supported shape below (activePhases
+        // requires .threePhase, which studyMode pins) — the "if
+        // phaseController.currentPhase == .freeWrite" checks further down
+        // handle starting the freeWriteRecorder session for a phase
+        // reached this way. `currentProbe` is what the rows get stamped
+        // with; a normal training load clears it.
+        currentProbe = pendingProbeOverride
+        pendingProbeOverride = nil
+        if currentProbe != nil {
             phaseController.resume(at: .freeWrite)
         }
         freeWriteRecorder.clearAll()

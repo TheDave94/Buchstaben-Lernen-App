@@ -84,10 +84,28 @@ import CoreGraphics
             id: UUID(), letter: "A", recordedAt: Date(timeIntervalSince1970: 1_770_000_000),
             points: [CGPoint(x: 1.5, y: 2.5), CGPoint(x: 3.5, y: 4.5)],
             timestamps: [0.0, 0.25], forces: [0.0, 0.9],
-            strokeStartIndices: [1], canvasSize: CGSize(width: 800, height: 600))
+            strokeStartIndices: [1], canvasSize: CGSize(width: 800, height: 600),
+            referenceStrokes: LetterStrokes(letter: "A", checkpointRadius: 0.05, strokes: [
+                StrokeDefinition(id: 1, checkpoints: [Checkpoint(x: 0.1, y: 0.2), Checkpoint(x: 0.9, y: 0.2)])
+            ]))
         let data = try JSONEncoder().encode(trace)
         let back = try JSONDecoder().decode(RawTrace.self, from: data)
         #expect(back == trace)
+        #expect(back.referenceStrokes?.strokes.first?.checkpoints.count == 2)
+    }
+
+    @Test("a trace written before referenceStrokes existed still decodes")
+    func legacyTraceWithoutReferenceDecodes() throws {
+        let legacyJSON = """
+        {"id":"00000000-0000-0000-0000-000000000001","letter":"A",
+         "recordedAt":1770000000,"points":[[1.5,2.5]],"timestamps":[0],
+         "forces":[0],"strokeStartIndices":[],"canvasSize":[800,600]}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let back = try decoder.decode(RawTrace.self, from: legacyJSON)
+        #expect(back.referenceStrokes == nil)
+        #expect(back.points.count == 1)
     }
 
     // MARK: - Reset wipes the store

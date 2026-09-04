@@ -50,8 +50,14 @@ final class StubResourceProvider: LetterResourceProviding {
         let data = try! JSONSerialization.data(withJSONObject: strokes, options: .prettyPrinted)
         try? data.write(to: letterDir.appendingPathComponent("strokes.json"))
 
-        // Dummy audio file (zero bytes — StubAudio ignores it)
+        // Dummy audio files (zero bytes — StubAudio ignores them). The
+        // phoneme take is REQUIRED since 2026-09-04: a phoneme-arm study
+        // VM refuses to trace a study letter without one
+        // (`studyPreconditionFailure`), and the fixture letter A is a
+        // study letter. Tests that mean to exercise the refusal build a
+        // phoneme-less asset themselves.
         try? Data().write(to: letterDir.appendingPathComponent("A.mp3"))
+        try? Data().write(to: letterDir.appendingPathComponent("A_phoneme1.mp3"))
 
         return dir
     }()
@@ -111,7 +117,7 @@ final class StubDashboardStore: ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?) {}
-    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?, frechetDistance: Double?, checkpointCoverage: Double?, spatialDeviation: Double?, strokeCount: Int?, strokeOrder: String?, reversedStrokeCount: Int?) {}
+    func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?, frechetDistance: Double?, checkpointCoverage: Double?, spatialDeviation: Double?, strokeCount: Int?, strokeOrder: String?, reversedStrokeCount: Int?, studyMode: Bool?, probe: String?) {}
     func reset() {}
 }
 

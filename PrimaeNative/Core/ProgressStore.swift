@@ -387,9 +387,22 @@ public final class JSONProgressStore: ProgressStoring {
     // MARK: Persistence
 
     private static func load(from url: URL) -> Store {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(Store.self, from: data)
-        else { return Store() }
+        // No file yet is the ordinary first-launch case and stays quiet.
+        guard let data = try? Data(contentsOf: url) else { return Store() }
+        let decoded: Store
+        do {
+            decoded = try JSONDecoder().decode(Store.self, from: data)
+        } catch {
+            // A file that EXISTS but does not decode used to be
+            // indistinguishable from a fresh install (2026-09-04): the
+            // store came up empty with no log line and the next save
+            // atomically replaced the undecodable file. Say so loudly
+            // and move the file aside so nothing is destroyed.
+            storePersistenceLogger.error(
+                "ProgressStore at \(url.path, privacy: .public) exists but failed to decode (\(error.localizedDescription, privacy: .public)) — starting EMPTY.")
+            StoreFileQuarantine.quarantine(url)
+            return Store()
+        }
         // Refuse files from a future schema — silently dropping
         // unknown fields would clobber them on next save.
         if let v = decoded.schemaVersion, v > currentSchemaVersion {

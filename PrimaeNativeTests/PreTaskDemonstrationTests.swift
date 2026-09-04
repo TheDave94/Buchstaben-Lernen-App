@@ -151,7 +151,7 @@ fileprivate final class RecordingAudio: AudioControlling {
                 "silent arm's demonstration is the unchanged visual animation, not audio")
     }
 
-    @Test("phoneme arm: sound-letter exposure plays the letter's phoneme once")
+    @Test("phoneme arm: sound-letter exposure plays the letter's phoneme once, then stops")
     func phonemeArm_playsPhonemeOnce() async {
         let audio = RecordingAudio()
         let vm = TracingViewModel(.stub.with(audioCondition: .phoneme).with(audio: audio).with(studyMode: true))
@@ -161,9 +161,18 @@ fileprivate final class RecordingAudio: AudioControlling {
         #expect(audio.loadedFiles == ["A_phoneme1.mp3"])
         #expect(audio.autoplayFlags == [true])
         // Not trace-coupled: the phoneme demo never drives the
-        // per-tick pitch/pan coupling — it's a single scripted play.
-        #expect(audio.setAdaptiveCount == 0)
+        // per-tick pitch/pan coupling — but it DOES reset rate/pan once
+        // before playing (so the phoneme doesn't inherit whatever the
+        // PREVIOUS letter's touch coupling left the engine in), same as
+        // the spatial arm's own one-time setup below.
+        #expect(audio.setAdaptiveCount == 1)
         #expect(audio.spatialPitches.isEmpty)
+        // Let the short demo run to completion.
+        await waitUntil { audio.stopCount > 0 }
+        #expect(audio.stopCount == 1,
+                "loadAudioFile(autoplay: true) schedules LOOPING playback — the demo must " +
+                "stop it when the 2 s window ends, or the phoneme keeps looping into the " +
+                "rest of the (touch-disabled) observe phase")
     }
 
     @Test("spatial arm: axis demonstration loads the carrier and sweeps pitch/pan, then stops")

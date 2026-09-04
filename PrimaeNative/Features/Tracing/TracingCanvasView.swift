@@ -52,7 +52,9 @@ struct TracingCanvasView: View {
                 // Background glyph as a vector path from the OTF
                 // outline (resolution-independent). Skipped in word
                 // mode — the whole-word image was drawn above.
-                if wordRendering == nil,
+                // Not in study freeWrite: the child writes from memory
+                // there (`showsReferenceGlyph`, 2026-09-04).
+                if wordRendering == nil, vm.showsReferenceGlyph,
                    let glyph = PrimaeLetterRenderer.glyphPath(
                        letter: cellLetter, size: cellSize, schriftArt: vm.schriftArt,
                        openTypeFeatures: PrimaeLetterRenderer.openTypeFeatures(

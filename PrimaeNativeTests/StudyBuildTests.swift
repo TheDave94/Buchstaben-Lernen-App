@@ -57,13 +57,21 @@ import Foundation
         #endif
     }
 
-    @Test("A stored value wins over the build default, in both directions")
+    @Test("Normal build: a stored value wins over the default; study build: a stored OFF is IGNORED")
     func storedValueWins() {
-        // The toggle survives for device prep, so it must beat the
-        // default once a proctor has actually set it.
         let defaults = scratchDefaults("stored")
         defaults.set(false, forKey: Self.key)
+        #if STUDY_BUILD
+        // Ruling Q1 (2026-09-04): the study binary cannot be configured
+        // into a non-study state. A stored OFF — left by an earlier
+        // normal build on the same device, or by a tap — must not win.
+        #expect(StudyBuild.resolveStudyMode(in: defaults, key: Self.key),
+                "a study build must stay in study mode with OFF stored")
+        #else
+        // The toggle survives for device prep on a normal build, so it
+        // must beat the default once a proctor has actually set it.
         #expect(!StudyBuild.resolveStudyMode(in: defaults, key: Self.key))
+        #endif
         defaults.set(true, forKey: Self.key)
         #expect(StudyBuild.resolveStudyMode(in: defaults, key: Self.key))
     }
