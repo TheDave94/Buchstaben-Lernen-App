@@ -23,7 +23,29 @@ public final class TracingViewModel {
     var showCalibration     = false
     /// Drops all learning-phase overlays during calibration so the
     /// calibrator's dots aren't buried under phase UI.
-    var isCalibrating: Bool { showDebug && showCalibration }
+    ///
+    /// COMPILE-TIME FALSE ON STUDY_BUILD (2026-09-04 — gate the SOURCE,
+    /// not each of its ~10 call sites): `StrokeCalibrationOverlay` itself
+    /// is already `#if !STUDY_BUILD`-gated out of the study binary
+    /// (Q2), but `isCalibrating` is read UNCONDITIONALLY throughout
+    /// `TracingCanvasView.swift` to suppress ghost lines, checkpoints,
+    /// hit-testing, and the animation guide point — every one of those
+    /// reads was reachable on a study build via the completely
+    /// unprotected "Striche kalibrieren" Settings toggle
+    /// (`SettingsView.swift`, itself since hidden on STUDY_BUILD too).
+    /// Flipping it degraded the child-facing tracing canvas — checkpoints
+    /// and ghost lines silently vanish — with no way back, since the
+    /// overlay that would let anyone exit calibration mode never
+    /// renders on that build. Gating the property itself protects every
+    /// reader at once, the same "gate the symbol, not the call site"
+    /// discipline `StrokeCalibrationOverlay.swift`'s own header states.
+    var isCalibrating: Bool {
+        #if STUDY_BUILD
+        return false
+        #else
+        return showDebug && showCalibration
+        #endif
+    }
 
     /// Bottom-screen band reserved for the calibrator's UI bar.
     /// `TracingCanvasView` shrinks the glyph by this much during

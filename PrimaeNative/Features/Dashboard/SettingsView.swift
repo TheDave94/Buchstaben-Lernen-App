@@ -181,6 +181,18 @@ struct SettingsView: View {
                     .accessibilityHint("Nur für Studienleitung. Legt fest, welche 3 der 5 Studienbuchstaben dieses Kind übt, anstatt die automatische Zuweisung zu verwenden — für ausgewogenes Counterbalancing. Änderung wird beim nächsten App-Start wirksam.")
                 }
             }
+            // Hidden on STUDY_BUILD (2026-09-04): the overlay this
+            // toggle targets is itself `#if !STUDY_BUILD`-gated out of
+            // the study binary (Q2), which made this toggle silently
+            // inert there — but `vm.isCalibrating` flipping true still
+            // degraded the child-facing tracing canvas (checkpoints,
+            // ghost lines, hit-testing all suppress on `isCalibrating`),
+            // with no calibration UI ever appearing to undo it. Fixed at
+            // the source (`TracingViewModel.isCalibrating` is now
+            // compile-time false on STUDY_BUILD too) — hiding the
+            // toggle here besides is just honesty: a control that can no
+            // longer do anything shouldn't still invite a tap.
+            #if !STUDY_BUILD
             Section("Werkzeuge") {
                 Toggle("Striche kalibrieren", isOn: Binding(
                     get: { vm.showDebug && vm.showCalibration },
@@ -194,6 +206,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(Color.inkSoft)
             }
+            #endif
             Section("Hilfe") {
                 // A/B onboarding length. Default off (7-step). The
                 // first-run variant is locked into OnboardingStore on
