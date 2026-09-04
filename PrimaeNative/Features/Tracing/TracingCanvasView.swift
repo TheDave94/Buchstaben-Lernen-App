@@ -215,6 +215,9 @@ struct TracingCanvasView: View {
         .contentShape(Rectangle())
     }
 
+    // COMPILED OUT OF THE STUDY BUILD — see the call site's comment
+    // above (`body`'s `.overlay(Group { ... })` for `.kpOverlay`).
+    #if !STUDY_BUILD
     @ViewBuilder
     private func freeWriteKPOverlay() -> some View {
         Canvas { context, size in
@@ -271,6 +274,7 @@ struct TracingCanvasView: View {
         .onTapGesture { vm.overlayQueue.dismiss() }
         // Auto-dismiss owned by OverlayQueueManager.
     }
+    #endif
 
     var body: some View {
         GeometryReader { geo in
@@ -343,9 +347,22 @@ struct TracingCanvasView: View {
             )
             .overlay(
                 Group {
+                    // KP (Knowledge of Performance) overlay — child-
+                    // reachable, not the tracing task (feedback ABOUT the
+                    // trace after it's done, not the trace itself), not
+                    // proctor-facing, not a research surface. Enqueue
+                    // site already `!studyMode`-gated
+                    // (PhaseTransitionCoordinator.celebrateFreeWrite);
+                    // compiled out here too so `freeWriteKPOverlay()`
+                    // itself is absent from the study binary, matching
+                    // the other overlay surfaces (RecognitionFeedbackView
+                    // etc.) rather than leaving this one as the sole
+                    // runtime-only exception.
+                    #if !STUDY_BUILD
                     if case .kpOverlay = vm.overlayQueue.currentOverlay {
                         freeWriteKPOverlay()
                     }
+                    #endif
                 }
             )
             .overlay(

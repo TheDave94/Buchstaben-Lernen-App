@@ -427,7 +427,13 @@ jobs:
                     OnboardingView
                     StrokeCalibrationOverlay
                     ParentDashboardView
-                    PhaseRatesView"
+                    PhaseRatesView
+                    PaperTransferView
+                    CompletionCelebrationOverlay
+                    RewardCelebrationOverlay
+                    RetrievalPromptView
+                    RecognitionFeedbackView
+                    freeWriteKPOverlay"
           if [ -n "$STUDY" ] && [ -n "$NORMAL" ]; then
             for sym in $SURFACES; do
               in_study=$(sym_in_bundle "$STUDY" "$sym")

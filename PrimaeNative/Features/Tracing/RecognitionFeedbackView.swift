@@ -7,7 +7,18 @@
 //   • orange (wrong & confident, conf > 0.7)
 // Raw confidence below 0.4 renders nothing; auto-dismissed by
 // OverlayQueueManager after 3 s, or earlier on tap.
-
+//
+// COMPILED OUT OF THE STUDY BUILD. Child-reachable, not the tracing
+// task (post-freeWrite feedback ABOUT the trace, not the trace itself),
+// not proctor-facing, not a research surface — decided by the recorded
+// classification criteria. Both construction sites were already
+// `!studyMode`-gated (PhaseTransitionCoordinator.celebrateFreeWrite's
+// enqueue, and requestFreeWriteRetry which is itself only reachable
+// when `!vm.studyMode`); this closes the gap between "never
+// constructed" and "never compiled in", matching
+// StrokeCalibrationOverlay's precedent. The CI identity scan asserts
+// this via SURFACES (ios-build.yml).
+#if !STUDY_BUILD
 import SwiftUI
 
 struct RecognitionFeedbackView: View {
@@ -127,4 +138,5 @@ struct RecognitionFeedbackView: View {
     )
     .padding()
 }
+#endif
 #endif

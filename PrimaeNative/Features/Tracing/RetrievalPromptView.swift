@@ -5,7 +5,15 @@
 // Every Nth letter selection plays the audio and shows three
 // candidates; the child's answer lands on
 // `LetterProgress.retrievalAttempts`.
-
+//
+// COMPILED OUT OF THE STUDY BUILD. Child-reachable, not the tracing
+// task, not proctor-facing, not a research surface — decided by the
+// recorded classification criteria. Its enqueue site was already
+// `studyMode`-gated (TracingViewModel.loadRecommendedLetter's early
+// return); this closes the gap between "never enqueued" and "never
+// compiled in", matching StrokeCalibrationOverlay's precedent. The CI
+// identity scan asserts this via SURFACES (ios-build.yml).
+#if !STUDY_BUILD
 import SwiftUI
 
 struct RetrievalPromptView: View {
@@ -129,3 +137,4 @@ struct RetrievalPromptView: View {
                             : "Tippen, um diese Antwort zu wählen.")
     }
 }
+#endif

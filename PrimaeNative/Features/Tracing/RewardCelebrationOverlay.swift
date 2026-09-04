@@ -4,7 +4,17 @@
 // Immediate "you just earned this" moment for an unlocked
 // `RewardEvent`; the persistent badge lives in the Fortschritte
 // gallery. Auto-dismissed by the OverlayQueueManager.
-
+//
+// COMPILED OUT OF THE STUDY BUILD. Child-reachable, not the tracing
+// task, not proctor-facing, not a research surface — decided by the
+// recorded classification criteria. Its enqueue site was already
+// `!studyMode`-gated (PhaseTransitionCoordinator.commitCompletion:
+// "reward systems are off so all arms are identical, audit C2"); this
+// closes the gap between "never enqueued" and "never compiled in",
+// matching StrokeCalibrationOverlay's precedent and the sibling
+// Fortschritte gallery it feeds, which is already excluded the same
+// way. The CI identity scan asserts this via SURFACES (ios-build.yml).
+#if !STUDY_BUILD
 import SwiftUI
 
 struct RewardCelebrationOverlay: View {
@@ -73,3 +83,4 @@ struct RewardCelebrationOverlay: View {
         }
     }
 }
+#endif

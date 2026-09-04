@@ -126,6 +126,14 @@ struct SchuleWorldView: View {
     private var queuedModalOverlay: some View {
         switch vm.overlayQueue.currentOverlay {
         case .recognitionBadge(let result):
+            // Enqueue sites are already `!studyMode`-gated (see
+            // RecognitionFeedbackView.swift's header) — this can never
+            // actually be `.recognitionBadge` under studyMode. The
+            // `#else EmptyView()` branch is unreachable in practice, not
+            // a behavior change; it exists because RecognitionFeedbackView
+            // itself is compiled out of the study binary and this switch
+            // must still type-check there.
+            #if !STUDY_BUILD
             VStack {
                 Spacer().frame(height: 88)
                 RecognitionFeedbackView(
@@ -139,28 +147,44 @@ struct SchuleWorldView: View {
                         ? .opacity
                         : .opacity.combined(with: .scale(scale: 0.9)))
             .zIndex(12)
+            #else
+            EmptyView()
+            #endif
         case .paperTransfer(let letter):
+            #if !STUDY_BUILD
             PaperTransferView(letter: letter) { score in
                 vm.submitPaperTransfer(score: score)
             }
             .transition(.opacity)
             .zIndex(15)
+            #else
+            EmptyView()
+            #endif
         case .celebration(let stars):
+            #if !STUDY_BUILD
             CompletionCelebrationOverlay(starsEarned: stars, maxStars: vm.maxStars) {
                 vm.loadRecommendedLetter()
             }
             .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
             .zIndex(20)
+            #else
+            EmptyView()
+            #endif
         case .rewardCelebration(let event):
             // 2.5 s one-shot achievement celebration. Queue auto-
             // dismisses; tap-to-dismiss for impatient users.
+            #if !STUDY_BUILD
             RewardCelebrationOverlay(event: event)
                 .onTapGesture { vm.overlayQueue.dismiss() }
                 .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
                 .zIndex(25)
+            #else
+            EmptyView()
+            #endif
         case .retrievalPrompt(let letter, let distractors):
             // Spaced-retrieval prompt. Modal — child must answer
             // before tracing begins.
+            #if !STUDY_BUILD
             RetrievalPromptView(
                 target: letter,
                 distractors: distractors,
@@ -171,6 +195,9 @@ struct SchuleWorldView: View {
             )
             .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
             .zIndex(22)
+            #else
+            EmptyView()
+            #endif
         case .kpOverlay:
             // Rendered inside `TracingCanvasView` — it needs canvas
             // geometry and reference-stroke data.

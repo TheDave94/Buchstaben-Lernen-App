@@ -1,3 +1,12 @@
+// COMPILED OUT OF THE STUDY BUILD.
+// Child-reachable, not the tracing task, not proctor-facing, not a
+// research surface — decided by the recorded classification criteria.
+// `enablePaperTransfer`'s enqueue site was already `!studyMode`-gated
+// (PhaseTransitionCoordinator.celebrateFreeWrite); this closes the gap
+// between "never enqueued" and "never compiled in", matching
+// StrokeCalibrationOverlay's precedent. The CI identity scan asserts
+// this via SURFACES (ios-build.yml).
+#if !STUDY_BUILD
 import SwiftUI
 
 /// Overlay shown after the freeWrite phase when paper-transfer mode is enabled.
@@ -96,3 +105,4 @@ struct PaperTransferView: View {
         .accessibilityLabel(label)
     }
 }
+#endif
