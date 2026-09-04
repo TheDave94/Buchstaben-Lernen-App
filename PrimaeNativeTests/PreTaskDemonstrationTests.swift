@@ -169,10 +169,9 @@ fileprivate final class RecordingAudio: AudioControlling {
         #expect(audio.spatialPitches.isEmpty)
         // Let the short demo run to completion.
         await waitUntil { audio.stopCount > 0 }
+        // One literal: a `+`-concatenated String is not a `Comment` (CI run 1636).
         #expect(audio.stopCount == 1,
-                "loadAudioFile(autoplay: true) schedules LOOPING playback — the demo must " +
-                "stop it when the 2 s window ends, or the phoneme keeps looping into the " +
-                "rest of the (touch-disabled) observe phase")
+                "loadAudioFile(autoplay: true) schedules LOOPING playback — the demo must stop it when the 2 s window ends, or the phoneme keeps looping into the rest of the (touch-disabled) observe phase")
     }
 
     @Test("spatial arm: axis demonstration loads the carrier and sweeps pitch/pan, then stops")
