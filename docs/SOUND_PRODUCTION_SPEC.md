@@ -1,6 +1,21 @@
 # SOUND_PRODUCTION_SPEC.md — Pilot sound-asset production
 
-> **Scope.** The working procedure for producing the two pilot sound-asset
+> **Status 2026-09-04 — partly superseded (supervisor ruling C3-5: the
+> document is stale, not the app).** This procedure was written for the
+> full-alphabet phoneme set and for an abstract-sound set that PREDATE
+> the five-letter study design (A, F, I, L, M; 2026-07-06) and the
+> spatial third arm (same date; DECISIONS D2 superseded). What the pilot
+> needs from this document is §3 (shared constraints), §4.1 (no-schwa
+> Anlaut rule) and §4.3 (recording checklist) applied to FIVE recordings:
+> `A_phoneme<n>`, `F_phoneme<n>`, `I_phoneme<n>`, `L_phoneme<n>`,
+> `M_phoneme<n>` in `Resources/Letters/<Letter>/`. The D6 stop-consonant
+> question (§4.2) does not arise for these five. §5 (abstract set) and the
+> "two sets to one standard" framing apply to the full-scale study's
+> fourth arm (thesis Ch.7), not to the pilot. Since 2026-09-04 the app
+> REFUSES to start a phoneme-arm study session while any of the five
+> recordings is missing (ruling C3-6), so their absence cannot be missed.
+>
+> **Scope (original).** The working procedure for producing the two pilot sound-asset
 > sets — the **phoneme** set (recorded) and the **abstract-sound** set
 > (designed) — to one consistent technical and perceptual standard.
 >
