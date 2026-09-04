@@ -1275,10 +1275,14 @@ public final class TracingViewModel {
         // FreeformController owns the spinner flag — only one
         // recognition is ever in flight.
         freeform.isRecognizing = true
-        // Recognition history feeds the calibrator's practised-letter
-        // boost; empty on first encounter (skipped path).
+        // Form-accuracy history feeds the calibrator's practised-letter
+        // boost; empty on first encounter (skipped path). NOT
+        // `recognitionAccuracy` — that is the recognizer's own past
+        // CONFIDENCE, a different instrument from "has this child
+        // historically formed this letter well" (2026-09-04 fix; see
+        // `ProgressStoring.recordCompletion` and `formAccuracyHistory`).
         let history = (progressStore.progress(for: expected)
-                       .recognitionAccuracy ?? [])
+                       .formAccuracyHistory ?? [])
                       .map { CGFloat($0) }
         let token = recognitionTokens.issue()
         Task { [weak self, letterRecognizer] in
@@ -2250,7 +2254,9 @@ public final class TracingViewModel {
         let historyByLetter: [String: [CGFloat]] = Dictionary(
             targetLetters.map { ch -> (String, [CGFloat]) in
                 let key = String(ch)
-                let scores = (progressStore.progress(for: key).recognitionAccuracy ?? [])
+                // formAccuracyHistory, not recognitionAccuracy — see the
+                // 2026-09-04 fix note on runRecognizerForFreeWrite.
+                let scores = (progressStore.progress(for: key).formAccuracyHistory ?? [])
                               .map { CGFloat($0) }
                 return (key, scores)
             },

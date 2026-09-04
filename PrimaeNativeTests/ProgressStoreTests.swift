@@ -197,6 +197,60 @@ import Foundation
         #expect(p.recognitionAccuracy?.last.map { abs($0 - 0.62) < 1e-6 } == true)
     }
 
+    // MARK: - formAccuracy history (2026-09-04 fix)
+    //
+    // The calibrator's practised-letter boost ("historicalFormScores")
+    // is documented to need geometric form accuracy — how well the
+    // child has historically FORMED the letter, not how confident the
+    // recognizer has been. Before this fix, no channel carrying real
+    // form-accuracy history existed at all, and the read site silently
+    // substituted `recognitionAccuracy` (confidence). These tests pin
+    // the two channels as genuinely separate.
+
+    @Test("recordCompletion with formAccuracy populates formAccuracyHistory, independent of recognitionResult confidence")
+    func recordCompletion_populatesFormAccuracyHistory_separateFromConfidence() {
+        let result = RecognitionResult(
+            predictedLetter: "A", confidence: 0.30,
+            topThree: [.init(letter: "A", confidence: 0.30)], isCorrect: true)
+        store.recordCompletion(for: "A", accuracy: 0.8, phaseScores: nil, speed: nil,
+                               recognitionResult: result, formAccuracy: 0.95)
+        let p = store.progress(for: "A")
+        #expect(p.formAccuracyHistory == [0.95],
+                "a well-formed letter (0.95) with a LOW recognizer confidence (0.30) must still record the true form accuracy")
+        #expect(p.recognitionAccuracy?.last.map { abs($0 - 0.30) < 1e-6 } == true,
+                "recognitionAccuracy must independently keep the recognizer's own confidence")
+    }
+
+    @Test("formAccuracy nil (no freeWrite phase this session) leaves formAccuracyHistory untouched")
+    func recordCompletion_nilFormAccuracy_doesNotAppend() {
+        store.recordCompletion(for: "B", accuracy: 0.8, phaseScores: nil, speed: nil,
+                               recognitionResult: nil, formAccuracy: nil)
+        #expect(store.progress(for: "B").formAccuracyHistory == nil)
+    }
+
+    @Test("formAccuracyHistory caps at the same rolling window as recognitionAccuracy")
+    func formAccuracyHistory_capsAtTen() {
+        for i in 0..<12 {
+            let fa = 0.5 + (Double(i) * 0.04)
+            store.recordCompletion(for: "C", accuracy: 0.8, phaseScores: nil, speed: nil,
+                                   recognitionResult: nil, formAccuracy: fa)
+        }
+        let history = store.progress(for: "C").formAccuracyHistory
+        #expect(history?.count == 10)
+        #expect(abs((history?.first ?? 0) - (0.5 + 2 * 0.04)) < 1e-9,
+                "oldest 2 of 12 entries should have been dropped")
+    }
+
+    @Test("formAccuracy is clamped to 0...1, same discipline as bestAccuracy")
+    func formAccuracyHistory_clampsToUnit() throws {
+        store.recordCompletion(for: "D", accuracy: 0.8, phaseScores: nil, speed: nil,
+                               recognitionResult: nil, formAccuracy: 1.4)
+        store.recordCompletion(for: "D", accuracy: 0.8, phaseScores: nil, speed: nil,
+                               recognitionResult: nil, formAccuracy: -0.2)
+        let history = try #require(store.progress(for: "D").formAccuracyHistory)
+        #expect(history == [1.0, 0.0])
+    }
+
     @Test func recordFreeformCompletion_storesFullRecognitionSample() {
         let result = RecognitionResult(
             predictedLetter: "M",

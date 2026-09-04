@@ -314,10 +314,17 @@ final class PhaseTransitionCoordinator {
         // finishing after the recognizer returns still populate the
         // dashboard's confidence series.
         let rr = vm.lastRecognitionResult
+        // The freeWrite phase's own geometric form accuracy (nil when no
+        // freeWrite ran this session — `.control`/`.guidedOnly` land
+        // here too) — the correct instrument for
+        // `formAccuracyHistory`/the calibrator's practised-letter boost.
+        // NOT the same value as `rr.confidence` (see recordCompletion's
+        // doc comment for the 2026-09-04 fix this replaces).
+        let formAccuracy = vm.lastWritingAssessment.map { Double($0.formAccuracy) }
         for l in lettersToRecord {
             vm.progressStore.recordCompletion(for: l, accuracy: accuracy,
                                               phaseScores: phaseScores, speed: speed,
-                                              recognitionResult: rr)
+                                              recognitionResult: rr, formAccuracy: formAccuracy)
         }
         // Variant tracking is single-letter only.
         if !isWordSequence, vm.showingVariant, vm.letters.indices.contains(vm.letterIndex),

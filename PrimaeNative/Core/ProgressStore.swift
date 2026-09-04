@@ -66,6 +66,15 @@ struct LetterProgress: Codable, Equatable {
     /// Rolling log of retrieval-practice outcomes (`true` = correct).
     /// Capped at 10 entries (latest).
     var retrievalAttempts: [Bool]?
+    /// Last 10 freeWrite `WritingAssessment.formAccuracy` readings for
+    /// this letter (2026-09-04 — see the fix note on `recordCompletion`).
+    /// This is the ONLY historical signal that genuinely means
+    /// "how well has this child geometrically formed this letter" —
+    /// `recognitionAccuracy` is the recognizer's CONFIDENCE, a different
+    /// instrument that happens to share the word "accuracy" in its name.
+    /// nil for installs whose progress predates this field, and for
+    /// letters that never completed a freeWrite phase.
+    var formAccuracyHistory: [Double]?
 }
 
 extension LetterProgress {
@@ -82,11 +91,21 @@ extension LetterProgress {
 @MainActor
 protocol ProgressStoring {
     func progress(for letter: String) -> LetterProgress
+    /// `formAccuracy` is the freeWrite phase's `WritingAssessment
+    /// .formAccuracy` for THIS completion (nil when no freeWrite phase
+    /// ran), appended to `LetterProgress.formAccuracyHistory`. Kept
+    /// separate from `recognitionResult` — a different instrument
+    /// (geometric form vs. the CoreML recognizer's confidence) — after a
+    /// 2026-09-04 fix: `historicalFormScores` (the calibrator's
+    /// practised-letter boost input) was silently fed
+    /// `recognitionAccuracy` — confidence history — because no genuine
+    /// form-accuracy history existed to feed it. See `formAccuracyHistory`.
     func recordCompletion(for letter: String,
                           accuracy: Double,
                           phaseScores: [String: Double]?,
                           speed: Double?,
-                          recognitionResult: RecognitionResult?)
+                          recognitionResult: RecognitionResult?,
+                          formAccuracy: Double?)
     func recordPaperTransferScore(for letter: String, score: Double)
     func recordVariantUsed(for letter: String, variantID: String?)
     /// Record a freeform-mode recognition result. Does not increment the
@@ -118,18 +137,28 @@ extension ProgressStoring {
 
     func recordCompletion(for letter: String, accuracy: Double) {
         recordCompletion(for: letter, accuracy: accuracy,
-                         phaseScores: nil, speed: nil, recognitionResult: nil)
+                         phaseScores: nil, speed: nil, recognitionResult: nil, formAccuracy: nil)
     }
     func recordCompletion(for letter: String, accuracy: Double, phaseScores: [String: Double]?) {
         recordCompletion(for: letter, accuracy: accuracy,
-                         phaseScores: phaseScores, speed: nil, recognitionResult: nil)
+                         phaseScores: phaseScores, speed: nil, recognitionResult: nil, formAccuracy: nil)
     }
     func recordCompletion(for letter: String,
                           accuracy: Double,
                           phaseScores: [String: Double]?,
                           speed: Double?) {
         recordCompletion(for: letter, accuracy: accuracy,
-                         phaseScores: phaseScores, speed: speed, recognitionResult: nil)
+                         phaseScores: phaseScores, speed: speed, recognitionResult: nil, formAccuracy: nil)
+    }
+    /// Pre-2026-09-04 shape, kept so a caller that predates the
+    /// `formAccuracy` fix still compiles and forwards with it absent.
+    func recordCompletion(for letter: String,
+                          accuracy: Double,
+                          phaseScores: [String: Double]?,
+                          speed: Double?,
+                          recognitionResult: RecognitionResult?) {
+        recordCompletion(for: letter, accuracy: accuracy, phaseScores: phaseScores,
+                         speed: speed, recognitionResult: recognitionResult, formAccuracy: nil)
     }
     func flush() async {}
 }
@@ -217,7 +246,8 @@ public final class JSONProgressStore: ProgressStoring {
                           accuracy: Double,
                           phaseScores: [String: Double]?,
                           speed: Double?,
-                          recognitionResult: RecognitionResult?) {
+                          recognitionResult: RecognitionResult?,
+                          formAccuracy: Double? = nil) {
         let key = Self.canonicalKey(letter)
         var p = store.letterProgress[key] ?? LetterProgress()
         p.completionCount += 1
@@ -237,6 +267,14 @@ public final class JSONProgressStore: ProgressStoring {
         }
         if let rr = recognitionResult {
             Self.appendRecognition(rr, into: &p)
+        }
+        if let fa = formAccuracy {
+            var history = p.formAccuracyHistory ?? []
+            history.append(min(1.0, max(0.0, fa)))
+            if history.count > Self.rollingChannelCap {
+                history.removeFirst(history.count - Self.rollingChannelCap)
+            }
+            p.formAccuracyHistory = history
         }
         store.letterProgress[key] = p
         store.completionDates.append(Date())

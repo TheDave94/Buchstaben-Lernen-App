@@ -79,7 +79,7 @@ final class StubProgressStore: ProgressStoring {
     func progress(for letter: String) -> LetterProgress { LetterProgress() }
     func recordCompletion(for letter: String, accuracy: Double,
                           phaseScores: [String: Double]?, speed: Double?,
-                          recognitionResult: RecognitionResult?) {}
+                          recognitionResult: RecognitionResult?, formAccuracy: Double?) {}
     // These four are plain protocol requirements with no extension
     // default, so omitting one is a BUILD error rather than a runtime
     // trap. Opt in to no-op behaviour explicitly, per channel.
