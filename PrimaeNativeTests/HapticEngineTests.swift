@@ -189,8 +189,15 @@ private final class TrackingMockAudio: AudioControlling {
         vm.phaseController.resume(at: .guided)
 
         let progress = traceWholeLetter(vm)
-        #expect(Double(progress) > 0.0,
-                "the trace must really advance the tracker, or this proves nothing — precondition=\(vm.studyPreconditionFailure ?? "nil") phase=\(vm.phaseController.currentPhase) touchEnabled=\(vm.phaseController.isTouchEnabled) letter=\(vm.currentLetterName) letters=\(vm.letters.map(\.name)) visible=\(vm.visibleLetterNames) cells=\(vm.gridCells.count) strokes=\(vm.strokeTracker.definition?.strokes.count ?? -1)")
+        // The load-bearing check. Under studyMode the four-phase flow is
+        // pinned, so completing the guided trace ADVANCES to freeWrite —
+        // and the phase transition resets `progress` to 0 (CI run 1641:
+        // phase=.freeWrite, progress 0). Outside studyMode `.guidedOnly`
+        // has no next phase and progress stays at 1, which is what the
+        // three positive twins read. Here the proof that the trace really
+        // advanced the tracker is the phase change itself.
+        #expect(vm.phaseController.currentPhase == .freeWrite,
+                "the trace must complete the guided phase, or this proves nothing — progress=\(progress) precondition=\(vm.studyPreconditionFailure ?? "nil") phase=\(vm.phaseController.currentPhase) letter=\(vm.currentLetterName) cells=\(vm.gridCells.count) strokes=\(vm.strokeTracker.definition?.strokes.count ?? -1)")
         #expect(haptics.firedEvents.isEmpty,
                 "no haptics in a study session — got \(haptics.firedEvents)")
     }
