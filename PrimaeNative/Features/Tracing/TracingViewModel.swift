@@ -501,7 +501,9 @@ public final class TracingViewModel {
     /// is unchanged. Geometry-only — affects nothing but
     /// `resolvedStrokes(for:)`. Persisted like the other research flags
     /// so a configured study device stays in study mode across relaunches.
-    var studyMode: Bool = false {
+    /// Readable from the app target (PrimaeApp pins the light appearance
+    /// on it); settable only inside the package.
+    public internal(set) var studyMode: Bool = false {
         didSet {
             UserDefaults.standard.set(studyMode,
                 forKey: StudyBuild.studyModeDefaultsKey)
