@@ -64,9 +64,16 @@ struct TracingCanvasView: View {
 
                 // Ghost scaffolding follows GRRM: phase drives default
                 // visibility (observe/guided on, freeWrite off); user
-                // toggle adds in observe/guided only. Suppressed during
-                // calibration where the fat blue paths obscure edits.
-                if (vm.showGhostForPhase || (vm.showGhost && vm.learningPhase != .freeWrite)),
+                // toggle adds in observe/guided only — NOT direct, which
+                // deliberately withdraws all scaffolding (numbered dots +
+                // arrow only) per Schmidt & Lee's Guidance Hypothesis
+                // fading (`showGhostForPhase`'s own doc comment). The
+                // prior `vm.learningPhase != .freeWrite` check let the
+                // toggle re-add the ghost during `.direct` too,
+                // contradicting that. Suppressed during calibration
+                // where the fat blue paths obscure edits.
+                if (vm.showGhostForPhase
+                        || (vm.showGhost && (vm.learningPhase == .observe || vm.learningPhase == .guided))),
                    !vm.isCalibrating,
                    let rawStrokes = vm.gridCellStrokes(at: i),
                    !rawStrokes.strokes.isEmpty {

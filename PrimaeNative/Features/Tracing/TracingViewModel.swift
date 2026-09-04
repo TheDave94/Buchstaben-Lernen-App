@@ -54,9 +54,36 @@ public final class TracingViewModel {
     /// glyph and skeleton drift apart (see commit 1871466c → revert
     /// 74dcb11b).
     static let calibratorBottomInset: CGFloat = 180
-    var letterOrdering: LetterOrderingStrategy = .motorSimilarity
+    var letterOrdering: LetterOrderingStrategy = .motorSimilarity {
+        didSet {
+            // Same pin as `schriftArt` below, same reason: init already
+            // pins studyMode to `.motorSimilarity`, but that pin only
+            // covers the ONE assignment at init — a live Settings write
+            // from `SettingsView`'s "Buchstabenreihenfolge" rows was
+            // reaching this property with no further guard. Checked
+            // against the pinned value, not `oldValue`, so the
+            // corrective re-assignment terminates instead of recursing.
+            if studyMode, letterOrdering != .motorSimilarity {
+                letterOrdering = .motorSimilarity
+            }
+        }
+    }
     var schriftArt: SchriftArt = .druckschrift {
         didSet {
+            // Study pins Druckschrift (see the init-time comment: "a
+            // stray device setting must not swap the stimulus geometry
+            // or the sequence"), but that pin only covers the ONE
+            // assignment at init — a live Settings write from
+            // `SettingsView`'s "Schriftart" rows was reaching this
+            // property with no further guard. Checked against the
+            // pinned value, not `oldValue`, so the corrective
+            // re-assignment below terminates (re-triggers this didSet
+            // once, lands on `.druckschrift`, and the condition is then
+            // false) instead of recursing.
+            if studyMode, schriftArt != .druckschrift {
+                schriftArt = .druckschrift
+                return
+            }
             guard oldValue != schriftArt,
                   !letters.isEmpty, letterIndex < letters.count else { return }
             scriptStrokeCache.removeAll(keepingCapacity: true)
@@ -538,10 +565,14 @@ public final class TracingViewModel {
     var directArrowStrokeIndex: Int? = nil
 
     /// Next-expected dot index. With `enableBackwardChaining` the list
-    /// iterates in reverse (Spooner et al. 2014); default off.
+    /// iterates in reverse (Spooner et al. 2014); default off. Forced
+    /// canonical (forward) under studyMode — same family as P1/P6
+    /// (`enableRetrievalPrompts`/`enablePhonemeMode`), a parent-facing
+    /// research toggle that must not vary the scored direct-phase task
+    /// between study children.
     var directNextExpectedDotIndex: Int {
         guard let rawStrokes = rawGlyphStrokes else { return 0 }
-        let indices: [Int] = enableBackwardChaining
+        let indices: [Int] = (enableBackwardChaining && !studyMode)
             ? Array(rawStrokes.strokes.indices).reversed()
             : Array(rawStrokes.strokes.indices)
         for i in indices where !directTappedDots.contains(i) { return i }
