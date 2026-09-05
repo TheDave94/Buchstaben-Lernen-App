@@ -193,8 +193,13 @@ fileprivate final class CapturingStore: ParentDashboardStoring {
             vm.updateTouch(at: CGPoint(x: 80, y: 200), t: t + 1.01, canvasSize: canvas)
             vm.updateTouch(at: CGPoint(x: 120, y: 220), t: t + 1.02, canvasSize: canvas)
             vm.endTouch()
-            try? await Task.sleep(for: .seconds(2.6))   // 2.0 s quiet window + recognizer hop
-            #expect(!store.studyModeStamps.isEmpty, "a completed non-study letter must write rows")
+            // 2.0 s quiet window, then the recognizer hop and the row
+            // writes: a fixed 2.6 s sleep raced the slower A16 simulator
+            // (CI run 1646). Poll, bounded.
+            for _ in 0..<100 where store.studyModeStamps.isEmpty {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            #expect(!store.studyModeStamps.isEmpty, "a completed non-study letter must write rows within 10 s")
             #expect(store.studyModeStamps.allSatisfy { $0.studyMode == false },
                     "every row must say studyMode=false: \(store.studyModeStamps)")
         }
