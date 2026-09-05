@@ -367,10 +367,10 @@ fileprivate final class ThirdPassRecordingStore: ParentDashboardStoring {
         let csv = String(data: ParentDashboardExporter.csvData(from: store.snapshot, progress: [:], enrolledAt: enrolled), encoding: .utf8)!
         let lines = csv.components(separatedBy: "\n")
         let header = try #require(lines.first { $0.hasPrefix("date,recordedAt,durationSeconds") })
-        #expect(header.hasSuffix(",letter,audioCondition,studyMode,probe"), header)
+        #expect(header.hasSuffix(",letter,audioCondition,studyMode,probe"), "\(header)")
         let rows = lines.filter { $0.hasPrefix("20") && $0.contains(",threePhase,") && $0.contains(",A,") }
         #expect(rows.count == 1, "the pre-enrolment duration must be filtered out: \(rows)")
-        #expect(rows.first?.hasSuffix(",pencil,A,phoneme,true,delayed") == true, String(describing: rows.first))
+        #expect(rows.first?.hasSuffix(",pencil,A,phoneme,true,delayed") == true, "\(String(describing: rows.first))")
     }
 
 }
