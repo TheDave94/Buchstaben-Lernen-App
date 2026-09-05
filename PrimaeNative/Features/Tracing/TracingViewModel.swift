@@ -1139,6 +1139,13 @@ public final class TracingViewModel {
 
     func resetLetter() {
         strokeTracker.reset()
+        // `reset()` drops the definition; the checkpoints have to come
+        // back or nothing can be hit. This used to be masked by the
+        // dispatcher re-mapping checkpoints on every touch update while
+        // `vm.canvasSize` lagged the overlay (CI run 1649, 2026-09-05).
+        if letters.indices.contains(letterIndex) {
+            reloadStrokeCheckpoints(for: letters[letterIndex])
+        }
         progress = 0
         activePath.removeAll(keepingCapacity: true)
         touchDispatcher.resetVelocity()
@@ -1188,9 +1195,10 @@ public final class TracingViewModel {
     /// pair. The kind is stamped on the letter's rows. Refused outside
     /// study mode and for any letter outside the study set.
     func startColdProbe(letter: String, kind: StudyProbe) {
-        // Same stop as the canvas: after a reset/restore the arms in
-        // memory are stale until relaunch (review 2026-09-05).
-        guard sessionBlockReason == nil else { return }
+        // After a reset/restore the arms in memory are stale until relaunch
+        // (review 2026-09-05). Only that block applies here: a probe is a
+        // sound-off production and needs no phoneme recordings.
+        guard !(studyMode && participantIdentityChanged) else { return }
         guard studyMode,
               kind.permits(letter: letter,
                            untrained: trainedSubset.untrainedLetters,

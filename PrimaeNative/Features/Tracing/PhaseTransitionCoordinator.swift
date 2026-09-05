@@ -188,7 +188,9 @@ final class PhaseTransitionCoordinator {
     /// `phaseCompletionRate_*`, carried a constant `true` before. Study
     /// mode only; an untouched letter records nothing.
     func recordUnloadOfCurrentLetter(touchStillActive: Bool) {
-        guard let vm, vm.studyMode,
+        // After a participant reset nothing of the outgoing child may be
+        // recorded — not even an abandonment row (review 2026-09-05).
+        guard let vm, vm.studyMode, !vm.participantIdentityChanged,
               !vm.phaseController.isLetterSessionComplete else { return }
         if !touchStillActive, finalizeFinishedFreeWriteIfPending() { return }
 

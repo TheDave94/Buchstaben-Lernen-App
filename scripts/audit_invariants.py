@@ -438,11 +438,12 @@ def gate_g2_per_stroke(candidate_poly_rel: list[tuple[float, float]],
     arr = np.array(paired, dtype=float)
     cand_std = float(arr[:, 0].std())
     ref_std = float(arr[:, 1].std())
-    # `<=`: with the placeholder threshold of 0.0 the documented guard —
-    # Pearson on rounding noise from a uniform stem (l, I, the straights
-    # of T E F H L) — could never fire, since a std is never < 0
-    # (audit 2026-09-05). A zero-variance turn profile now vacuous-passes.
-    if max(cand_std, ref_std) <= min_turn_angle_std:
+    # Strict `<` on purpose: with the placeholder threshold of 0.0 this
+    # branch is inert, and that is fine — a ZERO-variance turn profile
+    # (a uniform stem) is caught by the `constant_turn_angle_sequence`
+    # branch right below. Making this `<=` only relabelled that case
+    # ahead of the branch its test expects (CI run 1649, 2026-09-05).
+    if max(cand_std, ref_std) < min_turn_angle_std:
         return {
             "pearson": None,
             "n_measured": len(paired),
