@@ -24,6 +24,27 @@ struct SettingsView: View {
     fileprivate static let speechRateKey = "de.flamingistan.primae.speechRate"
     fileprivate static let shortOnboardingKey = "de.flamingistan.primae.useShortOnboarding"
 
+    /// Ruling Q1's reasoning applies to enrolment as much as to studyMode:
+    /// a study binary must not be switchable into an un-randomised state
+    /// (class two, 2026-09-05); enrolment happens through "Neuer
+    /// Teilnehmer" in the research area. Kept out of the Form's builder
+    /// so the `#if` does not break its type inference (CI run 1652).
+    @ViewBuilder
+    private var enrolmentControl: some View {
+        #if STUDY_BUILD
+        Label("Studienteilnahme: durch die Studien-Version festgelegt", systemImage: "lock.fill")
+            .foregroundStyle(Color.inkSoft)
+        #else
+        Toggle("Studienteilnahme (A/B-Arm)", isOn: Binding(
+            get: { thesisEnrolled },
+            set: {
+                thesisEnrolled = $0
+                ParticipantStore.isEnrolled = $0
+            }
+        ))
+        #endif
+    }
+
     var body: some View {
         // `@Bindable` is Observation's purpose-built projection for an
         // @Observable reference type: `$vm.x` yields the same Binding the
@@ -117,22 +138,7 @@ struct SettingsView: View {
                 Toggle("Schreiben auf Papier", isOn: $vm.enablePaperTransfer)
                 .accessibilityHint("Nach dem freien Schreiben wird das Kind gebeten, den Buchstaben auf Papier zu schreiben")
 
-                #if STUDY_BUILD
-                // Ruling Q1's reasoning applies to enrolment as much as to
-                // studyMode: a study binary must not be switchable into an
-                // un-randomised state (class two, 2026-09-05). Enrolment
-                // happens through "Neuer Teilnehmer" in the research area.
-                Label("Studienteilnahme: durch die Studien-Version festgelegt", systemImage: "lock.fill")
-                    .foregroundStyle(Color.inkSoft)
-                #else
-                Toggle("Studienteilnahme (A/B-Arm)", isOn: Binding(
-                    get: { thesisEnrolled },
-                    set: {
-                        thesisEnrolled = $0
-                        ParticipantStore.isEnrolled = $0
-                    }
-                ))
-                #endif
+                enrolmentControl
                 .accessibilityHint("Nur für Forschung aktivieren. Weist das Gerät stabil einer Studienbedingung zu; andernfalls erhält jedes Kind die volle Vier-Phasen-Lernabfolge. Änderung wird beim nächsten App-Start wirksam.")
                 Text("Änderung wird beim nächsten App-Start wirksam.")
                     .font(.caption)
