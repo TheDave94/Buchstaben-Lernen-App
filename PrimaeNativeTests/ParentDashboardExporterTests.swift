@@ -35,7 +35,10 @@ struct ParentDashboardExporterTests {
     }
 
     @Test func csvContainsDurationSection() {
-        let csv = String(data: ParentDashboardExporter.csvData(from: makeSnapshot()), encoding: .utf8)!
+        // Duration rows are filtered on enrolment like the phase rows
+        // (review 2026-09-05); pin the fixture to "no enrolment" so the
+        // test-device's own enrolledAt cannot hide the 2026-03 rows.
+        let csv = String(data: ParentDashboardExporter.csvData(from: makeSnapshot(), enrolledAt: nil), encoding: .utf8)!
         #expect(csv.contains("date,recordedAt,durationSeconds,wallClockSeconds,condition,inputDevice"))
         #expect(csv.contains("2026-03-01"))
     }
