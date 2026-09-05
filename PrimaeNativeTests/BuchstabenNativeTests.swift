@@ -52,7 +52,7 @@ import AVFoundation
         try fs.write(relative: "M/Meer.mp3", content: "ok")
         try fs.write(relative: "M/hmmm.wav", content: "stale")
         try fs.write(relative: "M/ElevenLabs_test.mp3", content: "stale")
-        let repo = LetterRepository(resources: fs.provider)
+        let repo = LetterRepository(resources: fs.provider, cache: NullLetterCache())   // never the app's real cache
         let m = try #require(repo.loadLetters().first(where: { $0.id.uppercased() == "M" }))
         #expect(m.audioFiles == ["M/Meer.mp3", "M/Möwe.mp3"])
     }
@@ -421,30 +421,9 @@ struct VariantStrokesTests {
 // MARK: - RecognitionResult Codable round-trip
 
 struct RecognitionResultCodableTests {
-    @Test("RecognitionResult round-trips through JSON encoder")
-    func recognitionResultRoundTrip() throws {
-        let original = RecognitionResult(
-            predictedLetter: "Ä",
-            confidence: 0.873,
-            topThree: [
-                .init(letter: "Ä", confidence: 0.873),
-                .init(letter: "A", confidence: 0.094),
-                .init(letter: "Ö", confidence: 0.011)
-            ],
-            isCorrect: true
-        )
-        // RecognitionResult is Equatable but not Codable in the current
-        // shape — persistence goes through `RecognitionSample`. Pin the
-        // Equatable shape so changes to topThree ordering or confidence
-        // precision surface here.
-        let copy = RecognitionResult(
-            predictedLetter: original.predictedLetter,
-            confidence: original.confidence,
-            topThree: original.topThree,
-            isCorrect: original.isCorrect
-        )
-        #expect(copy == original)
-    }
+    // A "RecognitionResult round-trips through JSON encoder" test that compared
+    // a value to a member-wise copy of itself was removed on 2026-09-04: it
+    // could not fail (RecognitionResult is not Codable; RecognitionSample is).
 
     @Test("RecognitionSample round-trips through JSON")
     func recognitionSampleRoundTrip() throws {

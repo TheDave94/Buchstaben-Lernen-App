@@ -2,6 +2,16 @@ import SwiftUI
 import UIKit
 import CoreText
 
+/// Ink width of the live stroke. Named so it can be tested against the
+/// renderer's actual formula — the pressure tests used to assert
+/// arithmetic written in the test file (audit 2026-09-04).
+enum InkStyle {
+    /// 14 pt for a finger (no pressure); 8 pt + 14 pt·pressure for a Pencil.
+    static func width(forPressure pressure: CGFloat?) -> CGFloat {
+        pressure.map { 8 + $0 * 14 } ?? 14
+    }
+}
+
 struct TracingCanvasView: View {
     @Environment(TracingViewModel.self) private var vm
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
@@ -131,7 +141,7 @@ struct TracingCanvasView: View {
                 if isActiveCell, vm.activePath.count > 1 {
                     var path = Path()
                     path.addLines(vm.activePath)
-                    let inkWidth: CGFloat = vm.pencilPressure.map { 8 + $0 * 14 } ?? 14
+                    let inkWidth = InkStyle.width(forPressure: vm.pencilPressure)
                     context.stroke(path, with: .color(.canvasInkStroke),
                                    style: StrokeStyle(lineWidth: inkWidth, lineCap: .round, lineJoin: .round))
                 }
@@ -139,6 +149,25 @@ struct TracingCanvasView: View {
                 // Lingering ink — snapshot of the just-completed trace
                 // held visible for ~5 s after the phase transition so
                 // the child sees their own work before it clears.
+                // FreeWrite: every completed stroke stays on screen until
+                // the phase ends. The current stroke vanished at pen-lift,
+                // so a child writing A, F or L from memory placed the next
+                // stroke against a blank canvas (audit 2026-09-04). Same
+                // buffer the scorer reads, so what is shown is what is
+                // measured. Single-cell path (the study layout).
+                if isActiveCell, vm.learningPhase == .freeWrite, vm.gridCells.count == 1 {
+                    let pts = vm.freeWritePoints
+                    let starts = ([0] + vm.freeWriteStrokeStartIndices.filter { $0 > 0 && $0 < pts.count }).sorted()
+                    var inked = Path()
+                    for (b, startIdx) in starts.enumerated() {
+                        let endIdx = (b + 1 < starts.count) ? starts[b + 1] : pts.count
+                        guard endIdx - startIdx > 1 else { continue }
+                        inked.addLines(Array(pts[startIdx..<endIdx]))
+                    }
+                    context.stroke(inked, with: .color(.canvasInkStroke),
+                                   style: StrokeStyle(lineWidth: 14, lineCap: .round, lineJoin: .round))
+                }
+
                 if isActiveCell, vm.lingeringInk.count > 1 {
                     var path = Path()
                     path.addLines(vm.lingeringInk)
@@ -206,13 +235,16 @@ struct TracingCanvasView: View {
                                style: StrokeStyle(lineWidth: 3))
             }
 
-            // Canvas-wide progress (whole sequence).
-            let clampedProgress = max(0, min(1, vm.progress))
-            let trackRect = CGRect(x: 0, y: size.height - 8, width: size.width,                    height: 8)
-            let fillRect  = CGRect(x: 0, y: size.height - 8, width: size.width * clampedProgress, height: 8)
+            // Canvas-wide progress (whole sequence) — not on a study
+            // outcome trial (audit 2026-09-04).
+            if vm.showsProgressFeedback {
+                let clampedProgress = max(0, min(1, vm.progress))
+                let trackRect = CGRect(x: 0, y: size.height - 8, width: size.width,                    height: 8)
+                let fillRect  = CGRect(x: 0, y: size.height - 8, width: size.width * clampedProgress, height: 8)
 
-            context.fill(Path(trackRect), with: .color(.black.opacity(0.1)))
-            context.fill(Path(fillRect),  with: .color(differentiateWithoutColor ? .blue : .green))
+                context.fill(Path(trackRect), with: .color(.black.opacity(0.1)))
+                context.fill(Path(fillRect),  with: .color(differentiateWithoutColor ? .blue : .green))
+            }
         }
         .contentShape(Rectangle())
     }
@@ -284,11 +316,13 @@ struct TracingCanvasView: View {
                 tracingCanvas(geo: geo)
                     .modifier(TracingCanvasAccessibility(vm: vm))
 
-                ProgressPill(progress: vm.progress,
-                             differentiateWithoutColor: differentiateWithoutColor)
-                    .equatable()
-                    .padding(.leading, 12)
-                    .padding(.bottom, 16)
+                if vm.showsProgressFeedback {
+                    ProgressPill(progress: vm.progress,
+                                 differentiateWithoutColor: differentiateWithoutColor)
+                        .equatable()
+                        .padding(.leading, 12)
+                        .padding(.bottom, 16)
+                }
             }
             .onAppear { vm.canvasSize = geo.size }
             .onChange(of: geo.size) { _, newSize in vm.canvasSize = newSize }
@@ -839,8 +873,11 @@ private struct PencilAwareCanvasOverlay: UIViewRepresentable {
         }
 
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-            guard let touch = event?.allTouches?.first else { return nil }
-            return touch.type == .pencil ? self : nil
+            // `allTouches` is an unordered Set: with a resting palm its
+            // `.first` could be the finger, and the pencil stroke then
+            // fell through to the finger overlay (audit 2026-09-04).
+            guard let touches = event?.allTouches else { return nil }
+            return touches.contains { $0.type == .pencil } ? self : nil
         }
 
         // Pencil callbacks are delivered on the main thread; no hop

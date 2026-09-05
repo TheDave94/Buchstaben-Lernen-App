@@ -250,6 +250,7 @@ struct ResearchDashboardView: View {
             Button {
                 if ParticipantStore.restoreParticipant(uuidString: restoreIDText) != nil {
                     restoreError = nil
+                    vm.markParticipantRestored()   // block tracing until the relaunch
                     showRelaunchAlert = true
                 } else {
                     restoreError = "Keine gültige UUID — die ID steht in der ersten Zeile des CSV/JSON-Exports der ersten Sitzung."

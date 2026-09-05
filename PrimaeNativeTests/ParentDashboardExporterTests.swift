@@ -124,6 +124,76 @@ struct ParentDashboardExporterTests {
                 "Expected session-aligned recognition + timestamp — found:\n\(csv)")
     }
 
+    /// A multi-stroke letter's `strokeOrder` is comma-joined ("0,2,1" for
+    /// a crossbar-first A). Unquoted, that field split a CSV row into
+    /// extra columns and shifted `reversedStrokeCount`, `studyMode` and
+    /// `probe` to the right — every A, F and L freeWrite row in the pilot
+    /// (audit 2026-09-04, class one). The row must parse back to exactly
+    /// as many fields as the header, with the order intact.
+    @Test func csvQuotesCommaJoinedStrokeOrder() throws {
+        var snap = DashboardSnapshot()
+        snap.phaseSessionRecords.append(PhaseSessionRecord(
+            letter: "A", phase: "freeWrite", completed: true,
+            score: 0.7, schedulerPriority: 0, condition: .threePhase,
+            recordedAt: Date(timeIntervalSince1970: 1_770_000_000),
+            spatialDeviation: 0.05, strokeCount: 3, strokeOrder: "0,2,1",
+            reversedStrokeCount: 1, studyMode: true, probe: "posttest"
+        ))
+        let csv = String(data: ParentDashboardExporter.csvData(
+            from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
+        let lines = csv.components(separatedBy: "\n")
+        let headerIdx = try #require(lines.firstIndex { $0.hasPrefix("letter,phase,completed,") })
+        let header = lines[headerIdx].components(separatedBy: ",")
+        let row = try #require(lines.dropFirst(headerIdx + 1).first { $0.hasPrefix("A,freeWrite,") })
+        let fields = Self.parseCSVRow(row)
+        #expect(fields.count == header.count,
+                "row has \(fields.count) fields, header \(header.count):\n\(row)")
+        #expect(fields[header.firstIndex(of: "strokeOrder")!] == "0,2,1")
+        #expect(fields[header.firstIndex(of: "reversedStrokeCount")!] == "1")
+        #expect(fields[header.firstIndex(of: "studyMode")!] == "true")
+        #expect(fields[header.firstIndex(of: "probe")!] == "posttest")
+        #expect(row.contains("\"0,2,1\""), "the comma-joined field must be quoted, RFC 4180")
+
+        // TSV: no tab in the field, so it stays unquoted and splits cleanly.
+        let tsv = String(data: ParentDashboardExporter.tsvData(
+            from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
+        let tsvRow = try #require(tsv.components(separatedBy: "\n").first { $0.hasPrefix("A\tfreeWrite\t") })
+        let tsvFields = tsvRow.components(separatedBy: "\t")
+        #expect(tsvFields.count == header.count)
+        #expect(tsvFields[header.firstIndex(of: "strokeOrder")!] == "0,2,1")
+    }
+
+    /// Minimal RFC 4180 reader for one row: quoted fields may contain the
+    /// separator; a doubled quote inside a quoted field is one quote.
+    private static func parseCSVRow(_ row: String) -> [String] {
+        var fields: [String] = []
+        var current = ""
+        var inQuotes = false
+        var it = row.makeIterator()
+        var pending: Character? = nil
+        func next() -> Character? {
+            if let p = pending { pending = nil; return p }
+            return it.next()
+        }
+        while let ch = next() {
+            if inQuotes {
+                if ch == "\"" {
+                    if let n = it.next() {
+                        if n == "\"" { current.append("\"") } else { inQuotes = false; pending = n }
+                    } else { inQuotes = false }
+                } else { current.append(ch) }
+            } else if ch == "\"" {
+                inQuotes = true
+            } else if ch == "," {
+                fields.append(current); current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        fields.append(current)
+        return fields
+    }
+
     /// Phase rows without a recognition sample (guided / observe / direct,
     /// or freeWrite that fired before the recogniser returned) still emit
     /// blanks for the recognition columns — but `recordedAt` is always

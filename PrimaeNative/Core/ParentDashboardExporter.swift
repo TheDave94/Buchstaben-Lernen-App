@@ -48,6 +48,22 @@ struct ParentDashboardExporter {
 
     /// Shared row builder behind csvData / tsvData. Single
     /// implementation keeps both formats in lock-step on columns.
+    /// RFC 4180 quoting for one field of a delimited row: a field that
+    /// contains the separator, a double quote, or a line break is wrapped
+    /// in double quotes with inner quotes doubled; every other field is
+    /// emitted verbatim, so rows without such fields are byte-identical
+    /// to before. Needed because `strokeOrder` is comma-joined
+    /// (`StrokeProcessMeasures.matchedReferenceOrderField`, e.g. "0,2,1"
+    /// for a crossbar-first A): unquoted, a multi-stroke letter's CSV row
+    /// split into extra columns and shifted `reversedStrokeCount`,
+    /// `studyMode` and `probe` right (audit 2026-09-04, class one).
+    static func delimitedField(_ field: String, separator sep: String) -> String {
+        guard field.contains(sep) || field.contains("\"") || field.contains("\n") || field.contains("\r") else {
+            return field
+        }
+        return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
     private static func delimitedData(
         from snapshot: DashboardSnapshot,
         participantId: UUID,
@@ -228,7 +244,7 @@ struct ParentDashboardExporter {
                 // a training pass (2026-09-04).
                 rec.probe ?? ""
             ]
-            lines.append(row.joined(separator: sep))
+            lines.append(row.map { delimitedField($0, separator: sep) }.joined(separator: sep))
         }
         lines.append("")
 
@@ -262,8 +278,12 @@ struct ParentDashboardExporter {
                 // D11#2: actually sorted, not just named `chrono` — see
                 // the identical fix + rationale in
                 // `ParentDashboardStore.schedulerEffectivenessProxy`.
+                // freeWrite rows only: consecutive rows of ONE pass are
+                // observe → direct → guided → freeWrite, three different
+                // instruments, so cross-phase deltas are not learning gains
+                // (audit 2026-09-04).
                 let chrono = armRecords
-                    .filter { $0.letter == letter && $0.completed }
+                    .filter { $0.letter == letter && $0.completed && $0.phase == LearningPhase.freeWrite.rawName }
                     .sorted { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }
                 guard chrono.count >= 2 else { continue }
                 for i in 0..<(chrono.count - 1) {
@@ -293,7 +313,12 @@ struct ParentDashboardExporter {
         // letter-level source. Format:
         // `letterByArm,letter,arm,sampleCount,averageScore`.
         lines.append(["letterByArm","letter","arm","sampleCount","averageScore"].joined(separator: sep))
-        let phaseByArm = Dictionary(grouping: enrolledRecords.filter(\.completed), by: { $0.condition })
+        // freeWrite rows only (audit 2026-09-04, class one): observe/direct
+        // rows carry a constant score of 1.0 and guided carries coverage,
+        // so averaging every phase floored the per-arm accuracy near 0.5
+        // and compared the arms on a completion counter. Same phase
+        // filter as `averageFreeWriteScore_<arm>` above.
+        let phaseByArm = Dictionary(grouping: enrolledRecords.filter { $0.completed && $0.phase == LearningPhase.freeWrite.rawName }, by: { $0.condition })
         for arm in ThesisCondition.allCases {
             guard let records = phaseByArm[arm] else { continue }
             let byLetter = Dictionary(grouping: records, by: { $0.letter })
@@ -320,7 +345,7 @@ struct ParentDashboardExporter {
         // `letterByArm`. Format:
         // `letterByAudioArm,letter,audioArm,sampleCount,averageScore`.
         lines.append(["letterByAudioArm","letter","audioArm","sampleCount","averageScore"].joined(separator: sep))
-        let phaseByAudioArm = Dictionary(grouping: enrolledRecords.filter(\.completed), by: { $0.audioCondition })
+        let phaseByAudioArm = Dictionary(grouping: enrolledRecords.filter { $0.completed && $0.phase == LearningPhase.freeWrite.rawName }, by: { $0.audioCondition })
         for arm in PilotAudioCondition.allCases {
             guard let records = phaseByAudioArm[arm] else { continue }
             let byLetter = Dictionary(grouping: records, by: { $0.letter })
@@ -448,19 +473,23 @@ struct ParentDashboardExporter {
     ) throws(ExportError) -> URL {
         let data: Data
         let filename: String
-        let dateTag = Self.dateTag()
+        // Date + time + participant prefix: several children on one iPad
+        // on one pilot day used to produce identically named files that
+        // overwrote each other in the temp dir and in any save folder
+        // (audit 2026-09-04).
+        let tag = "\(Self.dateTag())_\(Self.timeTag())_\(ParticipantStore.participantId.uuidString.prefix(8))"
         switch format {
         case .csv:
             // CSV stays derived-scalars only — raw traces are too large
             // and the wrong shape for a flat row; they ride the JSON.
             data     = csvData(from: snapshot, progress: progress)
-            filename = "primae_progress_\(dateTag).csv"
+            filename = "primae_progress_\(tag).csv"
         case .tsv:
             data     = tsvData(from: snapshot, progress: progress)
-            filename = "primae_progress_\(dateTag).tsv"
+            filename = "primae_progress_\(tag).tsv"
         case .json:
             data     = try jsonData(from: snapshot, progress: progress, rawTraces: rawTraces)
-            filename = "primae_progress_\(dateTag).json"
+            filename = "primae_progress_\(tag).json"
         }
         let url = tempDirectory.appendingPathComponent(filename)
         do {
@@ -472,6 +501,11 @@ struct ParentDashboardExporter {
     }
 
     // MARK: Private
+
+    private static func timeTag() -> String {
+        let c = Calendar.current.dateComponents([.hour, .minute, .second], from: Date())
+        return String(format: "%02d%02d%02d", c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
+    }
 
     private static func dateTag() -> String {
         let c = Calendar.current.dateComponents([.year, .month, .day], from: Date())

@@ -366,7 +366,15 @@ struct DashboardSnapshot: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        letterStats = try c.decode([String: LetterAccuracyStat].self, forKey: .letterStats)
+        // Aggregates only: one malformed entry must not throw the whole
+        // snapshot — and with it every phaseSessionRecord — into quarantine
+        // (audit 2026-09-04). Logged, then rebuilt from the rows on use.
+        if let stats = try? c.decode([String: LetterAccuracyStat].self, forKey: .letterStats) {
+            letterStats = stats
+        } else {
+            storePersistenceLogger.error("DashboardSnapshot: letterStats undecodable — starting with none; phase rows are kept.")
+            letterStats = [:]
+        }
         // Element-wise (2026-09-04): `[T].self` is all-or-nothing, so ONE
         // malformed row used to throw the whole array away — and for
         // `phaseSessionRecords` the `try? … ?? []` then presented the
@@ -483,12 +491,16 @@ struct DashboardSnapshot: Codable, Equatable {
         let records = phaseSessionRecords
             .filter { $0.phase == LearningPhase.freeWrite.rawName && $0.completed && $0.formAccuracy != nil }
         guard !records.isEmpty else { return nil }
-        let count = Double(records.count)
+        // Each dimension over ITS OWN present values: the decoder sets the
+        // four independently, so a row missing one dimension used to add
+        // 0 to that numerator and 1 to the shared denominator
+        // (audit 2026-09-04).
+        func mean(_ xs: [Double]) -> Double { xs.isEmpty ? 0 : xs.reduce(0, +) / Double(xs.count) }
         return (
-            form:     records.compactMap(\.formAccuracy).reduce(0, +)     / count,
-            tempo:    records.compactMap(\.tempoConsistency).reduce(0, +) / count,
-            pressure: records.compactMap(\.pressureControl).reduce(0, +)  / count,
-            rhythm:   records.compactMap(\.rhythmScore).reduce(0, +)      / count
+            form:     mean(records.compactMap(\.formAccuracy)),
+            tempo:    mean(records.compactMap(\.tempoConsistency)),
+            pressure: mean(records.compactMap(\.pressureControl)),
+            rhythm:   mean(records.compactMap(\.rhythmScore))
         )
     }
 
@@ -503,8 +515,9 @@ struct DashboardSnapshot: Codable, Equatable {
             // to be chronological today (append-only writes) but was
             // enforced by nothing. The delta pairing below depends on
             // true chronological order.
+            // freeWrite rows only — see the exporter twin (audit 2026-09-04).
             let records = phaseSessionRecords
-                .filter { $0.letter == letter && $0.completed }
+                .filter { $0.letter == letter && $0.completed && $0.phase == LearningPhase.freeWrite.rawName }
                 .sorted { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }
             guard records.count >= 2 else { continue }
             for i in 0..<(records.count - 1) {
@@ -696,7 +709,9 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
                                        condition: condition,
                                        recordedAt: date,
                                        inputDevice: inputDevice,
-                                       letter: letter)
+                                       // Canonical, like the phase rows, so the
+                                       // two join offline (audit 2026-09-04).
+                                       letter: LetterProgress.canonicalKey(letter))
             )
             if snapshot.sessionDurations.count > Self.sessionDurationsCap {
                 snapshot.sessionDurations.removeFirst(

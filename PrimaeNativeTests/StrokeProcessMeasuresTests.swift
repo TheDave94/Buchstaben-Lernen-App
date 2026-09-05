@@ -191,4 +191,24 @@ struct StrokeProcessMeasuresTests {
             points: [CGPoint(x: 0.5, y: 0.5)], strokeStartIndices: [],
             reference: verticalLineStrokes) == nil)
     }
+
+    // MARK: - One-sample strokes (audit 2026-09-04)
+
+    /// A tap that produced a single touch sample is a stroke the child
+    /// made (pen-lift count + 1) even though it cannot be matched. It
+    /// used to vanish from `strokeCount` silently.
+    @Test("a one-sample tap counts as a stroke but is not matched")
+    func oneSampleStrokeIsCountedNotMatched() throws {
+        let vert = denseLine(from: CGPoint(x: 0.4, y: 0.2), to: CGPoint(x: 0.4, y: 0.8))
+        let horiz = denseLine(from: CGPoint(x: 0.4, y: 0.8), to: CGPoint(x: 0.8, y: 0.8))
+        let tap = [CGPoint(x: 0.9, y: 0.1)]
+        let trace = vert + tap + horiz
+        let m = try #require(StrokeProcessScorer.analyze(
+            points: trace,
+            strokeStartIndices: [vert.count, vert.count + tap.count],
+            reference: lStrokes))
+        #expect(m.strokeCount == 3, "vertical + tap + horizontal = 3 strokes drawn, got \(m.strokeCount)")
+        #expect(m.matchedReferenceOrder.count == 2, "only the two ≥2-sample strokes can be matched")
+        #expect(Set(m.matchedReferenceOrder.compactMap { $0 }) == [0, 1])
+    }
 }

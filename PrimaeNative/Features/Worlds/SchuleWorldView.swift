@@ -14,7 +14,7 @@ struct SchuleWorldView: View {
     @State private var showLetterPicker = false
 
     var body: some View {
-        if let failure = vm.studyPreconditionFailure {
+        if let failure = vm.sessionBlockReason {
             // Proctor-facing hard stop (ruling C3-6): the canvas is not
             // rendered at all, so a phoneme-arm session without its
             // recordings cannot be run and cannot be missed.

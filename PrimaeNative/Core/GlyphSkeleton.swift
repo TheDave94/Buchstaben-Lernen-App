@@ -58,9 +58,9 @@ struct GlyphSkeleton {
     /// chain from `startIdx` to `endIdx` inclusive, or nil if the two
     /// indices are in disconnected components.
     func bfsPath(from startIdx: Int, to endIdx: Int) -> [CGPoint]? {
-        guard startIdx != endIdx else { return [points[startIdx]] }
         guard points.indices.contains(startIdx),
               points.indices.contains(endIdx) else { return nil }
+        guard startIdx != endIdx else { return [points[startIdx]] }
         var parent = Array(repeating: -1, count: points.count)
         parent[startIdx] = startIdx
         var queue = [startIdx]

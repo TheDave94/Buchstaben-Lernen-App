@@ -14,7 +14,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FONT_PATH = ROOT / "design-system/fonts/Primae-Regular.otf"
-LETTERS_DIR = ROOT / "PrimaeNative/Resources/Letters"
+# The per-letter strokes.json live one level down, under the weight
+# directory; iterating Letters/ itself rendered "Regular"/"Light" and the
+# audio folders with no checkpoints at all (audit 2026-09-04).
+LETTERS_DIR = ROOT / "PrimaeNative/Resources/Letters/Regular"
 
 CELL = 360
 PAD = 28

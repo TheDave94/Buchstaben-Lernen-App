@@ -840,29 +840,42 @@ def _detect_junctions(strokes_rel: list[list[tuple[float, float]]],
     junctions: list[dict] = []
     for i in range(len(polylines_px) - 1):
         a, b = polylines_px[i], polylines_px[i + 1]
-        if len(a) < min_cps or len(b) < min_cps:
-            continue
-        pairings = [
-            ("first", "first", a[0], b[0], True, True),
-            ("first", "last", a[0], b[-1], True, False),
-            ("last", "first", a[-1], b[0], False, True),
-            ("last", "last", a[-1], b[-1], False, False),
-        ]
-        best = min(pairings,
-                    key=lambda p: math.hypot(p[2][0] - p[3][0],
-                                              p[2][1] - p[3][1]))
-        la, lb, ea, eb, a_first, b_first = best
-        dist = math.hypot(ea[0] - eb[0], ea[1] - eb[1])
-        if dist > epsilon_px:
+        det = _detect_junction_pair_px(a, b, epsilon_px, min_cps)
+        if det is None:
             continue
         junctions.append({
             "i": i, "j": i + 1,
-            "pairing": f"{la}/{lb}",
-            "dist_px": dist,
+            "pairing": det["pairing"],
+            "dist_px": det["dist_px"],
             "poly_a": a, "poly_b": b,
-            "a_first": a_first, "b_first": b_first,
+            "a_first": det["a_first"], "b_first": det["b_first"],
         })
     return junctions
+
+
+def _detect_junction_pair_px(a_px, b_px, epsilon_px: float, min_cps: int):
+    """The one endpoint-pairing detector. `_detect_junctions` (tested)
+    and `gate_g4_per_junction` (shipped) used to carry line-for-line
+    copies, so the tests exercised a twin of the gate rather than the
+    gate (audit 2026-09-05)."""
+    import math
+    if len(a_px) < min_cps or len(b_px) < min_cps:
+        return None
+    pairings = [
+        ("first", "first", a_px[0], b_px[0], True, True),
+        ("first", "last", a_px[0], b_px[-1], True, False),
+        ("last", "first", a_px[-1], b_px[0], False, True),
+        ("last", "last", a_px[-1], b_px[-1], False, False),
+    ]
+    best = min(pairings,
+               key=lambda p: math.hypot(p[2][0] - p[3][0],
+                                        p[2][1] - p[3][1]))
+    la, lb, ea, eb, a_first, b_first = best
+    dist = math.hypot(ea[0] - eb[0], ea[1] - eb[1])
+    if dist > epsilon_px:
+        return None
+    return {"pairing": f"{la}/{lb}", "dist_px": dist,
+            "a_first": a_first, "b_first": b_first}
 
 
 def gate_g4_per_junction(cand_a_rel: list[tuple[float, float]],
@@ -899,26 +912,14 @@ def gate_g4_per_junction(cand_a_rel: list[tuple[float, float]],
         b_rs = _arc_length_resample(b_rel, n_resample)
         a_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in a_rs]
         b_px = [(x_min + rx * bw, y_min + ry * bh) for rx, ry in b_rs]
-        if len(a_px) < min_cps or len(b_px) < min_cps:
-            return None
-        pairings = [
-            ("first", "first", a_px[0], b_px[0], True, True),
-            ("first", "last", a_px[0], b_px[-1], True, False),
-            ("last", "first", a_px[-1], b_px[0], False, True),
-            ("last", "last", a_px[-1], b_px[-1], False, False),
-        ]
-        best = min(pairings,
-                    key=lambda p: math.hypot(p[2][0] - p[3][0],
-                                              p[2][1] - p[3][1]))
-        la, lb, ea, eb, a_first, b_first = best
-        dist = math.hypot(ea[0] - eb[0], ea[1] - eb[1])
-        if dist > epsilon_px:
+        det = _detect_junction_pair_px(a_px, b_px, epsilon_px, min_cps)
+        if det is None:
             return None
         return {
-            "pairing": f"{la}/{lb}",
-            "dist_px": dist,
+            "pairing": det["pairing"],
+            "dist_px": det["dist_px"],
             "a_px": a_px, "b_px": b_px,
-            "a_first": a_first, "b_first": b_first,
+            "a_first": det["a_first"], "b_first": det["b_first"],
         }
 
     cand_det = _detect_for_pair(cand_a_rel, cand_b_rel)
@@ -939,7 +940,10 @@ def gate_g4_per_junction(cand_a_rel: list[tuple[float, float]],
             "pairing": (ref_det or cand_det)["pairing"],
             "dist_cand_px": cand_det["dist_px"] if cand_det else None,
             "dist_ref_px": ref_det["dist_px"] if ref_det else None,
-            "pass": True,
+            # A junction present in one round and absent in the other IS
+            # the largest possible junction regression; it used to pass
+            # vacuously (audit 2026-09-04).
+            "pass": False,
             "reason": "junction_detection_mismatch_between_rounds",
         }
 
@@ -1237,7 +1241,7 @@ def gate_g6_per_junction(
             "host_idx_ref": ref_det["host_cp_idx"] if ref_det else None,
             "dist_cand_px": cand_det["dist_px"] if cand_det else None,
             "dist_ref_px": ref_det["dist_px"] if ref_det else None,
-            "pass": True,
+            "pass": False,   # see G4's twin (audit 2026-09-04)
             "reason": "t_junction_detection_mismatch_between_rounds",
         }
     kink_cand = _t_junction_attachment_angle_deg(

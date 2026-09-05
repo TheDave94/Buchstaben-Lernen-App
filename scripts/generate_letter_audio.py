@@ -211,6 +211,11 @@ TRACING_WORDS: list[str] = [
 OUTPUT_ROOT = Path("audio_variants")
 
 
+# Failed requests, so a run with an expired key cannot read like a fully
+# cached no-op and exit 0 (audit 2026-09-04).
+FAILED_REQUESTS: list[str] = []
+
+
 def synthesise(text: str, voice_id: str, settings: dict, out_path: Path) -> int:
     """POST to ElevenLabs TTS. Writes the MP3 to ``out_path`` unless the
     file already exists. Returns the number of characters billed (0 when
@@ -243,6 +248,7 @@ def synthesise(text: str, voice_id: str, settings: dict, out_path: Path) -> int:
             f"  ✗ {resp.status_code} for '{text}' ({voice_id}): "
             f"{resp.text[:200]}\n"
         )
+        FAILED_REQUESTS.append(f"{text} ({voice_id})")   # audit 2026-09-04
         return 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(resp.content)
@@ -415,6 +421,12 @@ def main() -> int:
 
     print()
     print(f"Total characters billed: {total_chars}")
+    if FAILED_REQUESTS:
+        print(f"{len(FAILED_REQUESTS)} request(s) FAILED — do not copy this output into the app:",
+              file=sys.stderr)
+        for f in FAILED_REQUESTS:
+            print(f"  ✗ {f}", file=sys.stderr)
+        return 1
     print(f"Output: {OUTPUT_ROOT.absolute()}")
     print()
     if audition_letter:

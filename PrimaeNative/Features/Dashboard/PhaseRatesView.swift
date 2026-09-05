@@ -33,6 +33,9 @@ struct PhaseRatesView: View {
             // Always render every phase, even with no data, so the
             // parent sees the full pedagogical arc up front.
             ForEach(LearningPhase.allCases, id: \.self) { phase in
+                // A phase with no record is "not attempted", not 0 %
+                // (audit 2026-09-04) — the exporter makes the same distinction.
+                let attempted = rates[phase.rawName] != nil
                 let value = rates[phase.rawName] ?? 0
                 let color = Self.color(for: phase)
                 HStack(spacing: 12) {
@@ -51,13 +54,15 @@ struct PhaseRatesView: View {
                     }
                     .frame(height: 12)
 
-                    Text("\(Int((value * 100).rounded())) %")
+                    Text(attempted ? "\(Int((value * 100).rounded())) %" : "–")
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(width: 48, alignment: .trailing)
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(phase.displayName) \(Int((value * 100).rounded())) Prozent abgeschlossen")
+                .accessibilityLabel(attempted
+                    ? "\(phase.displayName) \(Int((value * 100).rounded())) Prozent abgeschlossen"
+                    : "\(phase.displayName) noch nicht begonnen")
             }
         }
         .padding(.vertical, 4)

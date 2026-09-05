@@ -431,4 +431,65 @@ import Foundation
             #expect(!row[2].isEmpty, "\(family) arm field is empty")
         }
     }
+
+    // MARK: - 6. letterBy* families read freeWrite rows only (audit 2026-09-04)
+
+    /// observe/direct rows carry a constant score of 1.0 and guided
+    /// carries coverage; averaging them into `letterByArm` floored the
+    /// per-arm accuracy near 0.5 and compared the arms on a completion
+    /// counter. Only the freeWrite production row is an accuracy.
+    @Test("letterByArm and letterByAudioArm ignore completed non-freeWrite rows")
+    func letterByArmFamiliesAreFreeWriteOnly() throws {
+        var snap = DashboardSnapshot()
+        let t = Date(timeIntervalSince1970: 1_770_000_000)
+        snap.phaseSessionRecords = [
+            PhaseSessionRecord(letter: "A", phase: "observe", completed: true, score: 1.0,
+                               schedulerPriority: 0, condition: .threePhase, audioCondition: .spatial, recordedAt: t),
+            PhaseSessionRecord(letter: "A", phase: "direct", completed: true, score: 1.0,
+                               schedulerPriority: 0, condition: .threePhase, audioCondition: .spatial, recordedAt: t),
+            PhaseSessionRecord(letter: "A", phase: "guided", completed: true, score: 0.9,
+                               schedulerPriority: 0, condition: .threePhase, audioCondition: .spatial, recordedAt: t),
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true, score: 0.3,
+                               schedulerPriority: 0, condition: .threePhase, audioCondition: .spatial, recordedAt: t),
+        ]
+        let lines = String(data: ParentDashboardExporter.csvData(
+            from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
+            .components(separatedBy: "\n")
+        let byArm = family("letterByArm", in: lines)
+        #expect(byArm == [["letterByArm", "A", "threePhase", "1", "0.3000"]],
+                "one freeWrite row, its own score — got \(byArm)")
+        let byAudio = family("letterByAudioArm", in: lines)
+        #expect(byAudio == [["letterByAudioArm", "A", "spatial", "1", "0.3000"]],
+                "got \(byAudio)")
+    }
+
+    /// The proxy pairs consecutive rows per letter. Within one pass those
+    /// are observe → direct → guided → freeWrite — three different
+    /// instruments — so a guided row must not form a "learning delta"
+    /// with the freeWrite row that follows it (audit 2026-09-04).
+    @Test("schedulerEffectivenessProxy_ pairs freeWrite rows only")
+    func proxyIgnoresNonFreeWriteRows() throws {
+        let t0 = Date(timeIntervalSince1970: 1_770_000_000)
+        func fw(_ score: Double, _ prio: Double, _ offset: Double) -> PhaseSessionRecord {
+            PhaseSessionRecord(letter: "A", phase: "freeWrite", completed: true, score: score,
+                               schedulerPriority: prio, condition: .threePhase, recordedAt: t0.addingTimeInterval(offset))
+        }
+        func guided(_ offset: Double) -> PhaseSessionRecord {
+            PhaseSessionRecord(letter: "A", phase: "guided", completed: true, score: 1.0,
+                               schedulerPriority: 0.9, condition: .threePhase, recordedAt: t0.addingTimeInterval(offset))
+        }
+        // Three passes: the guided rows interleave with the freeWrite rows.
+        var snap = DashboardSnapshot()
+        snap.phaseSessionRecords = [guided(0), fw(0.2, 0.1, 1), guided(2), fw(0.6, 0.5, 3), guided(4), fw(0.7, 0.9, 5)]
+        let lines = String(data: ParentDashboardExporter.csvData(
+            from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
+            .components(separatedBy: "\n")
+        let r = try #require(Double(try #require(metrics(lines)["schedulerEffectivenessProxy_threePhase"])))
+        // freeWrite-only pairs: (0.1, +0.4), (0.5, +0.1) → r = -1 exactly.
+        // With the guided rows paired in, the deltas alternate sign and r moves.
+        #expect(abs(r - (-1.0)) < 1e-6, "expected r = -1 from the two freeWrite pairs, got \(r)")
+        #expect(abs(snap.schedulerEffectivenessProxy - (-1.0)) < 1e-6,
+                "the store's own proxy must agree with the exporter: \(snap.schedulerEffectivenessProxy)")
+    }
+
 }

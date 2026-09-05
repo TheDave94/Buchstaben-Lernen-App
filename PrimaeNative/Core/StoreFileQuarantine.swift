@@ -59,7 +59,13 @@ struct LossyArray<Element: Decodable>: Decodable {
             }
             // A container that cannot advance would spin forever — stop
             // and keep what was decoded so far.
-            if container.currentIndex == before { break }
+            if container.currentIndex == before {
+                // Everything after this element is lost too — say so.
+                if let total = container.count {
+                    dropped += max(0, total - container.currentIndex - 1)
+                }
+                break
+            }
         }
         elements = out
         droppedCount = dropped

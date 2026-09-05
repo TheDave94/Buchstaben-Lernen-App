@@ -245,9 +245,12 @@ struct SettingsView: View {
     @ViewBuilder
     private func orderingRow(_ strategy: LetterOrderingStrategy) -> some View {
         Button {
-            selectedOrdering = strategy
-            UserDefaults.standard.set(strategy.rawValue, forKey: Self.orderingDefaultsKey)
+            // Read back what the VM accepted: studyMode snaps the value,
+            // and the tick / stored value must not disagree with the
+            // stimulus (audit 2026-09-04).
             vm.letterOrdering = strategy
+            selectedOrdering = vm.letterOrdering
+            UserDefaults.standard.set(vm.letterOrdering.rawValue, forKey: Self.orderingDefaultsKey)
         } label: {
             HStack {
                 Text(strategy.displayName)
@@ -264,9 +267,9 @@ struct SettingsView: View {
     @ViewBuilder
     private func schriftArtRow(_ art: SchriftArt) -> some View {
         Button {
-            selectedSchriftArt = art
-            UserDefaults.standard.set(art.rawValue, forKey: Self.defaultsKey)
             vm.schriftArt = art
+            selectedSchriftArt = vm.schriftArt
+            UserDefaults.standard.set(vm.schriftArt.rawValue, forKey: Self.defaultsKey)
         } label: {
             HStack {
                 Text(art.displayName)

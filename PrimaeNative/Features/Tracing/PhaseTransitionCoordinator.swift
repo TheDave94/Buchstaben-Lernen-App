@@ -94,10 +94,22 @@ final class PhaseTransitionCoordinator {
     /// `advance()` and the study-mode unload path so one trace is scored
     /// one way, whichever route records it. Sets the recorder's
     /// `lastAssessment` / `lastStrokeProcess` as a side effect.
+    /// "pencil" when any sample of the current freeWrite trace carried
+    /// force (only a Pencil reports it), "finger" when the trace exists
+    /// and none did, nil when there is no trace to judge by.
+    private func traceInputDevice() -> String? {
+        guard let vm, !vm.freeWriteRecorder.forces.isEmpty else { return nil }
+        return vm.freeWriteRecorder.forces.contains { $0 > 0 }
+            ? InputPreset.Kind.pencil.rawValue : InputPreset.Kind.finger.rawValue
+    }
+
     private func scoreFreeWrite() -> CGFloat {
         guard let vm else { return 0 }
         guard let def = vm.strokeTracker.definition else {
-            vm.freeWriteRecorder.clearAll()
+            // Do NOT clear the recorder here: both callers capture the
+            // trace AFTER scoring, and a wipe turned a real production
+            // into a completed, score-0 row with no raw trace
+            // (audit 2026-09-04). The capture path clears it.
             return 0
         }
         // Multi-cell (pencil / word): pass each cell's frame so
@@ -195,8 +207,8 @@ final class PhaseTransitionCoordinator {
             condition: vm.thesisCondition,
             audioCondition: vm.audioCondition,
             assessment: m.assessment,
-            recognition: nil,
-            inputDevice: vm.detector.effectiveKind.rawValue,
+            recognition: m.recognition,   // computed above; was dropped (audit 2026-09-04)
+            inputDevice: traceInputDevice() ?? vm.detector.effectiveKind.rawValue,
             rawTraceID: m.traceID,
             trainedSubset: vm.trainedSubset.rawValue,
             phaseDurationSeconds: m.duration,
@@ -399,7 +411,10 @@ final class PhaseTransitionCoordinator {
                 audioCondition: vm.audioCondition,
                 assessment: isFreeWrite ? m.assessment : nil,
                 recognition: isFreeWrite ? m.recognition : nil,
-                inputDevice: device,
+                // The freeWrite row says what wrote THIS trace; the
+                // detector's hysteresis can still say "pencil" for a
+                // finger-written letter (audit 2026-09-05).
+                inputDevice: isFreeWrite ? (traceInputDevice() ?? device) : device,
                 rawTraceID: isFreeWrite ? m.traceID : nil,
                 trainedSubset: vm.trainedSubset.rawValue,
                 phaseDurationSeconds: isFreeWrite ? m.duration : nil,

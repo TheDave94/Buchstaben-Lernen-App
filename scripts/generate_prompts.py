@@ -135,7 +135,7 @@ def synthesise(text: str, voice_id: str, out_path: Path) -> int:
             f"  ✗ {resp.status_code} for '{text}' ({voice_id}): "
             f"{resp.text[:200]}\n"
         )
-        return 0
+        return -1   # distinguishable from "already on disk" (audit 2026-09-04)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(resp.content)
     return len(text)
@@ -185,16 +185,26 @@ def main() -> int:
     )
 
     total_chars = 0
+    failures = 0
     for voice_name, voice_id in voices.items():
         print(f"\n=== {voice_name} ===")
         for stem, text in prompts.items():
             out = OUTPUT_ROOT / voice_name / "prompts" / f"{stem}.mp3"
             chars = synthesise(text, voice_id, out)
-            total_chars += chars
-            tag = "·" if chars == 0 else f"+{chars:>3}c"
+            if chars < 0:
+                failures += 1
+                tag = "FAIL"
+            else:
+                total_chars += chars
+                tag = "·" if chars == 0 else f"+{chars:>3}c"
             print(f"  {tag}  {stem:22}  {text}")
 
     print(f"\n{total_chars} characters billed in this run.")
+    if failures:
+        # A run with an expired key used to read exactly like a cached
+        # no-op and exit 0 (audit 2026-09-04).
+        print(f"{failures} request(s) FAILED — do not copy this output into the app.", file=sys.stderr)
+        return 1
     print(f"Output: {OUTPUT_ROOT.resolve()}")
     print(
         "After listening, copy your chosen voice's prompts/ dir into "

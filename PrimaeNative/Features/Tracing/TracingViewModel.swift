@@ -745,7 +745,9 @@ public final class TracingViewModel {
     /// `[weak self]` wired after `self` is initialised.
     let playback: PlaybackController
     private let messages: TransientMessagePresenter
-    private let animation: AnimationGuideController
+    /// Internal (not private) so tests can drive `onCycleComplete`
+    /// deterministically instead of waiting on real animation time.
+    let animation: AnimationGuideController
     /// Observe-phase cycle counter for auto-advance after the second loop.
     private var observeCycleCount: Int = 0
     /// Idempotency key for `reloadStrokeCheckpoints`. Reset when source
@@ -1069,7 +1071,12 @@ public final class TracingViewModel {
             // non-auditory equivalent. See PreTaskDemonstration header.
             return
         case .phoneme:
-            guard let first = activeAudioFiles(for: letter).first else { return }
+            guard let first = activeAudioFiles(for: letter).first else {
+                // Unreachable behind `studyPreconditionFailure`; if it ever
+                // is reached, it is a fault, not a quiet skip (C1-6).
+                pilotAudioLogger.fault("Pre-task demonstration SKIPPED: no phoneme file for \(letter.name, privacy: .public) — the session should have been refused.")
+                return
+            }
             preTaskDemoTask = Task { [weak self] in
                 // `.cancel()` only flips this flag — it does NOT stop
                 // the closure from starting, so a task cancelled before
@@ -1188,6 +1195,14 @@ public final class TracingViewModel {
     /// font outline stayed on screen in every phase, so the "from memory"
     /// outcome was copying over a visible model. Outside the study the
     /// casual app keeps its outline.
+    /// The progress bar and pill grow with checkpoint coverage on every
+    /// touch, in every phase. In study freeWrite that is a per-child,
+    /// performance-contingent signal on the outcome trial — hidden, like
+    /// the glyph and the numeric readout (audit 2026-09-04).
+    var showsProgressFeedback: Bool {
+        !(studyMode && learningPhase == .freeWrite)
+    }
+
     var showsReferenceGlyph: Bool {
         !(studyMode && learningPhase == .freeWrite)
     }
@@ -1301,12 +1316,13 @@ public final class TracingViewModel {
         // flight — is scored and recorded now, before the stores drain
         // below. The trial most at risk is the last one of a session:
         // the proctor closes the app right after the child lifts the
-        // pen, and the async completion never ran. A production with the
-        // finger still down is left alone; the child may resume
-        // (2026-09-04).
-        let wasTouching = touchDispatcher.isSingleTouchInteractionActive
+        // pen, and the async completion never ran. `endTouch()` ends a
+        // gesture that was still down, so that production is finished
+        // too — it is recorded here as well, because the quiet-window
+        // task it schedules may never run in a suspended app
+        // (audit 2026-09-04).
         endTouch()
-        if !wasTouching { phaseTransitions.finalizeFinishedFreeWriteIfPending() }
+        phaseTransitions.finalizeFinishedFreeWriteIfPending()
         // Stop the active-time timer so backgrounded time isn't
         // counted; the accumulator survives the round-trip.
         if let start = letterLoadTime {
@@ -1369,8 +1385,18 @@ public final class TracingViewModel {
         guard !letters.isEmpty, letterIndex < letters.count,
               let rawStrokes = rawGlyphStrokes,
               !rawStrokes.strokes.isEmpty else { return }
-        // Auto-advance the observe phase after the second cycle so
-        // non-reading children aren't stuck waiting on "Tippen".
+        armObserveAutoAdvance()
+        animation.start(strokes: rawStrokes)
+    }
+
+    /// Auto-advance the observe phase after the second cycle so
+    /// non-reading children aren't stuck waiting on "Tippen". Installed
+    /// on EVERY observe entry: `load(letter:)` used to drive the animator
+    /// without it, so the very first letter of a session could only leave
+    /// observe by the tap — which studyMode makes inert — and the counter
+    /// kept counting guided-phase loops, so later letters left observe
+    /// after ONE cycle (audit 2026-09-04, class one/two).
+    private func armObserveAutoAdvance() {
         observeCycleCount = 0
         animation.onCycleComplete = { [weak self] in
             guard let self else { return }
@@ -1380,7 +1406,6 @@ public final class TracingViewModel {
                 self.completeObservePhase()
             }
         }
-        animation.start(strokes: rawStrokes)
     }
 
     func stopGuideAnimation() {
@@ -1435,9 +1460,12 @@ public final class TracingViewModel {
     /// Reset onboarding so it replays. Re-reads the parent variant
     /// preference; the historical `variantUsed` is preserved.
     func restartOnboarding() {
+        // Read the recorded A/B variant BEFORE the reset wipes it — the
+        // guard in `markComplete` ("record only on the first complete")
+        // was defeated by the one path it exists for (audit 2026-09-04).
+        let recordedVariant = onboardingStore.variantUsed
         onboardingStore.reset()
         let useShort = UserDefaults.standard.bool(forKey: "de.flamingistan.primae.useShortOnboarding")
-        let recordedVariant = onboardingStore.variantUsed
         onboardingVariant = recordedVariant ?? (useShort ? .short : .full)
         onboardingCoordinator = OnboardingCoordinator(steps: onboardingVariant.steps)
         onboardingStep = onboardingCoordinator.currentStep
@@ -1577,7 +1605,12 @@ public final class TracingViewModel {
                 Checkpoint(x: cp.x, y: cp.y)
             })
         }
-        let bboxStrokes = LetterStrokes(letter: currentLetterName, checkpointRadius: 0.05, strokes: defs)
+        // The letter's own radius, not a constant: the corpus carries 0.1
+        // and 0.05, and a calibration round-trip must not rewrite the
+        // scored tolerance (audit 2026-09-04).
+        let authoredRadius = letters.indices.contains(letterIndex)
+            ? letters[letterIndex].strokes.checkpointRadius : 0.05
+        let bboxStrokes = LetterStrokes(letter: currentLetterName, checkpointRadius: authoredRadius, strokes: defs)
         let cellSize = grid.activeCell.frame.size
         guard cellSize.width > 0, cellSize.height > 0,
               let gr = PrimaeLetterRenderer.normalizedGlyphRect(
@@ -1690,7 +1723,17 @@ public final class TracingViewModel {
     /// the CoreML model that never loaded. Proctor-facing text (the
     /// child never sees a session in this state).
     var studyPreconditionFailure: String? {
-        guard studyMode, audioCondition == .phoneme else { return nil }
+        guard studyMode else { return nil }
+        // Spatial arm: its stimulus and its demonstration are one bundled
+        // carrier file; the engine merely logs when it is missing, so the
+        // arm would run without its manipulation and the proctor could
+        // not tell (ruling C1-6: hard requirement, like the phonemes).
+        if audioCondition == .spatial {
+            return SpatialSonification.carrierToneURL() == nil
+                ? "Spatial-Arm ohne Trägerton (\(SpatialSonification.carrierToneFile)). Die Sitzung wird nicht gestartet — weder Tracing-Ton noch Demonstration könnten spielen."
+                : nil
+        }
+        guard audioCondition == .phoneme else { return nil }
         let missing = letters
             .filter { studyBaseLetters.contains($0.baseLetter) && $0.letterCase == .upper
                       && $0.phonemeAudioFiles.isEmpty }
@@ -1969,6 +2012,7 @@ public final class TracingViewModel {
                     phaseController.advance(score: 1.0)  // skip direct (no dots to tap)
                 }
             } else {
+                armObserveAutoAdvance()
                 animation.startAfterDelay(0.3, strokes: observeStrokes)
                 armPreTaskDemonstration(for: letter)
             }
@@ -2081,6 +2125,12 @@ public final class TracingViewModel {
                 continue
             }
             let cellSize = cell.frame.size
+            // `tracker.load` resets `radiusMultiplier` to 1.0; a canvas
+            // resize mid-letter must not silently drop the errorless-
+            // learning ramp / adapted tier (audit 2026-09-04). Study
+            // builds pin it to 1.0 anyway.
+            let keptRadiusMultiplier = cell.tracker.radiusMultiplier
+            defer { cell.tracker.radiusMultiplier = keptRadiusMultiplier }
             guard cellSize.width > 0, cellSize.height > 0 else {
                 // Pre-layout state (e.g. during init before onAppear) — fall
                 // back to the source strokes so the tracker at least has
@@ -2164,7 +2214,28 @@ public final class TracingViewModel {
     /// VM captures `thesisCondition` / `audioCondition` as `let` at init —
     /// so the caller surfaces a "relaunch required" prompt.
     @discardableResult
+    /// Set by `resetForNewParticipant()` and `markParticipantRestored()`.
+    /// The arms and the trained subset are `let`s captured at init, so
+    /// the VM in memory still carries the PREVIOUS child's; until the
+    /// relaunch the research screen asks for, a session would stamp the
+    /// new id with the old arm and letters (audit 2026-09-04). Tracing
+    /// is refused instead.
+    private(set) var participantIdentityChanged = false
+
+    func markParticipantRestored() { participantIdentityChanged = true }
+
+    /// Why the Schule surface must not start a session right now, or nil.
+    /// Folds the study precondition (phoneme recordings) and the
+    /// identity-changed relaunch requirement into one child-facing stop.
+    var sessionBlockReason: String? {
+        if participantIdentityChanged {
+            return "Teilnehmer gewechselt — die App muss neu gestartet werden, damit Arm und Buchstaben des neuen Kindes gelten."
+        }
+        return studyPreconditionFailure
+    }
+
     func resetForNewParticipant() -> UUID {
+        participantIdentityChanged = true
         dashboardStore.reset()          // PhaseSessionRecords, letterStats, durations
         progressStore.resetAll()        // all LetterProgress
         streakStore.reset()             // streak + stars

@@ -192,6 +192,15 @@ def run_gate_for_letter(letter: str, gate: str, weight: str,
         result = meta["function_without_mask"](cand_polys, ref_polys,
                                                  bbox, threshold)
     result["letter"] = letter
+    # Every gate compares min(n_cand, n_ref) pairs, so a deleted or added
+    # stroke passed all of them silently — the most consequential corpus
+    # regression was the one thing no gate checked (audit 2026-09-04).
+    n_cand, n_ref = len(cand_polys), len(ref_polys)
+    result["n_strokes_candidate"] = n_cand
+    result["n_strokes_reference"] = n_ref
+    if n_cand != n_ref:
+        result["pass"] = False
+        result["stroke_count_mismatch"] = f"candidate {n_cand} vs reference {n_ref} strokes"
     return result
 
 
@@ -200,6 +209,8 @@ def format_letter_human(result: dict) -> str:
     if "error" in result:
         return f"{letter:6s} ERROR: {result['error']}"
     parts = [f"{'✓' if result['pass'] else '✗'} {letter:4s}"]
+    if result.get("stroke_count_mismatch"):
+        parts.append(f"STROKE COUNT CHANGED: {result['stroke_count_mismatch']}")
     # Drift-per-stroke (G1/G2) and conformance-per-stroke (G3) gates
     # produce a `per_stroke` key. Drift-per-junction (G4) gates produce
     # `per_junction` instead.

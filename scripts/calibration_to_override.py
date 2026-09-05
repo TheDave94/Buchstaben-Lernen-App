@@ -70,10 +70,21 @@ def import_aggregate_export(input_path: Path,
     data = json.loads(input_path.read_text())
     if weight_dir is None:
         schrift = data.get("schriftArt", "druckschrift")
-        weight_dir = SCHRIFTART_TO_WEIGHT_DIR.get(schrift, "Regular")
+        if schrift not in SCHRIFTART_TO_WEIGHT_DIR:
+            # An unknown or misspelled value used to fall through to
+            # Regular and overwrite the pilot corpus (audit 2026-09-04).
+            raise ValueError(f"unknown schriftArt {schrift!r}; expected one of "
+                             f"{sorted(SCHRIFTART_TO_WEIGHT_DIR)} — pass --weight-dir to override")
+        weight_dir = SCHRIFTART_TO_WEIGHT_DIR[schrift]
     written: list[str] = []
     for entry in data["letters"]:
         letter = entry["letter"]
+        strokes = entry.get("strokes") or []
+        if not strokes or any(len(s.get("checkpoints", [])) < 2 for s in strokes):
+            # Never replace a shipped file with an empty or one-checkpoint
+            # export from an unvisited letter (audit 2026-09-04).
+            raise ValueError(f"{letter!r}: export has no usable strokes "
+                             f"({[len(s.get('checkpoints', [])) for s in strokes]}) — refusing to write")
         letter_nfc = normalize_letter_name(letter)
         d = target_dir(letter_nfc, weight_dir)
         f = d / "strokes.json"

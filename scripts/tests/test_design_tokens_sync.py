@@ -101,6 +101,10 @@ def _vars_in(block: str) -> dict:
 CSS = CSS_PATH.read_text()
 LIGHT = _vars_in(_blocks(CSS, ":root"))
 DARK = _vars_in(_blocks(CSS, 'html[data-theme="dark"]'))
+# The dark palette is declared TWICE: the explicit opt-in block above and
+# the system-preference block below. The second one never entered the
+# comparison (audit 2026-09-04).
+DARK_MEDIA = _vars_in(_blocks(CSS, "@media (prefers-color-scheme: dark)"))
 GEN = _load_gen_colorsets()
 
 
@@ -118,6 +122,21 @@ def test_every_token_matches_css_light_and_dark():
                     f"{name} ({scheme}): CSS --{css_name} is "
                     f"#{got[0]:06X}@{got[1]} but TOKENS says "
                     f"#{expected:06X}@{alpha}")
+    assert not problems, "\n".join(problems)
+
+
+def test_system_dark_block_matches_explicit_dark_block():
+    """Every var in the opt-in dark block must appear with the same value
+    in the prefers-color-scheme block, or system-dark users see a palette
+    no test compared."""
+    problems = []
+    for name, value in DARK.items():
+        got = DARK_MEDIA.get(name)
+        if got is None:
+            problems.append(f"--{name}: missing from the @media dark block")
+        elif got != value:
+            problems.append(f"--{name}: @media dark #{got[0]:06X}@{got[1]} != "
+                            f"[data-theme=dark] #{value[0]:06X}@{value[1]}")
     assert not problems, "\n".join(problems)
 
 

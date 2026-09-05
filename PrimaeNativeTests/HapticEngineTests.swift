@@ -143,10 +143,12 @@ private final class TrackingMockAudio: AudioControlling {
         #expect(haptics.prepareCallCount == 1)
     }
 
-    @Test func letterCompleted_firesLetterCompleted() {
+    @Test func letterCompleted_firesLetterCompleted() throws {
         let haptics = NullHapticEngine()
         let vm = makeVM(studyMode: false, haptics: haptics)
-        guard !vm.currentLetterName.isEmpty else { return }
+        // A fixture without a letter must FAIL this positive control, not
+        // skip it (audit 2026-09-04).
+        try #require(!vm.currentLetterName.isEmpty, "the stub repository supplied no letter")
         haptics.reset()
 
         let progress = traceWholeLetter(vm)

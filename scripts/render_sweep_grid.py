@@ -129,7 +129,9 @@ def bake_variant(letter: str, spec: list) -> dict:
     """Reload bake module, install spec, bake. Returns debug dict."""
     importlib.reload(g)
     g.LETTERS[letter] = spec
-    _, dbg = g.bake_letter(letter, g.DEFAULT_FONT)
+    # Every shipped letter is a static artifact; the sweep is exactly the
+    # tool that re-bakes one on purpose (audit 2026-09-04).
+    _, dbg = g.bake_letter(letter, g.DEFAULT_FONT, _suppress_static_guard=True)
     return dbg
 
 

@@ -77,12 +77,32 @@ import Testing
         c.stop()
     }
 
+    /// A second `start` must cancel the first loop, or two guide dots run
+    /// (and `onCycleComplete` fires twice per cycle). Counted through the
+    /// injected sleeper: every loop parks in exactly one sleep at a time,
+    /// so the number of sleeps in flight is the number of live loops.
+    /// (The test used to contain no assertion at all — audit 2026-09-04.)
     @Test func start_replacesInFlightAnimation() async {
-        let c = AnimationGuideController()
+        final class Gate: @unchecked Sendable {
+            let lock = NSLock(); var inFlight = 0; var peak = 0
+            func enter() { lock.lock(); inFlight += 1; peak = max(peak, inFlight); lock.unlock() }
+            func leave() { lock.lock(); inFlight -= 1; lock.unlock() }
+            var current: Int { lock.lock(); defer { lock.unlock() }; return inFlight }
+        }
+        let gate = Gate()
+        let c = AnimationGuideController(sleeper: { _ in
+            gate.enter(); defer { gate.leave() }
+            // Park until cancelled — a cancelled loop leaves, a live one stays.
+            try await Task.sleep(for: .seconds(60))
+        })
         c.start(strokes: sampleStrokes())
-        try? await Task.sleep(for: .milliseconds(40))
+        for _ in 0..<20 { await Task.yield() }
+        #expect(gate.current == 1, "one loop parked in its sleep, got \(gate.current)")
         c.start(strokes: sampleStrokes())
-        try? await Task.sleep(for: .milliseconds(40))
+        for _ in 0..<50 { await Task.yield() }
+        #expect(gate.current == 1, "the first loop must be cancelled by the second start; live loops = \(gate.current)")
         c.stop()
+        for _ in 0..<50 { await Task.yield() }
+        #expect(gate.current == 0, "stop must cancel the live loop; live loops = \(gate.current)")
     }
 }

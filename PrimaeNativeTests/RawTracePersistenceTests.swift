@@ -136,18 +136,29 @@ import CoreGraphics
     // MARK: - JSON-backed store persistence
 
     @Test("JSONRawTraceStore appends, caps, persists, and resets")
-    func jsonStoreRoundTrips() {
+    func jsonStoreRoundTrips() async {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
         let store = JSONRawTraceStore(fileURL: tmp)
-        let trace = RawTrace(id: UUID(), letter: "B", recordedAt: Date(),
-                             points: [CGPoint(x: 5, y: 5)], timestamps: [0], forces: [0],
-                             strokeStartIndices: [], canvasSize: CGSize(width: 100, height: 100))
-        store.append(trace)
+        func trace(_ letter: String) -> RawTrace {
+            RawTrace(id: UUID(), letter: letter, recordedAt: Date(),
+                     points: [CGPoint(x: 5, y: 5)], timestamps: [0], forces: [0],
+                     strokeStartIndices: [], canvasSize: CGSize(width: 100, height: 100))
+        }
+        store.append(trace("B"))
         #expect(store.traces.count == 1)
-        // A fresh instance over the same file decodes the persisted trace.
-        // (persist is async; reset is synchronous on the in-memory array.)
+        // Persists: a fresh instance over the same file decodes it
+        // (the test used to claim this and never did it — audit 2026-09-04).
+        await store.flush()
+        let reopened = JSONRawTraceStore(fileURL: tmp)
+        #expect(reopened.traces.count == 1 && reopened.traces.first?.letter == "B",
+                "the persisted trace must come back from disk; got \(reopened.traces.count)")
+        // Caps at 500, dropping the OLDEST.
+        for i in 0..<520 { store.append(trace("C\(i)")) }
+        #expect(store.traces.count == 500, "cap is 500, got \(store.traces.count)")
+        #expect(store.traces.first?.letter == "C20", "the oldest traces are the ones dropped")
+        // Resets.
         store.reset()
         #expect(store.traces.isEmpty)
     }

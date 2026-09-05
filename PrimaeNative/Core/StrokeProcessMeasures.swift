@@ -94,7 +94,9 @@ struct StrokeProcessMeasures: Equatable {
     /// average — their signal is `strokeCount`, not a distance penalty;
     /// see the file header.
     let spatialDeviation: CGFloat
-    /// Number of strokes the child actually drew (pen-lift count + 1).
+    /// Number of strokes the child actually drew (pen-lift count + 1),
+    /// INCLUDING one-sample taps, which cannot be matched and so do not
+    /// appear in `matchedReferenceOrder` — its count can be smaller.
     /// The reference's own expected count is `reference.strokes.count`
     /// — a per-letter constant already in the bundle, not duplicated
     /// into every row.
@@ -142,8 +144,10 @@ enum StrokeProcessScorer {
     ) -> StrokeProcessMeasures? {
         guard !points.isEmpty, !reference.strokes.isEmpty else { return nil }
 
-        let traceStrokes = splitStrokes(points: points, strokeStartIndices: strokeStartIndices)
-            .filter { $0.count >= 2 }
+        let allTraceStrokes = splitStrokes(points: points, strokeStartIndices: strokeStartIndices)
+        // Only strokes with >= 2 samples can be matched; a one-sample tap
+        // still COUNTS as a stroke the child made (audit 2026-09-04).
+        let traceStrokes = allTraceStrokes.filter { $0.count >= 2 }
         guard !traceStrokes.isEmpty else { return nil }
 
         let refStrokes = FreeWriteScorer.densifyReferenceStrokesPerStroke(reference)
@@ -199,7 +203,7 @@ enum StrokeProcessScorer {
 
         return StrokeProcessMeasures(
             spatialDeviation: totalDeviation / CGFloat(matchedCount),
-            strokeCount: traceCount,
+            strokeCount: allTraceStrokes.count,
             matchedReferenceOrder: matched,
             reversedStrokeCount: reversedCount
         )

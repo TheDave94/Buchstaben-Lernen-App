@@ -75,12 +75,15 @@ struct LetterScheduler {
             // priority = -completionCount so less-practised letters
             // bubble up; stable sort preserves caller order on ties.
             return available.map { letter in
-                let count = progress[letter]?.completionCount ?? 0
+                // Progress is keyed canonically (uppercase); `available`
+                // carries display names ("a"). Look up by the store's key
+                // (audit 2026-09-04, class two).
+                let count = progress[LetterProgress.canonicalKey(letter)]?.completionCount ?? 0
                 return ScoredLetter(letter: letter, priority: -Double(count))
             }.sorted()
         }
         return available.map { letter in
-            score(letter: letter, progress: progress[letter], now: now)
+            score(letter: letter, progress: progress[LetterProgress.canonicalKey(letter)], now: now)
         }.sorted()
     }
 

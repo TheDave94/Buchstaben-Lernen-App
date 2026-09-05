@@ -173,13 +173,32 @@ import CoreGraphics
             canvasSize: .init(width: 200, height: 100),
             now: 103
         )
-        // Both cells produced valid sub-traces; result is the average
-        // of two non-zero per-cell assessments. We don't assert exact
-        // numerics — the contract is: doesn't crash, returns a
-        // populated WritingAssessment, and stores it on `lastAssessment`.
         #expect(r.lastAssessment != nil)
         #expect(result.formAccuracy >= 0 && result.formAccuracy <= 1)
         #expect(result.rhythmScore >= 0 && result.rhythmScore <= 1)
+        // The filtering the test is named for: an identical recording
+        // WITHOUT the outlier must assess identically (a `contains`
+        // that stopped filtering used to keep this green — audit
+        // 2026-09-05).
+        let clean = FreeWritePhaseRecorder()
+        clean.startSession(now: 100)
+        for i in 0..<10 {
+            clean.record(point: .init(x: 10 + Double(i) * 5, y: 50),
+                         timestamp: 100 + Double(i) * 0.05, force: 0,
+                         canvasSize: .init(width: 200, height: 100))
+        }
+        for i in 0..<10 {
+            clean.record(point: .init(x: 110 + Double(i) * 5, y: 50),
+                         timestamp: 101 + Double(i) * 0.05, force: 0,
+                         canvasSize: .init(width: 200, height: 100))
+        }
+        let cleanResult = clean.assess(
+            cellReferences: [(cellLeft, strokes), (cellRight, strokes)],
+            canvasSize: .init(width: 200, height: 100),
+            now: 103
+        )
+        #expect(abs(result.formAccuracy - cleanResult.formAccuracy) < 1e-9,
+                "the out-of-cell point must not change form accuracy: \(result.formAccuracy) vs \(cleanResult.formAccuracy)")
     }
 
     @Test func clearAll_emptiesEverythingIncludingGuidedScore() {

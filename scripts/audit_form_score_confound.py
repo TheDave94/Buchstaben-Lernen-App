@@ -97,8 +97,9 @@ def main() -> int:
         return 2
 
     store = json.loads(args.progress_json.read_text())
-    audit(store)
-    return 0
+    # Exit status carries the finding so the script can screen pilot
+    # devices unattended (audit 2026-09-04).
+    return 1 if audit(store) > 0 else 0
 
 
 if __name__ == "__main__":

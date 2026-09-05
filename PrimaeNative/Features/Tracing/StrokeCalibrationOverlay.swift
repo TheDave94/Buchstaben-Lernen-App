@@ -254,7 +254,7 @@ struct StrokeCalibrationOverlay: View {
                 // have left behind without placement, so a mode flip
                 // doesn't carry a phantom slot.
                 if editableStrokes.contains(where: \.isEmpty) {
-                    editableStrokes.removeAll(where: \.isEmpty)
+                    removeStrokes(at: editableStrokes.enumerated().filter { $0.element.isEmpty }.map(\.offset))
                     activeStroke = max(0, min(activeStroke,
                                               editableStrokes.count - 1))
                 }
@@ -1602,8 +1602,27 @@ struct StrokeCalibrationOverlay: View {
 
     private func deleteStroke(_ idx: Int) {
         guard editableStrokes.indices.contains(idx) else { return }
-        editableStrokes.remove(at: idx)
+        removeStrokes(at: [idx])
         hasUnsavedEdits = true
+    }
+
+    /// Remove strokes and keep every index-keyed side table aligned —
+    /// `handles`, `originalCpCounts` and `anchorsPerStroke` used to stay
+    /// on the OLD layout, so the next handle sync resampled a different
+    /// stroke's handles into the deleted slot's neighbour
+    /// (audit 2026-09-05, class two).
+    private func removeStrokes(at indices: [Int]) {
+        let removed = Set(indices.filter { editableStrokes.indices.contains($0) })
+        guard !removed.isEmpty else { return }
+        func drop<T>(_ xs: [T]) -> [T] { xs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) }
+        editableStrokes = drop(editableStrokes)
+        if handles.count > 0 { handles = drop(handles) }
+        if originalCpCounts.count > 0 { originalCpCounts = drop(originalCpCounts) }
+        var reindexed: [Int: [CGPoint]] = [:]
+        for (old, pts) in anchorsPerStroke where !removed.contains(old) {
+            reindexed[old - removed.filter { $0 < old }.count] = pts
+        }
+        anchorsPerStroke = reindexed
         activeStroke = max(0, min(activeStroke, editableStrokes.count - 1))
     }
 
@@ -1656,9 +1675,7 @@ struct StrokeCalibrationOverlay: View {
                                 schriftArt: SchriftArt) {
         let cleaned = polyline.filter { !$0.isEmpty }
         if cleaned.count != polyline.count {
-            editableStrokes = cleaned
-            activeStroke = max(0, min(activeStroke,
-                                      editableStrokes.count - 1))
+            removeStrokes(at: polyline.enumerated().filter { $0.element.isEmpty }.map(\.offset))
         }
         vm.persistCalibratedStrokes(cleaned,
                                       for: letter,
@@ -1738,7 +1755,11 @@ struct StrokeCalibrationOverlay: View {
     private func generateJSON() -> String {
         var dict: [String: Any] = [
             "letter": vm.currentLetterName,
-            "checkpointRadius": 0.05
+            // The letter's authored radius (0.1 or 0.05 in the corpus), not
+            // a constant — "Alle" already did this (audit 2026-09-04).
+            "checkpointRadius": vm.strokeTracker.definition?.checkpointRadius
+                ?? vm.letters.first(where: { $0.name == vm.currentLetterName })?.strokes.checkpointRadius
+                ?? 0.05
         ]
         let strokesArr: [[String: Any]] = editableStrokes.enumerated().compactMap { (i, pts) in
             guard !pts.isEmpty else { return nil }

@@ -183,7 +183,18 @@ fileprivate final class CapturingStore: ParentDashboardStoring {
             #expect(store.studyModeStamps.allSatisfy { $0.studyMode == true },
                     "every row must say studyMode=true: \(store.studyModeStamps)")
         } else {
-            // Non-study: nothing is written on unload; drive a full completion instead.
+            // Non-study: nothing is written on unload, so the assertion
+            // below used to hold on an EMPTY list (audit 2026-09-04).
+            // Drive the production to completion through the quiet window
+            // and assert on real rows.
+            vm.loadLetter(name: vm.currentLetterName)
+            vm.phaseController.resume(at: .freeWrite)
+            vm.beginTouch(at: CGPoint(x: 50, y: 200), t: t + 1)
+            vm.updateTouch(at: CGPoint(x: 80, y: 200), t: t + 1.01, canvasSize: canvas)
+            vm.updateTouch(at: CGPoint(x: 120, y: 220), t: t + 1.02, canvasSize: canvas)
+            vm.endTouch()
+            try? await Task.sleep(for: .seconds(2.6))   // 2.0 s quiet window + recognizer hop
+            #expect(!store.studyModeStamps.isEmpty, "a completed non-study letter must write rows")
             #expect(store.studyModeStamps.allSatisfy { $0.studyMode == false },
                     "every row must say studyMode=false: \(store.studyModeStamps)")
         }

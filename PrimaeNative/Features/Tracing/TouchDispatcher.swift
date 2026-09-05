@@ -57,7 +57,7 @@ final class TouchDispatcher {
         guard let vm else { return }
         // A study session that cannot deliver its stimulus does not
         // trace at all — see TracingViewModel.studyPreconditionFailure.
-        guard vm.studyPreconditionFailure == nil       else { return }
+        guard vm.sessionBlockReason == nil             else { return }
         guard vm.phaseController.isTouchEnabled       else { return }
         guard vm.phaseController.currentPhase != .direct else { return }  // handled by DirectPhaseDotsOverlay
         guard !isSingleTouchInteractionActive         else { return }
@@ -82,6 +82,12 @@ final class TouchDispatcher {
         // polyline at lifts (F→P confusion otherwise).
         if vm.phaseController.currentPhase == .freeWrite {
             vm.freeWriteRecorder.beginStroke()
+            // The pen-down sample IS the stroke's start: without it the
+            // trace began 1.5 pt into the stroke and the duration
+            // excluded the pen-down→first-move interval (audit 2026-09-04).
+            vm.freeWriteRecorder.record(point: p, timestamp: t,
+                                        force: vm.pencilPressure ?? 0,
+                                        canvasSize: vm.canvasSize)
         }
         // FreeWrite fades real-time feedback (Schmidt & Lee 2005
         // Guidance Hypothesis); gate haptics + ticks on intensity.
@@ -114,10 +120,20 @@ final class TouchDispatcher {
             vm.isPlaying = false
             vm.playback.cancelPending()
             vm.playback.forceIdle()
-            vm.strokeTracker.resetCurrentStroke()
-            vm.activePath.removeAll(keepingCapacity: true)
-            vm.toast("Probier's nochmal")
-            vm.speech.speak("Probier's nochmal")
+            if vm.phaseController.currentPhase == .freeWrite {
+                // Free production: what was drawn stays in the record
+                // (and on screen); the excursion simply ends this stroke,
+                // so the re-entry does not fuse with it into one
+                // mis-shaped stroke. No retry cue — the phase gives no
+                // feedback (audit 2026-09-04).
+                vm.freeWriteRecorder.beginStroke()
+                vm.activePath.removeAll(keepingCapacity: true)
+            } else {
+                vm.strokeTracker.resetCurrentStroke()
+                vm.activePath.removeAll(keepingCapacity: true)
+                vm.toast("Probier's nochmal")
+                vm.speech.speak("Probier's nochmal")
+            }
         }
         wasInBounds = isWithinCanvasBounds
 

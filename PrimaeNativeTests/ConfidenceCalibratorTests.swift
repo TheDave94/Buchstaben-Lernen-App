@@ -33,6 +33,9 @@ struct ConfidenceCalibratorTests {
         let upper = c.calibrate(rawConfidence: 0.9, predictedLetter: "C")
         let lower = c.calibrate(rawConfidence: 0.9, predictedLetter: "c")
         #expect(upper == lower)
+        // Agreement alone passed with the pair removed from the set
+        // (audit 2026-09-04): both must actually be penalised.
+        #expect(upper < 0.9, "C is a confusable and must lose the penalty; got \(upper)")
     }
 
     @Test("history boost applied when ≥5 strong samples")

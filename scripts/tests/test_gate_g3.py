@@ -137,18 +137,16 @@ class TestG3VacuousPass(unittest.TestCase):
             y = 0.5 + random.gauss(0, 0.002)  # zero-mean noise
             poly.append((x, y))
         result = ai.gate_g3_per_stroke(poly, poly, self._bbox(),
-                                         threshold=10.0,
-                                         min_turn_angle_std=None) \
-            if False else ai.gate_g3_per_stroke(poly, poly, self._bbox(),
-                                                  threshold=10.0)
-        # Either passes as STRAIGHT (signed_cum near 0) or vacuous
-        # via insufficient_measured_points / low p95 noise — both
-        # acceptable. The critical property: must NOT vacuous via
-        # signed_cum since noise is zero-mean.
-        if result.get("reason") == "not_applicable_not_straight":
-            # If it vacuous-passes, signed_cum should NOT be the trigger
-            self.assertLess(abs(result.get("signed_cum_ref", 0.0)),
-                             ai.G3_STRAIGHTNESS_SIGNED_CUM_RAD)
+                                         threshold=10.0)
+        # Zero-mean noise must NOT knock the stroke out of the STRAIGHT
+        # class: the assertion used to sit inside an `if` that is false
+        # on the correct path, so the test asserted nothing when G3
+        # behaved (audit 2026-09-04).
+        self.assertNotEqual(result.get("reason"), "not_applicable_not_straight",
+                            f"zero-mean jitter classified as not straight: {result}")
+        self.assertTrue(result["pass"], result)
+        self.assertLess(abs(result.get("signed_cum_ref", 0.0)),
+                        ai.G3_STRAIGHTNESS_SIGNED_CUM_RAD)
 
     def test_sustained_curvature_reference_vacuous_via_p95(self):
         # Reference polyline tracing a tight arc with per-segment
@@ -215,11 +213,12 @@ class TestG3StraightStroke(unittest.TestCase):
                 y = 0.5
             poly.append((t, y))
         result = ai.gate_g3_per_stroke(poly, poly, bbox, threshold=5.0)
-        # If the bump puts the reference's max turn-angle above π/12,
-        # G3 vacuous-passes the stroke as not-straight. Accept that;
-        # otherwise verify the deviation is meaningfully > 0.
-        if result.get("reason") == "not_applicable_not_straight":
-            return  # Acceptable: bump too sharp for "straight"
+        # The early `return` on "not_applicable_not_straight" let a G3 that
+        # classifies everything as not-straight pass this test green
+        # (audit 2026-09-04). A ~5 px bump on a 100 px baseline is a
+        # straight stroke with a measurable deviation — assert both.
+        self.assertNotEqual(result.get("reason"), "not_applicable_not_straight",
+                            f"the bump must not disqualify the stroke: {result}")
         self.assertIsNotNone(result["deviation_px"])
         self.assertGreater(result["deviation_px"], 1.0)
 

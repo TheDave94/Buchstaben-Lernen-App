@@ -288,4 +288,23 @@ struct LetterOrderingStrategyTests {
         #expect(LetterOrderingStrategy.wordBuilding.displayName    == "Wortbildend")
         #expect(LetterOrderingStrategy.alphabetical.displayName    == "Alphabetisch")
     }
+
+    // MARK: - Progress key (audit 2026-09-04)
+
+    /// `ProgressStore` keys progress canonically (uppercase); the VM hands
+    /// the scheduler DISPLAY names ("a" for the lowercase asset). Looked
+    /// up raw, every lowercase letter read as never practised and sat at
+    /// the top of the queue forever.
+    @Test("lowercase display names find their canonical progress")
+    func lowercaseLooksUpCanonicalProgress() {
+        let progress: [String: LetterProgress] = [
+            "A": LetterProgress(completionCount: 9, bestAccuracy: 0.95, lastCompletedAt: now),
+        ]
+        let result = scheduler.prioritized(available: ["a", "b"], progress: progress, now: now)
+        #expect(result.first?.letter == "b",
+                "b was never practised and must outrank a, whose progress is stored under A: \(result)")
+        let fixed = LetterScheduler.fixedOrder()
+            .prioritized(available: ["a", "b"], progress: progress, now: now)
+        #expect(fixed.first?.letter == "b", "fixed order keys on completionCount and must see A's 9: \(fixed)")
+    }
 }

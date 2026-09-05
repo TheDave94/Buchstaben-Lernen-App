@@ -74,6 +74,12 @@ def check_strokes_json_schema(path: Path) -> list[str]:
         errors.append(f"{path}: 'letter' missing or not a string")
     if not isinstance(data.get("checkpointRadius"), (int, float)):
         errors.append(f"{path}: 'checkpointRadius' missing or not a number")
+    # Every shipped file (87/87 on 2026-09-04) carries the medial-axis
+    # skeleton the calibrator's ANKER routing reads; the compose path
+    # for umlauts does not write it, so a re-bake would drop it unseen.
+    for key in ("skeleton", "skeletonAdj"):
+        if key not in data:
+            errors.append(f"{path}: '{key}' missing (calibrator routing needs it)")
     strokes = data.get("strokes")
     if not isinstance(strokes, list) or not strokes:
         errors.append(f"{path}: 'strokes' missing or empty")

@@ -539,6 +539,10 @@ def main(argv: list[str] | None = None) -> int:
 
     today = date.today().isoformat()
     markdown, threshold = render_markdown(measurements, identity, today)
+    if threshold != threshold:   # NaN: no measurable T-junction drift
+        print("\nNo measurable T-junction drift in corpus; cannot derive threshold "
+              "— nothing written (G3/G4 convention).", file=sys.stderr)
+        return 1
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(markdown)

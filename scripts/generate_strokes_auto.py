@@ -4532,7 +4532,12 @@ def main() -> int:
 
     overall_fail = 0
     for weight in weights:
-        if args.font and weight == args.weight:
+        if args.font and args.weight == "both":
+            # One font cannot serve two weights; silently ignoring --font
+            # baked both from the bundled fonts (audit 2026-09-04).
+            print("--font requires a single --weight (regular|light), not both")
+            return 2
+        if args.font:
             font_path = Path(args.font)
         else:
             font_path = FONTS[weight]
@@ -4577,7 +4582,11 @@ def main() -> int:
             try:
                 write_meta(weight_base, font_path)
             except Exception as e:
+                # _meta.json carries fontSha256 — the only font-swap
+                # detector downstream. A bake without it is not a
+                # successful bake (audit 2026-09-04).
                 print(f"  _meta.json: FAIL — {e}")
+                fail += 1
         print(f"  Done {weight} — {ok} ok, {fail} failed.")
         overall_fail += fail
     return 0 if overall_fail == 0 else 1

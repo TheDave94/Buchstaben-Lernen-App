@@ -225,12 +225,21 @@ enum ParticipantStore {
         guard let restored = UUID(uuidString: uuidString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }
+        // Restoring the id this device ALREADY carries (same child, same
+        // iPad) keeps the original enrolment instant: the export filters
+        // rows before `enrolledAt`, and re-stamping now would silently
+        // drop that child's existing rows (audit 2026-09-04). A different
+        // id re-stamps, so another child's rows stay out of the export.
+        let sameParticipant = UserDefaults.standard.string(forKey: key) == restored.uuidString
+            && UserDefaults.standard.object(forKey: enrolledAtKey) is Date
         UserDefaults.standard.set(restored.uuidString, forKey: key)
         UserDefaults.standard.removeObject(forKey: conditionOverrideKey)
         UserDefaults.standard.removeObject(forKey: audioConditionOverrideKey)
         UserDefaults.standard.removeObject(forKey: trainedSubsetOverrideKey)
         UserDefaults.standard.set(true, forKey: enrolledKey)
-        UserDefaults.standard.set(Date(), forKey: enrolledAtKey)
+        if !sameParticipant {
+            UserDefaults.standard.set(Date(), forKey: enrolledAtKey)
+        }
         UserDefaults.standard.removeObject(forKey: retrievalCounterKey)
         return restored
     }

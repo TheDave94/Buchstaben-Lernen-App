@@ -204,9 +204,19 @@ final class JSONStreakStore: StreakStoring {
     }
 
     private static func load(from url: URL) -> StreakState? {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(StreakState.self, from: data)
-        else { return nil }
+        // No file is the normal first launch; an UNREADABLE file is a
+        // finding — logged and moved aside, never silently overwritten by
+        // the next save (audit 2026-09-04; same rule as the other stores).
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let decoded: StreakState
+        do {
+            decoded = try JSONDecoder().decode(StreakState.self, from: Data(contentsOf: url))
+        } catch {
+            storePersistenceLogger.error(
+                "StreakStore at \(url.path, privacy: .public) exists but failed to decode (\(error.localizedDescription, privacy: .public)) — starting EMPTY.")
+            StoreFileQuarantine.quarantine(url)
+            return nil
+        }
         // Refuse a future-schema file — see ProgressStore.load.
         if let v = decoded.schemaVersion, v > streakSchemaVersion {
             storePersistenceLogger.warning(

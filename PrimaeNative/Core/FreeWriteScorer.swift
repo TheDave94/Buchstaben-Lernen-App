@@ -260,7 +260,9 @@ struct FreeWriteScorer {
         var activeTime: CFTimeInterval = 0
         for i in 1..<timestamps.count {
             let dt = timestamps[i] - timestamps[i - 1]
-            if dt < 0.5 { activeTime += dt }
+            // Same bounds as tempoConsistency: a non-monotonic or duplicated
+            // timestamp must not SUBTRACT active time (audit 2026-09-04).
+            if dt > 0, dt < 0.5 { activeTime += dt }
         }
 
         return CGFloat(max(0, min(1, activeTime / totalDuration)))

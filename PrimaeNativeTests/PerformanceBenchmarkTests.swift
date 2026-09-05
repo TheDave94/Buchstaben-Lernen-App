@@ -78,7 +78,7 @@ final class PerformanceBenchmarkTests: XCTestCase {
 
     /// loadLetters() on empty provider (fallback path) should be <1ms.
     @MainActor func testLetterRepository_emptyProvider_loadPerformance() async {
-        let repo = LetterRepository(resources: EmptyProvider())
+        let repo = LetterRepository(resources: EmptyProvider(), cache: NullLetterCache())
         measure {
             _ = repo.loadLetters()
         }
@@ -86,7 +86,7 @@ final class PerformanceBenchmarkTests: XCTestCase {
 
     /// loadLetters() is called many times (e.g., view refreshes) — must be fast.
     @MainActor func testLetterRepository_repeatedLoad_performance() async {
-        let repo = LetterRepository(resources: EmptyProvider())
+        let repo = LetterRepository(resources: EmptyProvider(), cache: NullLetterCache())
         measure {
             for _ in 0..<100 {
                 _ = repo.loadLetters()

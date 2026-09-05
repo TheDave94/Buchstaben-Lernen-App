@@ -134,7 +134,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         }
         let r = store.recordSession(date: date(2025, 2, 1), lettersCompleted: ["A"], accuracy: 0.9)
         #expect(store.totalCompletions >= 100)
-        #expect(r.contains(.centuryClub) || store.totalCompletions >= 100)
+        #expect(r.contains(.centuryClub), "100 completions must award centuryClub; got \(r)")
     }
 
     @Test func rewards_notDuplicated() {
@@ -174,5 +174,20 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         #expect(r.isEmpty)
         #expect(store.currentStreak == 0)
         #expect(store.totalCompletions == 0)
+    }
+
+    // MARK: - Unreadable file (audit 2026-09-04)
+
+    @Test func unreadableFile_isQuarantinedNotOverwritten() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StreakTest-corrupt-\(UUID().uuidString).json")
+        try Data("{not json".utf8).write(to: url)
+        let store = JSONStreakStore(fileURL: url, calendar: utcCalendar())
+        #expect(store.currentStreak == 0, "an unreadable file starts EMPTY, not crashed")
+        let dir = url.deletingLastPathComponent()
+        let stem = url.deletingPathExtension().lastPathComponent
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix(stem) && $0.contains(".undecodable-") }
+        #expect(siblings.count == 1, "the corrupt file must be moved aside, not silently replaced: \(siblings)")
     }
 }

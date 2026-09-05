@@ -66,13 +66,21 @@ import Foundation
             // Simulate a stale enrolment far in the past.
             ParticipantStore.isEnrolled = false
             ParticipantStore.isEnrolled = true            // stamps an enrolledAt
+            // Make the stale stamp unmistakably old, so "not re-stamped"
+            // cannot pass as "re-stamped within the same instant"
+            // (audit 2026-09-04: `fresh >= old` and the optional guard
+            // together could not fail).
+            UserDefaults.standard.set(Date(timeIntervalSince1970: 1_000_000_000),
+                                      forKey: "de.flamingistan.primae.thesisEnrolledAt")
             let old = ParticipantStore.enrolledAt
+            #expect(old == Date(timeIntervalSince1970: 1_000_000_000), "precondition: stale stamp in place")
+            let before = Date()
             _ = ParticipantStore.startNewParticipant()
             #expect(ParticipantStore.isEnrolled, "must remain enrolled")
-            #expect(ParticipantStore.enrolledAt != nil)
-            if let old, let fresh = ParticipantStore.enrolledAt {
-                #expect(fresh >= old, "enrolledAt must be re-stamped to the reset instant")
-            }
+            let fresh = ParticipantStore.enrolledAt
+            #expect(fresh != nil, "a new participant must carry an enrolment instant")
+            #expect((fresh ?? .distantPast) >= before.addingTimeInterval(-1),
+                    "enrolledAt must be re-stamped to the reset instant, got \(String(describing: fresh))")
         }
     }
 

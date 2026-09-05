@@ -286,3 +286,35 @@ private func makeStore() -> JSONParentDashboardStore {
         #expect(reloaded.snapshot.sessionDurations.count == 4)
     }
 }
+
+// MARK: - averageWritingDimensions denominators (audit 2026-09-04)
+
+@Suite @MainActor struct WritingDimensionAverageTests {
+    private func record(_ json: String) throws -> PhaseSessionRecord {
+        try JSONDecoder().decode(PhaseSessionRecord.self, from: Data(json.utf8))
+    }
+
+    /// The decoder sets the four dimensions independently, so a row can
+    /// carry `formAccuracy` without `tempoConsistency`. That row used to
+    /// add 0 to tempo's numerator and 1 to the shared denominator.
+    @Test("each dimension averages over its own present values")
+    func perDimensionDenominators() throws {
+        var snap = DashboardSnapshot()
+        snap.phaseSessionRecords = [
+            try record("""
+            {"letter":"A","phase":"freeWrite","completed":true,"score":0.5,"schedulerPriority":0,
+             "condition":"threePhase","formAccuracy":0.6,"tempoConsistency":0.8,"pressureControl":0.4,"rhythmScore":0.2}
+            """),
+            try record("""
+            {"letter":"A","phase":"freeWrite","completed":true,"score":0.5,"schedulerPriority":0,
+             "condition":"threePhase","formAccuracy":0.4}
+            """),
+        ]
+        let dims = try #require(snap.averageWritingDimensions)
+        #expect(abs(dims.form - 0.5) < 1e-9)
+        #expect(abs(dims.tempo - 0.8) < 1e-9, "tempo has ONE value; got \(dims.tempo)")
+        #expect(abs(dims.pressure - 0.4) < 1e-9)
+        #expect(abs(dims.rhythm - 0.2) < 1e-9)
+    }
+}
+

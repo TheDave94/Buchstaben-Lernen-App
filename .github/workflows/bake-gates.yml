@@ -20,6 +20,11 @@ on:
       - "PrimaeNative/Resources/Letters/Regular/**/strokes.json"
       - "scripts/audit_invariants.py"
       - "scripts/run_gates.py"
+      # The gates rasterise through the bake module and read its font:
+      # SIZE/PAD/optical bbox and the .otf bytes define the px frame
+      # every threshold is calibrated in (audit 2026-09-04).
+      - "scripts/generate_strokes_auto.py"
+      - "design-system/fonts/**"
       - ".github/workflows/bake-gates.yml"
   workflow_dispatch:
 
