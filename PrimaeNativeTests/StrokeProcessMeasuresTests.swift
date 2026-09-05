@@ -208,7 +208,8 @@ struct StrokeProcessMeasuresTests {
             strokeStartIndices: [vert.count, vert.count + tap.count],
             reference: lStrokes))
         #expect(m.strokeCount == 3, "vertical + tap + horizontal = 3 strokes drawn, got \(m.strokeCount)")
-        #expect(m.matchedReferenceOrder.count == 2, "only the two ≥2-sample strokes can be matched")
-        #expect(Set(m.matchedReferenceOrder.compactMap { $0 }) == [0, 1])
+        #expect(m.matchedReferenceOrder.count == 3, "one entry per traced stroke, taps included (2026-09-05)")
+        #expect(m.matchedReferenceOrder == [0, nil, 1],
+                "the tap is the unmatched one, at ITS position: \(m.matchedReferenceOrder)")
     }
 }

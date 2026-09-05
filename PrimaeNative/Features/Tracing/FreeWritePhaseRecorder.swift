@@ -22,7 +22,7 @@ final class FreeWritePhaseRecorder {
     private(set) var timestamps: [CFTimeInterval] = []
     /// Digitiser force per point (0 for finger / no pencil data).
     private(set) var forces: [CGFloat] = []
-    /// Same path normalised to 0–1 over the canvas — used by the KP
+    /// Same path normalised to 0–1 over the canvas (raw points pass through when canvasSize is .zero — NaN guard) — used by the KP
     /// overlay so it can render at any geometry without re-mapping.
     private(set) var path: [CGPoint] = []
     /// Indices into `points` (and `path`) at which a fresh stroke begins

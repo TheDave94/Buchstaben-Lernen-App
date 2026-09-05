@@ -20,8 +20,8 @@ import CoreGraphics
 enum GridLayoutCalculator {
 
     private struct CacheKey: Hashable {
-        let width: Int
-        let height: Int
+        let width: CGFloat    // exact — an Int key returned stale frames for sub-point resizes (class two, 2026-09-05)
+        let height: CGFloat
         let cellCount: Int
         let cellSpacing: CGFloat
         let horizontalInset: CGFloat
@@ -36,8 +36,8 @@ enum GridLayoutCalculator {
 
     static func cellFrames(canvasSize: CGSize, preset: InputPreset) -> [CGRect] {
         let key = CacheKey(
-            width: Int(canvasSize.width),
-            height: Int(canvasSize.height),
+            width: canvasSize.width,
+            height: canvasSize.height,
             cellCount: preset.cellCount,
             cellSpacing: preset.cellSpacing,
             horizontalInset: preset.horizontalInset

@@ -63,7 +63,7 @@ enum PreTaskDemonstration {
 
     /// Pure — no Task, no audio, no clock, so it's directly unit-
     /// testable. One full top→bottom→top pass on Y (pitch: high → low
-    /// → high) and one full left→right→left pass on X (pan), a
+    /// → high) and on X (pan) a centre→right→centre→left→centre pass (x = 0.5 + 0.5·sin 2πt), a
     /// quarter-cycle out of phase so the two axes are audible moving
     /// independently rather than only together — a clearer axis
     /// demonstration than a straight diagonal would give.

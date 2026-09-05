@@ -4,24 +4,24 @@ import CoreGraphics
 
 struct VelocityMappingTests {
 
-    @Test func zeroVelocity_returnsMaxSpeed() {
+    @Test func zeroVelocity_returnsMinRate() {
         #expect(TouchDispatcher.mapVelocityToSpeed(0) == 0.5)
     }
 
-    @Test func lowBoundary_returnsMaxSpeed() {
+    @Test func lowBoundary_returnsMinRate() {
         #expect(TouchDispatcher.mapVelocityToSpeed(50) == 0.5)
     }
 
-    @Test func highBoundary_returnsMinSpeed() {
+    @Test func highBoundary_returnsMaxRate() {
         #expect(TouchDispatcher.mapVelocityToSpeed(800) == 2.0)
     }
 
-    @Test func aboveHigh_clampsToMinSpeed() {
+    @Test func aboveHigh_clampsToMaxRate() {
         #expect(TouchDispatcher.mapVelocityToSpeed(5000) == 2.0)
         #expect(TouchDispatcher.mapVelocityToSpeed(.greatestFiniteMagnitude) == 2.0)
     }
 
-    @Test func belowLow_returnsMaxSpeed() {
+    @Test func belowLow_returnsMinRate() {
         #expect(TouchDispatcher.mapVelocityToSpeed(30)  == 0.5)
         #expect(TouchDispatcher.mapVelocityToSpeed(49)  == 0.5)
     }

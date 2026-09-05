@@ -51,7 +51,8 @@ final class CalibrationStore {
 
     /// Writes glyph-relative stroke checkpoints for `letter` in
     /// `schriftArt` to disk and invalidates the in-memory cache.
-    func persist(_ strokes: [[CGPoint]], for letter: String, schriftArt: SchriftArt) {
+    func persist(_ strokes: [[CGPoint]], for letter: String, schriftArt: SchriftArt,
+                 checkpointRadius: CGFloat = 0.10) {
         let defs = strokes.enumerated().compactMap { (i, pts) -> StrokeDefinition? in
             guard !pts.isEmpty else { return nil }
             return StrokeDefinition(id: i + 1, checkpoints: pts.map {
@@ -60,7 +61,10 @@ final class CalibrationStore {
                            y: (($0.y * 1000).rounded() / 1000))
             })
         }
-        let ls = LetterStrokes(letter: letter, checkpointRadius: 0.10, strokes: defs)
+        // The caller passes the letter's authored radius (0.10 Druckschrift,
+        // 0.05 Schreibschrift); a hard-coded 0.10 doubled Schreibschrift's
+        // tolerance in every override (class two, 2026-09-05).
+        let ls = LetterStrokes(letter: letter, checkpointRadius: checkpointRadius, strokes: defs)
         guard let url = fontSpecificURL(letter: letter, schriftArt: schriftArt) else { return }
         guard let data = try? JSONEncoder().encode(ls) else {
             storePersistenceLogger.warning(

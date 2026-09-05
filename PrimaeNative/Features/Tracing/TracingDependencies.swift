@@ -45,6 +45,10 @@ struct TracingDependencies {
     /// (thesis-truth-condition; see `TracingViewModel.resolvedStrokes`).
     /// Off by default.
     var studyMode: Bool
+    /// Whether a participant is enrolled on this device. Injected (the
+    /// stub pins true) so the study precondition below is deterministic
+    /// in tests; production reads `ParticipantStore.isEnrolled`.
+    var participantEnrolled: Bool
     /// Opt-in spaced-retrieval prompts before every Nth letter.
     var enableRetrievalPrompts: Bool
     /// Reverse direct-phase tap order (Spooner 2014).
@@ -133,6 +137,7 @@ struct TracingDependencies {
         // ON in a study build (B2), OFF otherwise, and a stored value
         // always wins. See `StudyBuild.resolveStudyMode`.
         studyMode: Bool = StudyBuild.resolveStudyMode(),
+        participantEnrolled: Bool = ParticipantStore.isEnrolled,
         enableRetrievalPrompts: Bool = UserDefaults.standard.bool(
             forKey: "de.flamingistan.primae.enableRetrievalPrompts"
         ),
@@ -171,6 +176,7 @@ struct TracingDependencies {
         self.enableFreeformMode = enableFreeformMode
         self.enablePhonemeMode = enablePhonemeMode
         self.studyMode = studyMode
+        self.participantEnrolled = participantEnrolled
         self.enableRetrievalPrompts = enableRetrievalPrompts
         self.enableBackwardChaining = enableBackwardChaining
         self.letterRecognizer = letterRecognizer

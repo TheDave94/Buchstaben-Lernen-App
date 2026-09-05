@@ -83,7 +83,10 @@ struct ResearchDashboardView: View {
             Label("Keine Kopfhörer verbunden", systemImage: "exclamationmark.triangle.fill")
                 .font(.body(FontSize.md, weight: .semibold))
                 .foregroundStyle(.red)
-            Text("Dieses Gerät ist dem Raumklang-Arm zugeordnet. Ohne Kopfhörer ist das Stereo-Panning (horizontale Stiftposition → links/rechts) über die iPad-Lautsprecher wirkungslos — eine so durchgeführte Session ist ungültige Studien-Daten. Vor der Session Kopfhörer verbinden.")
+            Text((vm.audioCondition == .spatial
+                  ? "Dieses Gerät ist dem Raumklang-Arm zugeordnet. "
+                  : "Dieses Gerät ist dem Phonem-Arm zugeordnet. ")
+                 + "Ohne Kopfhörer ist das Stereo-Panning (horizontale Stiftposition → links/rechts) über die iPad-Lautsprecher wirkungslos — eine so durchgeführte Session ist ungültige Studien-Daten. Vor der Session Kopfhörer verbinden.")
                 .font(.caption)
                 .foregroundStyle(Color.inkSoft)
         }

@@ -212,6 +212,7 @@ extension TracingDependencies {
             // so at the call site with `.with(studyMode:)`, in whichever
             // direction they are asserting.
             studyMode:            false,
+            participantEnrolled:  true,   // the precondition reads THIS, not the device
             letterRecognizer:     StubLetterRecognizer(),
             speech:               NullSpeechSynthesizer(),
             // Real AVAudioPlayer.play() in PromptPlayer adds enough

@@ -510,6 +510,9 @@ public final class TracingViewModel {
     /// so a configured study device stays in study mode across relaunches.
     /// Readable from the app target (PrimaeApp pins the light appearance
     /// on it); settable only inside the package.
+    /// See `TracingDependencies.participantEnrolled`.
+    let participantEnrolled: Bool
+
     public internal(set) var studyMode: Bool = false {
         didSet {
             UserDefaults.standard.set(studyMode,
@@ -820,6 +823,7 @@ public final class TracingViewModel {
         self.enableFreeformMode     = deps.enableFreeformMode
         self.enablePhonemeMode      = deps.enablePhonemeMode
         self.studyMode              = deps.studyMode
+        self.participantEnrolled    = deps.participantEnrolled
         self.enableRetrievalPrompts = deps.enableRetrievalPrompts
         self.enableBackwardChaining = deps.enableBackwardChaining
         self.letterRecognizer       = deps.letterRecognizer
@@ -1749,6 +1753,13 @@ public final class TracingViewModel {
     /// child never sees a session in this state).
     var studyPreconditionFailure: String? {
         guard studyMode else { return nil }
+        // A fresh study iPad is NOT enrolled until "Neuer Teilnehmer" is
+        // tapped; until then all three assignment axes silently fell to
+        // their defaults (phoneme, AFI, threePhase) — one arm, one subset,
+        // no randomisation, stamped on every row (class two, 2026-09-05).
+        if !participantEnrolled {
+            return "Kein Teilnehmer eingeschrieben. Im Forschungsbereich „Neuer Teilnehmer“ wählen, damit Arm und Buchstaben zugewiesen werden — sonst laufen alle Kinder unter denselben Voreinstellungen."
+        }
         // Spatial arm: its stimulus and its demonstration are one bundled
         // carrier file; the engine merely logs when it is missing, so the
         // arm would run without its manipulation and the proctor could
@@ -2283,8 +2294,16 @@ public final class TracingViewModel {
     /// Persist calibrated glyph-relative checkpoints. Delegates to CalibrationStore
     /// and re-applies the new data to the tracker so the current letter reflects
     /// the calibration immediately without navigating away and back.
+    /// The letter's authored checkpoint radius under the current script.
+    private func authoredCheckpointRadius(for letter: String) -> CGFloat {
+        strokeTracker.definition?.checkpointRadius
+            ?? letters.first(where: { $0.name == letter })?.strokes.checkpointRadius
+            ?? 0.10
+    }
+
     func persistCalibratedStrokes(_ strokes: [[CGPoint]], for letter: String) {
-        calibrationStore.persist(strokes, for: letter, schriftArt: schriftArt)
+        calibrationStore.persist(strokes, for: letter, schriftArt: schriftArt,
+                                 checkpointRadius: authoredCheckpointRadius(for: letter))
         guard letters.indices.contains(letterIndex) else { return }
         // Calibration replaces the source checkpoint set, so the (letter, size)
         // idempotency cache no longer reflects what's loaded — invalidate it
@@ -2302,7 +2321,8 @@ public final class TracingViewModel {
     func persistCalibratedStrokes(_ strokes: [[CGPoint]],
                                    for letter: String,
                                    schriftArt: SchriftArt) {
-        calibrationStore.persist(strokes, for: letter, schriftArt: schriftArt)
+        calibrationStore.persist(strokes, for: letter, schriftArt: schriftArt,
+                                 checkpointRadius: authoredCheckpointRadius(for: letter))
     }
 
     func toast(_ text: String) {

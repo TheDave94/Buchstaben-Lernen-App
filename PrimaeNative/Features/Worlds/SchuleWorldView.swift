@@ -114,7 +114,7 @@ struct SchuleWorldView: View {
                         // completion without reopening the picker.
                         // Study sessions hide star chips (reward-class).
                         vm.studyMode ? 0 : LetterStars.stars(
-                            for: (vm.allProgress[name] ?? LetterProgress()).phaseScores)
+                            for: (vm.allProgress[LetterProgress.canonicalKey(name)] ?? LetterProgress()).phaseScores)
                     },
                     onSelect: { letter in
                         vm.loadLetter(name: letter)

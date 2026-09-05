@@ -373,4 +373,29 @@ fileprivate final class ThirdPassRecordingStore: ParentDashboardStoring {
         #expect(rows.first?.hasSuffix(",pencil,A,phoneme,true,delayed") == true, "\(String(describing: rows.first))")
     }
 
+    // MARK: - Class two (2026-09-05): the model has no umlaut class
+
+    @Test("a predicted base letter counts as correct for its umlaut, case-insensitively; a different letter does not")
+    func recogniserMatchFoldsDiacritics() {
+        #expect(LetterMatch.matches(predicted: "A", expected: "Ä"))
+        #expect(LetterMatch.matches(predicted: "o", expected: "Ö"))
+        #expect(LetterMatch.matches(predicted: "u", expected: "ü"))
+        #expect(LetterMatch.matches(predicted: "a", expected: "A"))
+        #expect(LetterMatch.matches(predicted: "ß", expected: "ß"))
+        #expect(!LetterMatch.matches(predicted: "B", expected: "A"))
+        #expect(!LetterMatch.matches(predicted: "s", expected: "ß"), "ß is its own class")
+    }
+
+    @Test("an unenrolled study device refuses to start a session")
+    func unenrolledStudyDeviceRefuses() {
+        var deps = TracingDependencies.stub
+        deps.studyMode = true
+        deps.participantEnrolled = false
+        let vm = TracingViewModel(deps)
+        #expect(vm.studyPreconditionFailure?.contains("Neuer Teilnehmer") == true,
+                "the arms are un-randomised defaults until enrolment: \(String(describing: vm.studyPreconditionFailure))")
+        deps.participantEnrolled = true
+        #expect(TracingViewModel(deps).studyPreconditionFailure == nil)
+    }
+
 }

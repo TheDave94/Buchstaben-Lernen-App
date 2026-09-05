@@ -771,7 +771,14 @@ private struct UnifiedTouchOverlay: UIViewRepresentable {
 
         func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?, in view: UIView) {
             guard let tracked = trackedTouch, touches.contains(tracked) else { return }
-            onSingleTouchMoved(tracked.location(in: view), tracked.timestamp, canvasSize)
+            // Coalesced samples: the tracker advances at most one checkpoint
+            // per update, so a 200-checkpoint stroke needed 200 delivered
+            // events — a fast child could not complete M or O at 60 Hz
+            // (class two, 2026-09-05). Deliver every sample.
+            let samples = event?.coalescedTouches(for: tracked) ?? [tracked]
+            for s in samples {
+                onSingleTouchMoved(s.location(in: view), s.timestamp, canvasSize)
+            }
         }
 
         func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -897,9 +904,14 @@ private struct PencilAwareCanvasOverlay: UIViewRepresentable {
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
             guard let t = touches.first, t.type == .pencil else { return }
-            let pressure = t.force / max(t.maximumPossibleForce, 1)
-            coordinator?.onMoved(t.location(in: self), t.timestamp, pressure,
-                                  t.azimuthAngle(in: self), canvasSize)
+            // Every coalesced sample, for the same reason as the finger
+            // overlay (class two, 2026-09-05).
+            let samples = event?.coalescedTouches(for: t) ?? [t]
+            for s in samples {
+                let pressure = s.force / max(s.maximumPossibleForce, 1)
+                coordinator?.onMoved(s.location(in: self), s.timestamp, pressure,
+                                      s.azimuthAngle(in: self), canvasSize)
+            }
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {

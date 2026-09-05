@@ -238,7 +238,9 @@ struct FortschritteWorldView: View {
         // Read through `vm.allProgress` (the @Observable mirror) so
         // the cell re-renders when a fresh completion bumps the
         // star count.
-        let prog = vm.allProgress[letter] ?? LetterProgress()
+        // Progress is keyed canonically (uppercase); `letter` is a display
+        // name, lowercase for the *_l assets (class two, 2026-09-05).
+        let prog = vm.allProgress[LetterProgress.canonicalKey(letter)] ?? LetterProgress()
         let stars = LetterStars.stars(for: prog.phaseScores)
         let tint: Color = {
             // Shared token with LetterPickerBar so mastered letters

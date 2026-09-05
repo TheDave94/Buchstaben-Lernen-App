@@ -416,7 +416,8 @@ private extension LetterRepository {
     }
 
     func preferredAudioFiles(for base: String, available: [String]) -> [String] {
-        let marker = "/\(base.uppercased())/"
+        // "ß".uppercased() is "SS" — the fold canonicalKey exists to avoid.
+        let marker = "/\(base == "ß" ? "ß" : base.uppercased())/"
         let subfolderPaths = available.filter {
             $0.range(of: marker, options: .caseInsensitive) != nil
         }.sorted()

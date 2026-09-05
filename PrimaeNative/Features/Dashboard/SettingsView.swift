@@ -117,6 +117,14 @@ struct SettingsView: View {
                 Toggle("Schreiben auf Papier", isOn: $vm.enablePaperTransfer)
                 .accessibilityHint("Nach dem freien Schreiben wird das Kind gebeten, den Buchstaben auf Papier zu schreiben")
 
+                #if STUDY_BUILD
+                // Ruling Q1's reasoning applies to enrolment as much as to
+                // studyMode: a study binary must not be switchable into an
+                // un-randomised state (class two, 2026-09-05). Enrolment
+                // happens through "Neuer Teilnehmer" in the research area.
+                Label("Studienteilnahme: durch die Studien-Version festgelegt", systemImage: "lock.fill")
+                    .foregroundStyle(Color.inkSoft)
+                #else
                 Toggle("Studienteilnahme (A/B-Arm)", isOn: Binding(
                     get: { thesisEnrolled },
                     set: {
@@ -124,6 +132,7 @@ struct SettingsView: View {
                         ParticipantStore.isEnrolled = $0
                     }
                 ))
+                #endif
                 .accessibilityHint("Nur für Forschung aktivieren. Weist das Gerät stabil einer Studienbedingung zu; andernfalls erhält jedes Kind die volle Vier-Phasen-Lernabfolge. Änderung wird beim nächsten App-Start wirksam.")
                 Text("Änderung wird beim nächsten App-Start wirksam.")
                     .font(.caption)

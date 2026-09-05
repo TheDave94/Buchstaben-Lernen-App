@@ -95,8 +95,8 @@ struct StrokeProcessMeasures: Equatable {
     /// see the file header.
     let spatialDeviation: CGFloat
     /// Number of strokes the child actually drew (pen-lift count + 1),
-    /// INCLUDING one-sample taps, which cannot be matched and so do not
-    /// appear in `matchedReferenceOrder` — its count can be smaller.
+    /// one-sample taps included; `matchedReferenceOrder` has exactly this
+    /// many entries, in trace order.
     /// The reference's own expected count is `reference.strokes.count`
     /// — a per-letter constant already in the bundle, not duplicated
     /// into every row.
@@ -144,14 +144,16 @@ enum StrokeProcessScorer {
     ) -> StrokeProcessMeasures? {
         guard !points.isEmpty, !reference.strokes.isEmpty else { return nil }
 
-        let allTraceStrokes = splitStrokes(points: points, strokeStartIndices: strokeStartIndices)
-        // Only strokes with >= 2 samples can be matched; a one-sample tap
-        // still COUNTS as a stroke the child made (audit 2026-09-04).
-        let traceStrokes = allTraceStrokes.filter { $0.count >= 2 }
+        // EVERY traced stroke takes part, one-sample taps included, so
+        // `matchedReferenceOrder` is positional against `strokeCount`; and
+        // every reference stroke takes part, one-checkpoint dots included,
+        // so the indices are into `reference.strokes` as authored (a dot
+        // filtered out used to score identically wherever it landed).
+        // A one-point polyline is a valid Fréchet operand (2026-09-05).
+        let traceStrokes = splitStrokes(points: points, strokeStartIndices: strokeStartIndices)
         guard !traceStrokes.isEmpty else { return nil }
 
         let refStrokes = FreeWriteScorer.densifyReferenceStrokesPerStroke(reference)
-            .filter { $0.count >= 2 }
         guard !refStrokes.isEmpty else { return nil }
 
         let traceCount = traceStrokes.count
@@ -203,7 +205,7 @@ enum StrokeProcessScorer {
 
         return StrokeProcessMeasures(
             spatialDeviation: totalDeviation / CGFloat(matchedCount),
-            strokeCount: allTraceStrokes.count,
+            strokeCount: traceStrokes.count,
             matchedReferenceOrder: matched,
             reversedStrokeCount: reversedCount
         )

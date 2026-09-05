@@ -242,10 +242,13 @@ private struct ObserveDemoLayer: View {
             let currentIdx = min(Int(seg), aDemoStrokes.count - 1)
             let stroke = aDemoStrokes[currentIdx]
             let t = max(0, min(1, seg - CGFloat(currentIdx)))
-            let pt = CGPoint(
-                x: (stroke.from.x + (stroke.to.x - stroke.from.x) * t) * size.width,
-                y: (stroke.from.y + (stroke.to.y - stroke.from.y) * t) * size.height
-            )
+            // Through the same padded mapping as the strokes it rides on —
+            // the raw unit→pixel mapping put the dot up to 16 pt off the
+            // drawn stroke and clipped it at the layer edge (class two).
+            let pt = scaled(CGPoint(
+                x: stroke.from.x + (stroke.to.x - stroke.from.x) * t,
+                y: stroke.from.y + (stroke.to.y - stroke.from.y) * t
+            ), in: size)
             let r: CGFloat = 7
             context.fill(
                 Circle().path(in: CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2)),
@@ -390,7 +393,10 @@ private struct DirectDemoLayer: View {
                 } else if idx < currentIdx {
                     drawArrowForThis = true
                 } else if idx == currentIdx {
-                    drawArrowForThis = sub >= arrowOnsetSub && isTapped
+                    // `isTapped` is false in this branch by construction, so
+                    // `&& isTapped` made the arrow impossible on the dot the
+                    // viewer is looking at (class two, 2026-09-05).
+                    drawArrowForThis = sub >= arrowOnsetSub
                 } else {
                     drawArrowForThis = false
                 }

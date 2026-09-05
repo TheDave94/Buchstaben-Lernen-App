@@ -13,6 +13,20 @@ import OSLog
 import Synchronization
 import Vision
 
+/// Case- and diacritic-insensitive match between a model label and the
+/// letter the child was asked to write. The model has 53 classes (A–Z,
+/// a–z, ß) and NO umlaut class, so a well-written Ä/Ö/Ü/ä/ö/ü is
+/// predicted as its base letter; compared case-only, every umlaut
+/// production read as wrong and, outside study mode, triggered the retry
+/// cue whenever the model was confident (class two, 2026-09-05). ß is its
+/// own class and folds to itself.
+enum LetterMatch {
+    nonisolated static func matches(predicted: String, expected: String) -> Bool {
+        let opts: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        return predicted.compare(expected, options: opts) == .orderedSame
+    }
+}
+
 // MARK: - Classifier intermediate type
 
 /// Framework-agnostic projection of a Vision
@@ -356,7 +370,7 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendab
 
         let isCorrect: Bool
         if let expected = expectedLetter {
-            isCorrect = rawTopLetter.caseInsensitiveCompare(expected) == .orderedSame
+            isCorrect = LetterMatch.matches(predicted: rawTopLetter, expected: expected)
         } else {
             isCorrect = false
         }
@@ -491,7 +505,7 @@ struct StubLetterRecognizer: LetterRecognizerProtocol {
         #if DEBUG
         if let result, let expected = expectedLetter {
             let actuallyCorrect =
-                result.predictedLetter.caseInsensitiveCompare(expected) == .orderedSame
+                LetterMatch.matches(predicted: result.predictedLetter, expected: expected)
             assert(
                 result.isCorrect == actuallyCorrect,
                 "StubLetterRecognizer: result.isCorrect (\(result.isCorrect)) " +

@@ -21,7 +21,9 @@ import Foundation
 
 /// Four-dimension writing assessment per Schreibmotorik Institut (Marquardt & Söhl, 2016).
 struct WritingAssessment: Codable, Equatable {
-    /// Shape accuracy via order-invariant Hausdorff distance (0–1).
+    /// Shape accuracy (0–1) from the stroke-correspondence spatial
+    /// deviation (direction-minimised discrete Fréchet per matched pair,
+    /// 2026-09-04); the Hausdorff form it replaced is retired.
     let formAccuracy: CGFloat
     /// Speed consistency: 1 – normalised variance of inter-point intervals (0–1).
     let tempoConsistency: CGFloat
@@ -318,7 +320,7 @@ struct FreeWriteScorer {
 
     /// Resamples a polyline to approximately `targetCount` equidistant
     /// points so trace density (100s of samples) matches reference
-    /// density (5–16 checkpoints) before Fréchet comparison.
+    /// density (40–200 authored, 64 after densify) before Fréchet comparison.
     static func resample(_ points: [CGPoint], targetCount: Int) -> [CGPoint] {
         guard points.count >= 2, targetCount >= 2 else { return points }
 

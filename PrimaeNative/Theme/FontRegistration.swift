@@ -52,7 +52,9 @@ public enum PrimaeFonts {
     /// Register every bundled face. Safe to call repeatedly.
     public static func registerAll() {
         guard !didRegister else { return }
-        didRegister = true
+        // Latched only after at least one URL resolved (below); a first
+        // call before the resource bundle is resolvable must stay
+        // retryable or the session runs on the system font (class two).
 
         // Resolution goes through `PrimaeBundle`, whose `.main` probe covers
         // the host's `INFOPLIST_KEY_UIAppFonts` copies. Previously this used
@@ -63,6 +65,7 @@ public enum PrimaeFonts {
             PrimaeBundle.resourceURL(firstOf: PrimaeBundle.layouts(dir: "Fonts", name: name, ext: ext))
         }
 
+        defer { if !urls.isEmpty { didRegister = true } }
         guard !urls.isEmpty else {
             log.warning("PrimaeFonts.registerAll: no font URLs resolved — Resources/Fonts/ may be missing from the bundle.")
             return

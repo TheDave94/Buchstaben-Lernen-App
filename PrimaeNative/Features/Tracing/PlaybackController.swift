@@ -85,19 +85,29 @@ final class PlaybackController {
 
     /// Apply a command from `transition(to:)`. Lifts the audio call out so
     /// lifecycle callers can choose when to issue the audio side-effect.
+    /// Whether the last command this controller issued to the engine was
+    /// a play (true) or a stop (false) — the debounce above keys on it.
+    private var audioIsRunning = false
+
     func apply(_ cmd: PlaybackStateMachine.Command) {
         switch cmd {
         case .play:
             let now = CACurrentMediaTime()
-            if now - lastPlayIntentWallTime < playIntentDebounceSeconds {
+            // Debounce only while the audio is still running: after a
+            // `.stop` the engine is silent, and swallowing the next play
+            // left the whole stroke mute with `isPlaying` reporting true
+            // (class two, 2026-09-05).
+            if audioIsRunning, now - lastPlayIntentWallTime < playIntentDebounceSeconds {
                 onIsPlayingChanged(true)
                 return
             }
             lastPlayIntentWallTime = now
             audio.play()
+            audioIsRunning = true
             onIsPlayingChanged(true)
         case .stop:
             audio.stop()
+            audioIsRunning = false
             onIsPlayingChanged(false)
         case .none:
             break
