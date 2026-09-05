@@ -230,8 +230,10 @@ enum ParticipantStore {
         // rows before `enrolledAt`, and re-stamping now would silently
         // drop that child's existing rows (audit 2026-09-04). A different
         // id re-stamps, so another child's rows stay out of the export.
+        // Same id, stamp or no stamp: an unstamped device with this id has
+        // rows that an export currently includes (no filter); stamping now
+        // would drop them (review 2026-09-05).
         let sameParticipant = UserDefaults.standard.string(forKey: key) == restored.uuidString
-            && UserDefaults.standard.object(forKey: enrolledAtKey) is Date
         UserDefaults.standard.set(restored.uuidString, forKey: key)
         UserDefaults.standard.removeObject(forKey: conditionOverrideKey)
         UserDefaults.standard.removeObject(forKey: audioConditionOverrideKey)

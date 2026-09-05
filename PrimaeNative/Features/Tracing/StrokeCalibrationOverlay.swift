@@ -1615,9 +1615,14 @@ struct StrokeCalibrationOverlay: View {
         let removed = Set(indices.filter { editableStrokes.indices.contains($0) })
         guard !removed.isEmpty else { return }
         func drop<T>(_ xs: [T]) -> [T] { xs.enumerated().filter { !removed.contains($0.offset) }.map(\.element) }
+        let alignedCount = editableStrokes.count
         editableStrokes = drop(editableStrokes)
-        if handles.count > 0 { handles = drop(handles) }
-        if originalCpCounts.count > 0 { originalCpCounts = drop(originalCpCounts) }
+        // A side table shorter than the stroke list is already stale;
+        // dropping by offset would misalign it one slot lower. Aligned →
+        // drop; otherwise clear so the next handle sync rebuilds it
+        // (review 2026-09-05).
+        handles = handles.count == alignedCount ? drop(handles) : []
+        originalCpCounts = originalCpCounts.count == alignedCount ? drop(originalCpCounts) : []
         var reindexed: [Int: [CGPoint]] = [:]
         for (old, pts) in anchorsPerStroke where !removed.contains(old) {
             reindexed[old - removed.filter { $0 < old }.count] = pts

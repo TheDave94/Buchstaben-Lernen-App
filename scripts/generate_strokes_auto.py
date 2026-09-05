@@ -4588,6 +4588,13 @@ def main() -> int:
                 print(f"  _meta.json: FAIL — {e}")
                 fail += 1
         print(f"  Done {weight} — {ok} ok, {fail} failed.")
+        if ok == 0 and fail == 0:
+            # Every requested letter was skipped (static-artifact guard):
+            # nothing was written, and exit 0 read as a successful bake
+            # (audit 2026-09-05).
+            print(f"  {weight}: NOTHING BAKED — every letter is a static artifact; "
+                  f"use the sweep tooling or lift the guard deliberately.")
+            overall_fail += 1
         overall_fail += fail
     return 0 if overall_fail == 0 else 1
 

@@ -45,7 +45,13 @@ enum SpatialSonification {
                 let candidate = root.appendingPathComponent(carrierToneFile)
                 if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
             }
-            if let url = bundle.url(forResource: name, withExtension: ext, subdirectory: dir) { return url }
+            if !dir.isEmpty,
+               let url = bundle.url(forResource: name, withExtension: ext.isEmpty ? nil : ext, subdirectory: dir) { return url }
+            // Flat fallback — the engine's third lookup, for a bundling that
+            // flattens the tree. Without it this precondition would refuse
+            // the whole arm while the engine still played the file
+            // (review 2026-09-05).
+            if let url = bundle.url(forResource: name, withExtension: ext.isEmpty ? nil : ext) { return url }
         }
         return nil
     }

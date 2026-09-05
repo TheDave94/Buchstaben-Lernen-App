@@ -438,7 +438,11 @@ def gate_g2_per_stroke(candidate_poly_rel: list[tuple[float, float]],
     arr = np.array(paired, dtype=float)
     cand_std = float(arr[:, 0].std())
     ref_std = float(arr[:, 1].std())
-    if max(cand_std, ref_std) < min_turn_angle_std:
+    # `<=`: with the placeholder threshold of 0.0 the documented guard —
+    # Pearson on rounding noise from a uniform stem (l, I, the straights
+    # of T E F H L) — could never fire, since a std is never < 0
+    # (audit 2026-09-05). A zero-variance turn profile now vacuous-passes.
+    if max(cand_std, ref_std) <= min_turn_angle_std:
         return {
             "pearson": None,
             "n_measured": len(paired),
@@ -1016,6 +1020,10 @@ def gate_g4(candidate_strokes_rel: list[list[tuple[float, float]]],
         letter_reason = "no_pairs"
     elif not per_junction:
         letter_reason = "no_junctions_detected"
+    elif any(j.get("reason") == "junction_detection_mismatch_between_rounds" for j in per_junction):
+        # Named at letter level so an aggregator reading `letter_reason`
+        # sees a topology change, not an "unmeasured" letter (review 2026-09-05).
+        letter_reason = "junction_topology_changed"
     else:
         letter_reason = None
     return {
@@ -1331,6 +1339,8 @@ def gate_g6(candidate_strokes_rel: list[list[tuple[float, float]]],
         letter_reason = "no_pairs"
     elif not per_junction:
         letter_reason = "no_t_junctions"
+    elif any(j.get("reason") == "t_junction_detection_mismatch_between_rounds" for j in per_junction):
+        letter_reason = "t_junction_topology_changed"   # see G4's twin (review 2026-09-05)
     elif not real_drifts:
         letter_reason = "all_vacuous"
     else:

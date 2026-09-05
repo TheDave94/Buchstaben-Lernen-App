@@ -201,7 +201,13 @@ public final class TracingViewModel {
     /// the grid preset so the layout splits before the stroke
     /// completes; tracking is cell-aware so touches still feed the
     /// active cell correctly.
+    /// Device of the most recent touch-down, set by the two overlays
+    /// before `beginTouch`; the dispatcher pins the session to it so a
+    /// resting hand and a Pencil cannot feed one stroke (review 2026-09-05).
+    private(set) var lastTouchDownWasPencil = false
+
     func pencilDidTouchDown() {
+        lastTouchDownWasPencil = true
         let priorKind = detector.effectiveKind
         detector.observeTouchBegan(isPencil: true)
         // The detector still records the device (it stamps
@@ -219,6 +225,7 @@ public final class TracingViewModel {
     /// Finger touchesBegan forwarder; feeds the detector hysteresis
     /// counter for pencil-session demotion.
     func fingerDidTouchDown() {
+        lastTouchDownWasPencil = false
         detector.observeTouchBegan(isPencil: false)
     }
 
@@ -1181,6 +1188,9 @@ public final class TracingViewModel {
     /// pair. The kind is stamped on the letter's rows. Refused outside
     /// study mode and for any letter outside the study set.
     func startColdProbe(letter: String, kind: StudyProbe) {
+        // Same stop as the canvas: after a reset/restore the arms in
+        // memory are stale until relaunch (review 2026-09-05).
+        guard sessionBlockReason == nil else { return }
         guard studyMode,
               kind.permits(letter: letter,
                            untrained: trainedSubset.untrainedLetters,
@@ -1372,8 +1382,8 @@ public final class TracingViewModel {
         }
     }
 
-    func endTouch() {
-        touchDispatcher.endTouch()
+    func endTouch(fromPencil: Bool? = nil) {
+        touchDispatcher.endTouch(fromPencil: fromPencil)
     }
 
     // MARK: - Animation guide
@@ -1465,8 +1475,12 @@ public final class TracingViewModel {
         // was defeated by the one path it exists for (audit 2026-09-04).
         let recordedVariant = onboardingStore.variantUsed
         onboardingStore.reset()
+        // The recorded assignment is the install's ORIGINAL variant and is
+        // kept across the reset; the flow shown on a parent re-run follows
+        // the parent's toggle (review 2026-09-05).
+        if let recordedVariant { onboardingStore.recordVariant(recordedVariant) }
         let useShort = UserDefaults.standard.bool(forKey: "de.flamingistan.primae.useShortOnboarding")
-        onboardingVariant = recordedVariant ?? (useShort ? .short : .full)
+        onboardingVariant = useShort ? .short : .full
         onboardingCoordinator = OnboardingCoordinator(steps: onboardingVariant.steps)
         onboardingStep = onboardingCoordinator.currentStep
         isOnboardingComplete = false
@@ -1660,9 +1674,12 @@ public final class TracingViewModel {
             return
         }
         // Capture priority for `schedulerEffectivenessProxy`.
-        lastScheduledLetterPriority = best.priority
         letterIndex = idx
         load(letter: letters[idx])
+        // AFTER load: load(letter:) clears it so a letter reached by the
+        // arrows or a probe does not carry the previous pick's priority
+        // (review 2026-09-05).
+        lastScheduledLetterPriority = best.priority
         toast("Empfohlen: \(currentLetterName)")
         // Slot a retrieval prompt ahead of tracing when the scheduler
         // says it's time and the letter has enough prior completions.
@@ -1925,6 +1942,7 @@ public final class TracingViewModel {
         // .recordUnloadOfCurrentLetter (2026-09-04).
         phaseTransitions.recordUnloadOfCurrentLetter(
             touchStillActive: touchDispatcher.isSingleTouchInteractionActive)
+        lastScheduledLetterPriority = 0   // only loadRecommendedLetter sets it, after this load
         phaseController.reset()
         // Cold-probe override (pretest / post-test / delayed), consumed
         // here so it never leaks into the NEXT letter load. Landing
@@ -2227,7 +2245,7 @@ public final class TracingViewModel {
     /// Folds the study precondition (phoneme recordings) and the
     /// identity-changed relaunch requirement into one child-facing stop.
     var sessionBlockReason: String? {
-        if participantIdentityChanged {
+        if studyMode, participantIdentityChanged {
             return "Teilnehmer gewechselt — die App muss neu gestartet werden, damit Arm und Buchstaben des neuen Kindes gelten."
         }
         return studyPreconditionFailure
@@ -2236,6 +2254,14 @@ public final class TracingViewModel {
     @discardableResult
     func resetForNewParticipant() -> UUID {
         participantIdentityChanged = true
+        // Close the outgoing child's in-flight trial FIRST: a pending
+        // quiet-window task, an in-flight recognition, or the ink still
+        // in the recorder would otherwise be scored on the next load and
+        // written under the NEW id with the OLD arms (review 2026-09-05).
+        touchDispatcher.resetTouchState()
+        abortInFlightRecognition()
+        freeWriteRecorder.clearAll()
+        didCompleteCurrentLetter = true
         dashboardStore.reset()          // PhaseSessionRecords, letterStats, durations
         progressStore.resetAll()        // all LetterProgress
         streakStore.reset()             // streak + stars

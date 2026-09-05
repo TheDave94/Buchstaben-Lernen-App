@@ -145,9 +145,16 @@ fileprivate final class ThirdPassRecordingStore: ParentDashboardStoring {
         #expect(vm.sessionBlockReason == nil, "precondition: the fixture can trace")
         let prevID = ParticipantStore.participantId
         defer { UserDefaults.standard.set(prevID.uuidString, forKey: "de.flamingistan.primae.participantId") }
+        // Positive control: the same stroke advances the tracker BEFORE the reset.
+        var t: CFTimeInterval = 1000
+        inkStroke(vm, from: 0, y: 200, count: 10, t: &t)
+        vm.endTouch()
+        #expect(vm.progress > 0, "precondition: this stroke hits the fixture's checkpoints; got \(vm.progress)")
+        vm.loadLetter(name: vm.currentLetterName)
+        vm.phaseController.resume(at: .guided)
         _ = vm.resetForNewParticipant()
         #expect(vm.sessionBlockReason != nil, "the arms in memory are the previous child's")
-        var t: CFTimeInterval = 1000
+        t += 1
         inkStroke(vm, from: 0, y: 200, count: 10, t: &t)
         #expect(vm.progress == 0, "no trace may be accepted under the old arms; got \(vm.progress)")
     }
@@ -226,6 +233,144 @@ fileprivate final class ThirdPassRecordingStore: ParentDashboardStoring {
         deps.audioCondition = .spatial
         let vm = TracingViewModel(deps)
         #expect(vm.studyPreconditionFailure == nil, "\(String(describing: vm.studyPreconditionFailure))")
+    }
+
+    // MARK: - Review 2026-09-05: linkage of the freeWrite row to its trace
+
+    @Test("a scored production accepts no more ink while the recognizer runs")
+    func scoredProductionRefusesInk() async {
+        let store = ThirdPassRecordingStore()
+        let traces = StubRawTraceStore()
+        let vm = studyVM(store: store)
+        vm.canvasSize = canvas
+        vm.phaseController.resume(at: .freeWrite)
+        var t: CFTimeInterval = 1000
+        inkStroke(vm, from: 50, y: 200, count: 15, t: &t)
+        vm.endTouch()
+        let inkBefore = vm.freeWritePoints.count
+        vm.advanceLearningPhase()   // what the quiet window calls: latches the measures, starts the recognizer
+        #expect(vm.didCompleteCurrentLetter, "the production is closed the moment it is scored")
+        t += 0.5
+        inkStroke(vm, from: 50, y: 300, count: 5, t: &t)   // the child touches again during the await
+        vm.endTouch()
+        #expect(vm.freeWritePoints.count == inkBefore,
+                "no ink may enter the buffer the later capture reads; got \(vm.freeWritePoints.count) vs \(inkBefore)")
+        _ = traces
+    }
+
+    @Test("a pencil move or lift during a finger session is ignored, and vice versa")
+    func touchSessionIsPinnedToItsDevice() {
+        let vm = studyVM()
+        vm.canvasSize = canvas
+        vm.phaseController.resume(at: .freeWrite)
+        var t: CFTimeInterval = 1000
+        vm.fingerDidTouchDown()
+        vm.beginTouch(at: CGPoint(x: 50, y: 200), t: t)
+        t += 0.01; vm.updateTouch(at: CGPoint(x: 60, y: 200), t: t, canvasSize: canvas)
+        let before = vm.freeWritePoints.count
+        // A Pencil move arrives (the pencil overlay stamps pressure first).
+        vm.pencilPressure = 0.6
+        t += 0.01; vm.updateTouch(at: CGPoint(x: 300, y: 50), t: t, canvasSize: canvas)
+        #expect(vm.freeWritePoints.count == before, "the pencil's point must not join the finger's stroke")
+        #expect(vm.pencilPressure == nil, "the stray pencil stamp is cleared")
+        // The Pencil lifts: the finger's session must survive it.
+        vm.endTouch(fromPencil: true)
+        t += 0.01; vm.updateTouch(at: CGPoint(x: 70, y: 200), t: t, canvasSize: canvas)
+        #expect(vm.freeWritePoints.count == before + 1, "the finger is still drawing after the pencil lifted")
+        vm.endTouch(fromPencil: false)
+        #expect(vm.freeWriteStrokeStartIndices.isEmpty, "one stroke, no boundary from the ignored events")
+    }
+
+    @Test("a one-sample contact is not a finished production")
+    func singleSampleContactDoesNotComplete() async {
+        let store = ThirdPassRecordingStore()
+        let vm = studyVM(store: store)
+        vm.canvasSize = canvas
+        vm.phaseController.resume(at: .freeWrite)
+        vm.beginTouch(at: CGPoint(x: 50, y: 200), t: 1000)   // a palm: one sample, no movement
+        vm.endTouch()
+        #expect(vm.freeWritePoints.count == 1)
+        try? await Task.sleep(for: .seconds(2.5))   // past the quiet window
+        #expect(store.phaseCalls.isEmpty, "a palm contact must not produce a completed freeWrite row")
+        // The unload/background path agrees.
+        vm.loadLetter(name: vm.currentLetterName)
+        #expect(!store.phaseCalls.contains { $0.phase == LearningPhase.freeWrite.rawName && $0.completed },
+                "still not a completed production on unload")
+    }
+
+    @Test("a participant reset closes the outgoing trial: nothing of it is written under the new id")
+    func resetClosesTheOutgoingTrial() {
+        let store = ThirdPassRecordingStore()
+        let vm = studyVM(store: store)
+        vm.canvasSize = canvas
+        vm.phaseController.resume(at: .freeWrite)
+        var t: CFTimeInterval = 1000
+        inkStroke(vm, from: 50, y: 200, count: 15, t: &t)
+        vm.endTouch()   // ink on the canvas, quiet window pending
+        let prevID = ParticipantStore.participantId
+        defer { UserDefaults.standard.set(prevID.uuidString, forKey: "de.flamingistan.primae.participantId") }
+        _ = vm.resetForNewParticipant()
+        #expect(vm.freeWritePoints.isEmpty, "the outgoing child's ink is discarded")
+        vm.loadLetter(name: vm.currentLetterName)   // what the next probe/letter would do
+        #expect(store.phaseCalls.isEmpty, "no row may be written for the outgoing child after the reset: \(store.phaseCalls.count)")
+    }
+
+    @Test("a blocked session refuses cold probes too")
+    func blockedSessionRefusesProbes() {
+        let vm = studyVM()
+        vm.canvasSize = canvas
+        let prevID = ParticipantStore.participantId
+        defer { UserDefaults.standard.set(prevID.uuidString, forKey: "de.flamingistan.primae.participantId") }
+        _ = vm.resetForNewParticipant()
+        let phaseBefore = vm.learningPhase
+        vm.startColdProbe(letter: "A", kind: .pretest)
+        #expect(vm.currentProbe == nil && vm.learningPhase == phaseBefore,
+                "a probe must not start while the arms in memory are stale")
+    }
+
+    @Test("schedulerPriority belongs to the scheduler's pick, not to the next letter loaded by hand")
+    func schedulerPriorityDoesNotLeak() {
+        var deps = TracingDependencies.stub
+        deps.studyMode = false
+        let vm = TracingViewModel(deps)
+        vm.canvasSize = canvas
+        vm.lastScheduledLetterPriority = 0.7   // as loadRecommendedLetter would leave it
+        vm.loadLetter(name: vm.currentLetterName)
+        #expect(vm.lastScheduledLetterPriority == 0, "a hand-loaded letter carries no scheduler priority")
+    }
+
+    @Test("two stroke boundaries at one index collapse to one")
+    func duplicateStrokeBoundaryIsDropped() {
+        let r = FreeWritePhaseRecorder()
+        r.startSession(now: 100)
+        r.record(point: CGPoint(x: 1, y: 1), timestamp: 100, force: 0, canvasSize: canvas)
+        r.beginStroke(); r.beginStroke()
+        #expect(r.strokeStartIndices == [1], "got \(r.strokeStartIndices)")
+    }
+
+    // MARK: - Review 2026-09-05: duration rows
+
+    @Test("duration rows carry the arm, the study flag and the probe, and are filtered on enrolment like the phase rows")
+    func durationRowsAreStampedAndFiltered() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("dur-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = JSONParentDashboardStore(fileURL: tmp)
+        let enrolled = Date(timeIntervalSince1970: 1_770_000_000)
+        store.recordSession(letter: "A", accuracy: 0.5, durationSeconds: 30, wallClockSeconds: 31,
+                            date: enrolled.addingTimeInterval(-3600), condition: .threePhase, inputDevice: "finger",
+                            audioCondition: .spatial, studyMode: true, probe: nil)          // before enrolment
+        store.recordSession(letter: "A", accuracy: 0.5, durationSeconds: 40, wallClockSeconds: 41,
+                            date: enrolled.addingTimeInterval(60), condition: .threePhase, inputDevice: "pencil",
+                            audioCondition: .phoneme, studyMode: true, probe: "delayed")   // after
+        let last = try #require(store.snapshot.sessionDurations.last)
+        #expect(last.audioCondition == .phoneme && last.studyMode == true && last.probe == "delayed")
+        let csv = String(data: ParentDashboardExporter.csvData(from: store.snapshot, progress: [:], enrolledAt: enrolled), encoding: .utf8)!
+        let lines = csv.components(separatedBy: "\n")
+        let header = try #require(lines.first { $0.hasPrefix("date,recordedAt,durationSeconds") })
+        #expect(header.hasSuffix(",letter,audioCondition,studyMode,probe"), header)
+        let rows = lines.filter { $0.hasPrefix("20") && $0.contains(",threePhase,") && $0.contains(",A,") }
+        #expect(rows.count == 1, "the pre-enrolment duration must be filtered out: \(rows)")
+        #expect(rows.first?.hasSuffix(",pencil,A,phoneme,true,delayed") == true, String(describing: rows.first))
     }
 
 }

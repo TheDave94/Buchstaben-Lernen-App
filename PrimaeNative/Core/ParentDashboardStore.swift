@@ -322,13 +322,22 @@ struct SessionDurationRecord: Codable, Equatable {
     /// a fragile `recordedAt` join against the per-phase rows. Nil for
     /// legacy records.
     let letter: String?
+    /// Same stamps as the phase row, so a duration can be attributed to
+    /// an arm and a timepoint without a `recordedAt` join (review
+    /// 2026-09-05). Nil on legacy rows.
+    let audioCondition: PilotAudioCondition?
+    let studyMode: Bool?
+    let probe: String?
 
     init(dateString: String, durationSeconds: TimeInterval,
          wallClockSeconds: TimeInterval? = nil,
          condition: ThesisCondition = .threePhase,
          recordedAt: Date? = Date(),
          inputDevice: String? = nil,
-         letter: String? = nil) {
+         letter: String? = nil,
+         audioCondition: PilotAudioCondition? = nil,
+         studyMode: Bool? = nil,
+         probe: String? = nil) {
         self.dateString = dateString
         self.durationSeconds = durationSeconds
         self.wallClockSeconds = wallClockSeconds
@@ -336,6 +345,9 @@ struct SessionDurationRecord: Codable, Equatable {
         self.recordedAt = recordedAt
         self.inputDevice = inputDevice
         self.letter = letter
+        self.audioCondition = audioCondition
+        self.studyMode = studyMode
+        self.probe = probe
     }
 
     init(from decoder: Decoder) throws {
@@ -347,11 +359,18 @@ struct SessionDurationRecord: Codable, Equatable {
         recordedAt = try? c.decode(Date.self, forKey: .recordedAt)
         inputDevice = try? c.decode(String.self, forKey: .inputDevice)
         letter = try? c.decode(String.self, forKey: .letter)
+        audioCondition = try? c.decode(PilotAudioCondition.self, forKey: .audioCondition)
+        studyMode = try? c.decode(Bool.self, forKey: .studyMode)
+        probe = try? c.decode(String.self, forKey: .probe)
     }
 }
 
 struct DashboardSnapshot: Codable, Equatable {
     var letterStats: [String: LetterAccuracyStat] = [:]
+    /// Transient (not encoded — DashboardSnapshot has explicit CodingKeys):
+    /// set by `init(from:)` when the aggregate block was undecodable,
+    /// read by `load(from:)`.
+    var letterStatsUndecodable = false
     var sessionDurations: [SessionDurationRecord] = []
     var phaseSessionRecords: [PhaseSessionRecord] = []
     var schemaVersion: Int? = dashboardSchemaVersion
@@ -374,6 +393,7 @@ struct DashboardSnapshot: Codable, Equatable {
         } else {
             storePersistenceLogger.error("DashboardSnapshot: letterStats undecodable — starting with none; phase rows are kept.")
             letterStats = [:]
+            letterStatsUndecodable = true   // `load(from:)` preserves a copy of the file
         }
         // Element-wise (2026-09-04): `[T].self` is all-or-nothing, so ONE
         // malformed row used to throw the whole array away — and for
@@ -506,7 +526,12 @@ struct DashboardSnapshot: Codable, Equatable {
 
     /// Pearson correlation between scheduler priority and subsequent accuracy improvement.
     /// Positive values indicate the scheduler is correctly prioritising struggling letters.
-    var schedulerEffectivenessProxy: Double {
+    var schedulerEffectivenessProxy: Double { schedulerEffectivenessProxyIfDefined ?? 0 }
+
+    /// nil when fewer than two freeWrite pairs exist or a variance is
+    /// zero — the exporter writes an empty cell rather than a `0.0000`
+    /// indistinguishable from a real r = 0 (review 2026-09-05).
+    var schedulerEffectivenessProxyIfDefined: Double? {
         var pairs: [(priority: Double, delta: Double)] = []
         let letters = Set(phaseSessionRecords.map { $0.letter })
         for letter in letters {
@@ -525,7 +550,7 @@ struct DashboardSnapshot: Codable, Equatable {
                                delta: records[i + 1].score - records[i].score))
             }
         }
-        guard pairs.count >= 2 else { return 0 }
+        guard pairs.count >= 2 else { return nil }
         let n = Double(pairs.count)
         let xs = pairs.map { $0.priority }
         let ys = pairs.map { $0.delta }
@@ -552,6 +577,18 @@ protocol ParentDashboardStoring {
                        wallClockSeconds: TimeInterval?,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String?)
+    /// Stamped variant (review 2026-09-05): arm / study flag / probe on the
+    /// duration row. A requirement WITH a forwarding default (extension
+    /// below), so doubles that only implement the base method still
+    /// conform, while the JSON store overrides it with dynamic dispatch.
+    func recordSession(letter: String, accuracy: Double,
+                       durationSeconds: TimeInterval,
+                       wallClockSeconds: TimeInterval?,
+                       date: Date, condition: ThesisCondition,
+                       inputDevice: String?,
+                       audioCondition: PilotAudioCondition?,
+                       studyMode: Bool?,
+                       probe: String?)
     func recordPhaseSession(letter: String, phase: String, completed: Bool, score: Double, schedulerPriority: Double, condition: ThesisCondition, audioCondition: PilotAudioCondition, assessment: WritingAssessment?, recognition: RecognitionSample?, inputDevice: String?, rawTraceID: UUID?, trainedSubset: String?, phaseDurationSeconds: Double?, frechetDistance: Double?, checkpointCoverage: Double?, spatialDeviation: Double?, strokeCount: Int?, strokeOrder: String?, reversedStrokeCount: Int?, studyMode: Bool?, probe: String?)
     func reset()
     /// Await any pending background write. See ProgressStoring.flush().
@@ -616,6 +653,20 @@ extension ParentDashboardStoring {
                            schedulerPriority: schedulerPriority, condition: condition, audioCondition: audioCondition, assessment: assessment, recognition: recognition, inputDevice: inputDevice, rawTraceID: rawTraceID, trainedSubset: trainedSubset, phaseDurationSeconds: phaseDurationSeconds, frechetDistance: frechetDistance, checkpointCoverage: checkpointCoverage, spatialDeviation: spatialDeviation, strokeCount: strokeCount, strokeOrder: strokeOrder, reversedStrokeCount: reversedStrokeCount, studyMode: studyMode, probe: nil)
     }
     /// Backward-compatible recordSession overload — new fields populate as nil.
+    /// Forwarding default for the stamped variant — see the requirement.
+    func recordSession(letter: String, accuracy: Double,
+                       durationSeconds: TimeInterval,
+                       wallClockSeconds: TimeInterval?,
+                       date: Date, condition: ThesisCondition,
+                       inputDevice: String?,
+                       audioCondition: PilotAudioCondition?,
+                       studyMode: Bool?,
+                       probe: String?) {
+        recordSession(letter: letter, accuracy: accuracy, durationSeconds: durationSeconds,
+                      wallClockSeconds: wallClockSeconds, date: date, condition: condition,
+                      inputDevice: inputDevice)
+    }
+
     func recordSession(letter: String, accuracy: Double,
                        durationSeconds: TimeInterval, date: Date,
                        condition: ThesisCondition) {
@@ -672,6 +723,19 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
                        wallClockSeconds: TimeInterval? = nil,
                        date: Date, condition: ThesisCondition,
                        inputDevice: String? = nil) {
+        recordSession(letter: letter, accuracy: accuracy, durationSeconds: durationSeconds,
+                      wallClockSeconds: wallClockSeconds, date: date, condition: condition,
+                      inputDevice: inputDevice, audioCondition: nil, studyMode: nil, probe: nil)
+    }
+
+    func recordSession(letter: String, accuracy: Double,
+                       durationSeconds: TimeInterval,
+                       wallClockSeconds: TimeInterval?,
+                       date: Date, condition: ThesisCondition,
+                       inputDevice: String?,
+                       audioCondition: PilotAudioCondition?,
+                       studyMode: Bool?,
+                       probe: String?) {
         let key = LetterProgress.canonicalKey(letter)
         // Word-mode sessions arrive with multi-character keys
         // (`"BUCH"`); adding those to `letterStats` would corrupt the
@@ -709,9 +773,13 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
                                        condition: condition,
                                        recordedAt: date,
                                        inputDevice: inputDevice,
-                                       // Canonical, like the phase rows, so the
-                                       // two join offline (audit 2026-09-04).
-                                       letter: LetterProgress.canonicalKey(letter))
+                                       // Canonical for single letters, like the
+                                       // phase rows; a word label keeps its case
+                                       // (review 2026-09-05).
+                                       letter: letter.count == 1 ? LetterProgress.canonicalKey(letter) : letter,
+                                       audioCondition: audioCondition,
+                                       studyMode: studyMode,
+                                       probe: probe)
             )
             if snapshot.sessionDurations.count > Self.sessionDurationsCap {
                 snapshot.sessionDurations.removeFirst(
@@ -803,6 +871,12 @@ final class JSONParentDashboardStore: ParentDashboardStoring {
         let decoded: DashboardSnapshot
         do {
             decoded = try JSONDecoder().decode(DashboardSnapshot.self, from: data)
+            if decoded.letterStatsUndecodable {
+                // The rows are kept in memory and the next persist rewrites
+                // the file; keep the original bytes beside it so the bad
+                // aggregate stays inspectable (review 2026-09-05).
+                StoreFileQuarantine.preserveCopy(url)
+            }
         } catch {
             // See ProgressStore.load: an existing-but-undecodable file
             // silently came up empty and was overwritten on the next

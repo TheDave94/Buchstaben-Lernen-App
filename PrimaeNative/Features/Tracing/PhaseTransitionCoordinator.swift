@@ -68,6 +68,11 @@ final class PhaseTransitionCoordinator {
         // until the CoreML recognizer returns — we don't yet know
         // whether the result triggers retry or "Geschafft!".
         if wasInFreeWrite {
+            // Latched: the measures above were computed from the buffer as
+            // it is now. Mark the production complete BEFORE the recognizer
+            // await so no further ink can enter the buffer the later
+            // capture reads (review 2026-09-05).
+            vm.didCompleteCurrentLetter = true
             vm.runRecognizerForFreeWrite(score: score)
             return
         }
@@ -126,17 +131,23 @@ final class PhaseTransitionCoordinator {
             if cellRefs.isEmpty {
                 return vm.freeWriteRecorder.assess(
                     reference: def, canvasSize: vm.canvasSize,
-                    cellFrame: vm.grid.activeCell.frame
+                    cellFrame: vm.grid.activeCell.frame,
+                    now: vm.freeWriteTimestamps.last ?? CACurrentMediaTime()
                 ).overallScore
             }
             return vm.freeWriteRecorder.assess(
                 cellReferences: cellRefs,
-                canvasSize: vm.canvasSize
+                canvasSize: vm.canvasSize,
+                now: vm.freeWriteTimestamps.last ?? CACurrentMediaTime()
             ).overallScore
         }
+        // `now` = the last sample, not the moment of scoring: on the
+        // unload/background routes that moment is proctor latency, which
+        // used to depress rhythmScore (review 2026-09-05).
         return vm.freeWriteRecorder.assess(
             reference: def, canvasSize: vm.canvasSize,
-            cellFrame: nil
+            cellFrame: nil,
+            now: vm.freeWriteTimestamps.last ?? CACurrentMediaTime()
         ).overallScore
     }
 
@@ -154,7 +165,7 @@ final class PhaseTransitionCoordinator {
         guard let vm, vm.studyMode,
               vm.phaseController.currentPhase == .freeWrite,
               !vm.phaseController.isLetterSessionComplete,
-              !vm.freeWritePoints.isEmpty,
+              vm.freeWritePoints.count >= 2,   // a one-sample contact is not a production
               !vm.touchDispatcher.isSingleTouchInteractionActive else { return false }
         vm.abortInFlightRecognition()
         // Mark complete BEFORE recording so the dispatcher's quiet-window
@@ -333,6 +344,7 @@ final class PhaseTransitionCoordinator {
 
     private func requestFreeWriteRetry(result: RecognitionResult) {
         guard let vm else { return }
+        vm.didCompleteCurrentLetter = false   // a retry re-opens the production
         // Visual badge stays so the child sees what the model thought.
         // No letter-naming verbal mirror in Schule — that belongs in
         // Werkstatt. "Probier's nochmal" below is the audio retry cue.
@@ -506,7 +518,10 @@ final class PhaseTransitionCoordinator {
                                         wallClockSeconds: wallClock,
                                         date: Date(),
                                         condition: vm.thesisCondition,
-                                        inputDevice: device)
+                                        inputDevice: device,
+                                        audioCondition: vm.audioCondition,
+                                        studyMode: vm.studyMode,
+                                        probe: vm.currentProbe?.rawValue)
 
         // Difficulty-tier adaptation — gated on studyMode, same shape as
         // the errorless-learning ramp (`load(letter:)`) and the

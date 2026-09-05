@@ -196,8 +196,13 @@ def run_gate_for_letter(letter: str, gate: str, weight: str,
     # stroke passed all of them silently — the most consequential corpus
     # regression was the one thing no gate checked (audit 2026-09-04).
     n_cand, n_ref = len(cand_polys), len(ref_polys)
-    result["n_strokes_candidate"] = n_cand
-    result["n_strokes_reference"] = n_ref
+    # Do not shadow a gate that reports its own counts (G4/G6 do): if
+    # they ever disagree with the runner's, say so instead of hiding it.
+    for key, val in (("n_strokes_candidate", n_cand), ("n_strokes_reference", n_ref)):
+        if key in result and result[key] != val:
+            result["pass"] = False
+            result["stroke_count_mismatch"] = f"gate reports {key}={result[key]}, runner counts {val}"
+        result.setdefault(key, val)
     if n_cand != n_ref:
         result["pass"] = False
         result["stroke_count_mismatch"] = f"candidate {n_cand} vs reference {n_ref} strokes"

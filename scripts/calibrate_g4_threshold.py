@@ -11,10 +11,11 @@ For each letter in the corpus, this script:
   round-2, plus the absolute drift |kink_round2 − kink_round1|.
 - Reports detection-mismatch and no-junctions-detected cases as
   diagnostic counts.
-- Verifies polish-preservation pairwise BEFORE deriving the
-  threshold.
-- If polish-preservation holds: threshold = max(per-junction
-  kink_drift_deg) + safety margin.
+- Derives threshold = max(per-junction kink_drift_deg) + safety
+  margin UNCONDITIONALLY. A polish-preservation check (as in
+  calibrate_g3_threshold's SOFT-V trigger) is NOT implemented here —
+  a large median drift is only printed as a note (audit 2026-09-05;
+  the 4.43° of record was derived without such a check).
 
 Stdout: clean threshold value (degrees).
 Stderr: full per-junction table + polish-preservation check +

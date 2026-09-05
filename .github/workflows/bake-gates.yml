@@ -18,6 +18,7 @@ on:
     branches: ["main"]
     paths:
       - "PrimaeNative/Resources/Letters/Regular/**/strokes.json"
+      - "PrimaeNative/Resources/Letters/Light/**/strokes.json"
       - "scripts/audit_invariants.py"
       - "scripts/run_gates.py"
       # The gates rasterise through the bake module and read its font:
@@ -101,6 +102,16 @@ jobs:
           python3 scripts/run_gates.py --gate g6 \
             --reference-ref origin/main --json > g6.json \
             || true
+
+      - name: Light corpus — G1 + G3 (advisory; thresholds were calibrated on Regular)
+        if: always()
+        continue-on-error: true
+        run: |
+          # The Light weight is not in the pilot and no gate ran on it at
+          # all (audit 2026-09-05). Advisory until its thresholds are
+          # calibrated; a PR rewriting Light/ now at least triggers this.
+          python3 scripts/run_gates.py --gate g1 --weight light --reference-ref origin/main
+          python3 scripts/run_gates.py --gate g3 --weight light --reference-ref origin/main
 
       - name: Upload gate JSON results
         if: always()

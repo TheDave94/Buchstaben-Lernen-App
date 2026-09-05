@@ -207,10 +207,13 @@ final class JSONStreakStore: StreakStoring {
         // No file is the normal first launch; an UNREADABLE file is a
         // finding — logged and moved aside, never silently overwritten by
         // the next save (audit 2026-09-04; same rule as the other stores).
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        // An unreadable file (transient I/O, data protection while locked)
+        // is NOT a decode failure — return nil without touching it, as the
+        // other three stores do (review 2026-09-05).
+        guard let data = try? Data(contentsOf: url) else { return nil }
         let decoded: StreakState
         do {
-            decoded = try JSONDecoder().decode(StreakState.self, from: Data(contentsOf: url))
+            decoded = try JSONDecoder().decode(StreakState.self, from: data)
         } catch {
             storePersistenceLogger.error(
                 "StreakStore at \(url.path, privacy: .public) exists but failed to decode (\(error.localizedDescription, privacy: .public)) — starting EMPTY.")

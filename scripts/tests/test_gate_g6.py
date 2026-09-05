@@ -327,7 +327,7 @@ class TestGateG6Letter(unittest.TestCase):
         # The only junction changed topology between rounds: that is a
         # failure, not an all-vacuous pass (audit 2026-09-04).
         self.assertFalse(result["pass"])
-        self.assertEqual(result["letter_reason"], "all_vacuous")
+        self.assertEqual(result["letter_reason"], "t_junction_topology_changed")
         self.assertGreater(result["n_t_junctions_detected"], 0)
         self.assertEqual(result["n_t_junctions_measured"], 0)
 

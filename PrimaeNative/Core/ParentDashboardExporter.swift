@@ -121,15 +121,28 @@ struct ParentDashboardExporter {
         // duration to the practised letter directly — the pilot's
         // per-letter time-to-complete no longer needs a `recordedAt`
         // join against the per-phase rows. Empty for legacy records.
-        lines.append(["date","recordedAt","durationSeconds","wallClockSeconds","condition","inputDevice","letter"].joined(separator: sep))
-        for rec in snapshot.sessionDurations.sorted(by: { $0.dateString < $1.dateString }) {
+        // Filtered on enrolment like the phase rows (review 2026-09-05: the
+        // D11#1 filter never reached this block); stamped with the arm /
+        // study flag / probe so a duration attributes without a join.
+        let enrolledDurations: [SessionDurationRecord] = {
+            guard let enrolledAt else { return snapshot.sessionDurations }
+            return snapshot.sessionDurations.filter { rec in
+                guard let ts = rec.recordedAt else { return false }
+                return ts >= enrolledAt
+            }
+        }()
+        lines.append(["date","recordedAt","durationSeconds","wallClockSeconds","condition","inputDevice","letter","audioCondition","studyMode","probe"].joined(separator: sep))
+        for rec in enrolledDurations.sorted(by: { $0.dateString < $1.dateString }) {
             let recordedAtField = rec.recordedAt.map { isoFormatter.string(from: $0) } ?? ""
             let wallField = rec.wallClockSeconds.map { String(format: "%.3f", $0) } ?? ""
             lines.append([rec.dateString, recordedAtField,
                           String(format: "%.3f", rec.durationSeconds),
                           wallField, rec.condition.rawValue,
                           rec.inputDevice ?? "",
-                          rec.letter ?? ""].joined(separator: sep))
+                          rec.letter ?? "",
+                          rec.audioCondition?.rawValue ?? "",
+                          rec.studyMode.map(String.init) ?? "",
+                          rec.probe ?? ""].joined(separator: sep))
         }
         lines.append("")
 
@@ -195,8 +208,8 @@ struct ParentDashboardExporter {
         // built once, so they read exactly the rows the per-row block
         // and the arm aggregates read.
         let enrolledSnapshot = DashboardSnapshot(
-            letterStats: snapshot.letterStats,
-            sessionDurations: snapshot.sessionDurations,
+            letterStats: snapshot.letterStats,   // aggregates: not filterable by time
+            sessionDurations: enrolledDurations,
             phaseSessionRecords: enrolledRecords
         )
         for rec in enrolledRecords {
@@ -258,7 +271,8 @@ struct ParentDashboardExporter {
             }
         }
         lines.append(["averageFreeWriteScore", String(format: "%.4f", enrolledSnapshot.averageFreeWriteScore)].joined(separator: sep))
-        lines.append(["schedulerEffectivenessProxy", String(format: "%.4f", enrolledSnapshot.schedulerEffectivenessProxy)].joined(separator: sep))
+        lines.append(["schedulerEffectivenessProxy",
+                      enrolledSnapshot.schedulerEffectivenessProxyIfDefined.map { String(format: "%.4f", $0) } ?? ""].joined(separator: sep))
         // Per-condition aggregates so between-arm comparisons don't
         // have to back out cross-arm contamination. The proxy is
         // meaningful only inside an arm — `.control` uses a different
@@ -389,6 +403,10 @@ struct ParentDashboardExporter {
                 guard let enrolledAt else { return snapshot }
                 var s = snapshot
                 s.phaseSessionRecords = snapshot.phaseSessionRecords.filter { rec in
+                    guard let ts = rec.recordedAt else { return false }
+                    return ts >= enrolledAt
+                }
+                s.sessionDurations = snapshot.sessionDurations.filter { rec in
                     guard let ts = rec.recordedAt else { return false }
                     return ts >= enrolledAt
                 }

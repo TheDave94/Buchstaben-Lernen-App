@@ -158,14 +158,22 @@ struct TracingCanvasView: View {
                 if isActiveCell, vm.learningPhase == .freeWrite, vm.gridCells.count == 1 {
                     let pts = vm.freeWritePoints
                     let starts = ([0] + vm.freeWriteStrokeStartIndices.filter { $0 > 0 && $0 < pts.count }).sorted()
+                    // COMPLETED strokes only: while a touch is down the
+                    // last segment is the live stroke, drawn above at its
+                    // pressure width — re-stroking it here at a fixed width
+                    // hid the pressure response (review 2026-09-05).
+                    let touchDown = vm.activePath.count > 1
                     var inked = Path()
                     for (b, startIdx) in starts.enumerated() {
-                        let endIdx = (b + 1 < starts.count) ? starts[b + 1] : pts.count
+                        let isLast = b + 1 == starts.count
+                        if isLast && touchDown { continue }
+                        let endIdx = isLast ? pts.count : starts[b + 1]
                         guard endIdx - startIdx > 1 else { continue }
                         inked.addLines(Array(pts[startIdx..<endIdx]))
                     }
                     context.stroke(inked, with: .color(.canvasInkStroke),
-                                   style: StrokeStyle(lineWidth: 14, lineCap: .round, lineJoin: .round))
+                                   style: StrokeStyle(lineWidth: InkStyle.width(forPressure: nil),
+                                                      lineCap: .round, lineJoin: .round))
                 }
 
                 if isActiveCell, vm.lingeringInk.count > 1 {
@@ -344,7 +352,7 @@ struct TracingCanvasView: View {
                         vm.beginTouch(at: pt, t: t)
                     },
                     onSingleTouchMoved:  { pt, t, size in vm.updateTouch(at: pt, t: t, canvasSize: size) },
-                    onSingleTouchEnded:  { vm.endTouch() },
+                    onSingleTouchEnded:  { vm.endTouch(fromPencil: false) },
                     // Two-finger swipe cycles audio variants.
                     onTwoFingerSwipeUp:   { vm.nextAudioVariant() },
                     onTwoFingerSwipeDown: { vm.previousAudioVariant() }
@@ -365,7 +373,7 @@ struct TracingCanvasView: View {
                         vm.pencilAzimuth  = azimuth
                         vm.updateTouch(at: pt, t: t, canvasSize: size)
                     },
-                    onEnded:  { vm.endTouch() },
+                    onEnded:  { vm.endTouch(fromPencil: true) },
                     onPencilSqueeze: { vm.replayAudio() }
                 )
                 // Suspend tracing during calibration so a drag doesn't

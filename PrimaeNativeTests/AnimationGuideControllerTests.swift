@@ -95,14 +95,22 @@ import Testing
             // Park until cancelled — a cancelled loop leaves, a live one stays.
             try await Task.sleep(for: .seconds(60))
         })
+        // Bounded polls, not fixed yield counts: the cancellation
+        // propagation and the new loop's entry into the sleeper are not
+        // ordered by a yield count (review 2026-09-05).
+        func settle(to expected: Int) async {
+            for _ in 0..<500 where gate.current != expected { await Task.yield() }
+        }
         c.start(strokes: sampleStrokes())
-        for _ in 0..<20 { await Task.yield() }
+        await settle(to: 1)
         #expect(gate.current == 1, "one loop parked in its sleep, got \(gate.current)")
         c.start(strokes: sampleStrokes())
-        for _ in 0..<50 { await Task.yield() }
+        await settle(to: 1)
+        // If the first loop were NOT cancelled, the count settles at 2 and stays there.
+        for _ in 0..<100 { await Task.yield() }
         #expect(gate.current == 1, "the first loop must be cancelled by the second start; live loops = \(gate.current)")
         c.stop()
-        for _ in 0..<50 { await Task.yield() }
+        await settle(to: 0)
         #expect(gate.current == 0, "stop must cancel the live loop; live loops = \(gate.current)")
     }
 }

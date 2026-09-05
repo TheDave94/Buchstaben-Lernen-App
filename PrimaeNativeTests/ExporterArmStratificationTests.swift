@@ -478,20 +478,29 @@ import Foundation
             PhaseSessionRecord(letter: "A", phase: "guided", completed: true, score: 1.0,
                                schedulerPriority: 0.9, condition: .threePhase, recordedAt: t0.addingTimeInterval(offset))
         }
-        // Three passes: the guided rows interleave with the freeWrite rows.
+        // Four passes: the guided rows interleave with the freeWrite rows.
+        // Three freeWrite pairs, so r is a real correlation, not the
+        // degenerate n = 2 case that is ±1 by construction (review 2026-09-05).
         var snap = DashboardSnapshot()
-        snap.phaseSessionRecords = [guided(0), fw(0.2, 0.1, 1), guided(2), fw(0.6, 0.5, 3), guided(4), fw(0.7, 0.9, 5)]
+        snap.phaseSessionRecords = [guided(0), fw(0.2, 0.1, 1), guided(2), fw(0.6, 0.5, 3), guided(4), fw(0.7, 0.9, 5), guided(6), fw(0.5, 1.3, 7)]
         let lines = String(data: ParentDashboardExporter.csvData(
             from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
             .components(separatedBy: "\n")
         // Two steps, not a nested #require — nesting expands the macro recursively.
         let raw = try #require(metrics(lines)["schedulerEffectivenessProxy_threePhase"])
         let r = try #require(Double(raw))
-        // freeWrite-only pairs: (0.1, +0.4), (0.5, +0.1) → r = -1 exactly.
-        // With the guided rows paired in, the deltas alternate sign and r moves.
-        #expect(abs(r - (-1.0)) < 1e-6, "expected r = -1 from the two freeWrite pairs, got \(r)")
-        #expect(abs(snap.schedulerEffectivenessProxy - (-1.0)) < 1e-6,
+        // freeWrite-only pairs: (0.1, +0.4), (0.5, +0.1), (0.9, −0.2) → r ≈ −0.995.
+        // With the guided rows paired in, deltas alternate sign and r moves far from that.
+        #expect(r < -0.98 && r > -1.0, "expected r ≈ -0.995 from the three freeWrite pairs, got \(r)")
+        #expect(abs(snap.schedulerEffectivenessProxy - r) < 1e-4,
                 "the store's own proxy must agree with the exporter: \(snap.schedulerEffectivenessProxy)")
+        // Fewer than two pairs: an EMPTY cell, not a fabricated 0.0000.
+        var thin = DashboardSnapshot()
+        thin.phaseSessionRecords = [fw(0.2, 0.1, 1)]
+        let thinLines = String(data: ParentDashboardExporter.csvData(
+            from: thin, progress: [:], enrolledAt: nil), encoding: .utf8)!.components(separatedBy: "\n")
+        #expect(thinLines.contains("schedulerEffectivenessProxy,"), "undefined proxy must export as an empty cell")
+        #expect(thin.schedulerEffectivenessProxyIfDefined == nil)
     }
 
 }

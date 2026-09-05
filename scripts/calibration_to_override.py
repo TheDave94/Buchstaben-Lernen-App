@@ -58,7 +58,7 @@ def target_dir(letter: str, weight_dir: str) -> Path:
 
 def import_aggregate_export(input_path: Path,
                              weight_dir: str | None = None
-                             ) -> dict:
+                             , allow_new: bool = False) -> dict:
     """Split the aggregate export into per-letter strokes.json files.
 
     Preserves skeleton / skeletonAdj / bridgeEdges fields from any
@@ -76,7 +76,8 @@ def import_aggregate_export(input_path: Path,
             raise ValueError(f"unknown schriftArt {schrift!r}; expected one of "
                              f"{sorted(SCHRIFTART_TO_WEIGHT_DIR)} — pass --weight-dir to override")
         weight_dir = SCHRIFTART_TO_WEIGHT_DIR[schrift]
-    written: list[str] = []
+    # Validate EVERY entry before the first write, so a rejected export
+    # cannot leave the corpus half-overwritten (review 2026-09-05).
     for entry in data["letters"]:
         letter = entry["letter"]
         strokes = entry.get("strokes") or []
@@ -85,6 +86,16 @@ def import_aggregate_export(input_path: Path,
             # export from an unvisited letter (audit 2026-09-04).
             raise ValueError(f"{letter!r}: export has no usable strokes "
                              f"({[len(s.get('checkpoints', [])) for s in strokes]}) — refusing to write")
+        f = target_dir(normalize_letter_name(letter), weight_dir) / "strokes.json"
+        if not f.exists() and not allow_new:
+            # A letter with no shipped file would be written WITHOUT the
+            # skeleton fields the calibrator and the schema audit need;
+            # new letters are a bake-pipeline act (review 2026-09-05).
+            raise ValueError(f"{letter!r}: no shipped strokes.json at {f}; new letters come "
+                             f"from the bake, not the calibrator (pass --allow-new to override)")
+    written: list[str] = []
+    for entry in data["letters"]:
+        letter = entry["letter"]
         letter_nfc = normalize_letter_name(letter)
         d = target_dir(letter_nfc, weight_dir)
         f = d / "strokes.json"
@@ -111,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
                     "into per-letter files.")
     parser.add_argument("--input", required=True, type=Path,
                          help="Path to the aggregate strokes.json export.")
+    parser.add_argument("--allow-new", action="store_true",
+                        help="permit writing a letter that has no shipped strokes.json "
+                             "(it will lack the skeleton fields; normally a bake-pipeline act)")
     parser.add_argument("--weight", choices=["regular", "light"],
                          default=None,
                          help="Override weight directory. Default: derived "
@@ -121,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input.exists():
         print(f"input not found: {args.input}", file=sys.stderr)
         return 1
-    summary = import_aggregate_export(args.input, weight_dir=weight_dir)
+    summary = import_aggregate_export(args.input, weight_dir=weight_dir,
+                                      allow_new=args.allow_new)
     print(f"wrote {len(summary['written'])} letters to "
           f"Letters/{summary['weight_dir']}/")
     return 0

@@ -100,6 +100,10 @@ final class FreeWritePhaseRecorder {
     /// first stroke of the session (the implicit index-0 start).
     func beginStroke() {
         guard !points.isEmpty else { return }
+        // Two boundaries at one index (an excursion out, in, out with no
+        // accepted sample between) would make the trace's own count
+        // disagree with `strokeCount` (review 2026-09-05).
+        guard strokeStartIndices.last != points.count else { return }
         strokeStartIndices.append(points.count)
     }
 

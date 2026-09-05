@@ -16,6 +16,28 @@
 import Foundation
 
 enum StoreFileQuarantine {
+    /// Copies `url` to `<stem>.undecodable-<unix-seconds>.<ext>` beside it,
+    /// leaving the original in place — for a file that decoded well enough
+    /// to keep running from, but lost a block worth inspecting.
+    @discardableResult
+    static func preserveCopy(_ url: URL) -> URL? {
+        let stamp = Int(Date().timeIntervalSince1970)
+        let ext = url.pathExtension
+        var dest = url.deletingPathExtension()
+            .appendingPathExtension("undecodable-\(stamp)")
+        if !ext.isEmpty { dest = dest.appendingPathExtension(ext) }
+        do {
+            try FileManager.default.copyItem(at: url, to: dest)
+            storePersistenceLogger.error(
+                "Partly undecodable store file copied to \(dest.path, privacy: .public) for inspection; the live file keeps running.")
+            return dest
+        } catch {
+            storePersistenceLogger.error(
+                "Partly undecodable store file at \(url.path, privacy: .public) could NOT be copied aside (\(error.localizedDescription, privacy: .public)).")
+            return nil
+        }
+    }
+
     /// Moves `url` to `<stem>.undecodable-<unix-seconds>.<ext>` beside it.
     /// Returns the destination, or nil (already logged) if the move failed.
     @discardableResult

@@ -45,6 +45,9 @@ final class TouchDispatcher {
     /// we schedule a quiet-window phase advance (~2 s); a re-touch
     /// cancels it.
     private var freeWriteAutoAdvanceTask: Task<Void, Never>?
+    /// Device that began the current session; events from the other
+    /// device are ignored until it ends (review 2026-09-05).
+    private var sessionIsPencil = false
     private let freeWriteQuietSeconds: TimeInterval = 2.0
 
     /// Tracks the previous in-bounds state so the out-of-bounds warning
@@ -61,6 +64,11 @@ final class TouchDispatcher {
         guard vm.phaseController.isTouchEnabled       else { return }
         guard vm.phaseController.currentPhase != .direct else { return }  // handled by DirectPhaseDotsOverlay
         guard !isSingleTouchInteractionActive         else { return }
+        // A freeWrite production that has been scored (quiet window
+        // fired, recognizer in flight) accepts no more ink: its measures
+        // were latched from the buffer as it was, and a later stroke used
+        // to land in the raw trace but not in the row (review 2026-09-05).
+        guard !(vm.didCompleteCurrentLetter && vm.phaseController.currentPhase == .freeWrite) else { return }
 
         // Re-touch cancels a pending freeWrite auto-advance.
         freeWriteAutoAdvanceTask?.cancel()
@@ -70,6 +78,7 @@ final class TouchDispatcher {
         vm.cancelPreTaskDemonstration()
 
         isSingleTouchInteractionActive = true
+        sessionIsPencil                = vm.lastTouchDownWasPencil
         vm.playback.resumeIntent       = true
         lastPoint                      = p
         lastTimestamp                  = t
@@ -104,6 +113,15 @@ final class TouchDispatcher {
 
     func updateTouch(at p: CGPoint, t: CFTimeInterval, canvasSize: CGSize) {
         guard let vm else { return }
+        // The Pencil overlay stamps `pencilPressure` before every move; the
+        // finger overlay never does. A move from the device that does not
+        // own this session is dropped (and a stray pencil stamp cleared) so
+        // a resting hand and the pen cannot interleave into one stroke.
+        let eventIsPencil = vm.pencilPressure != nil
+        if eventIsPencil != sessionIsPencil {
+            if !sessionIsPencil { vm.pencilPressure = nil; vm.pencilAzimuth = 0 }
+            return
+        }
         guard isSingleTouchInteractionActive else { return }
         guard let lastPoint                  else { return }
 
@@ -205,8 +223,12 @@ final class TouchDispatcher {
         self.lastTimestamp = t
     }
 
-    func endTouch() {
+    func endTouch(fromPencil: Bool? = nil) {
         guard let vm else { return }
+        // A lift from the device that does not own the session (the Pencil
+        // lifting while a resting finger is the tracked touch) must not end
+        // the finger's stroke (review 2026-09-05).
+        if let fromPencil, isSingleTouchInteractionActive, fromPencil != sessionIsPencil { return }
         isSingleTouchInteractionActive = false
         lastPoint                      = nil
         lastTimestamp                  = nil
@@ -225,7 +247,7 @@ final class TouchDispatcher {
         // signal; re-touch within the window cancels.
         if vm.phaseController.currentPhase == .freeWrite,
            !vm.didCompleteCurrentLetter,
-           !vm.freeWritePoints.isEmpty {
+           vm.freeWritePoints.count >= 2 {   // a one-sample contact (a palm) is not a production
             scheduleFreeWriteAutoAdvance()
         }
     }
@@ -259,11 +281,11 @@ final class TouchDispatcher {
         guard canvasSize != vm.canvasSize,
               !vm.letters.isEmpty,
               vm.letterIndex < vm.letters.count else { return }
-        // Re-flow cells BEFORE reloading checkpoints — reload reads
-        // per-cell frames.
-        vm.grid.layout(in: canvasSize, schriftArt: vm.schriftArt)
-        vm.reloadStrokeCheckpoints(for: vm.letters[vm.letterIndex],
-                                    usingSize: canvasSize)
+        // Assign the VM's size (its didSet re-flows the cells and reloads
+        // the checkpoints in that order) instead of doing both here while
+        // `vm.canvasSize` stayed stale — the scorer and the persisted
+        // RawTrace read `vm.canvasSize` (review 2026-09-05).
+        vm.canvasSize = canvasSize
     }
 
     /// Push the live "checkpoints per second" figure into the recorder

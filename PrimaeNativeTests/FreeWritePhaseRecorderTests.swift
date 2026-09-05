@@ -199,6 +199,10 @@ import CoreGraphics
         )
         #expect(abs(result.formAccuracy - cleanResult.formAccuracy) < 1e-9,
                 "the out-of-cell point must not change form accuracy: \(result.formAccuracy) vs \(cleanResult.formAccuracy)")
+        // The filter also gates the timestamp and force arrays: a leak
+        // into those alone would move tempo/rhythm (review 2026-09-05).
+        #expect(abs(result.tempoConsistency - cleanResult.tempoConsistency) < 1e-9)
+        #expect(abs(result.rhythmScore - cleanResult.rhythmScore) < 1e-9)
     }
 
     @Test func clearAll_emptiesEverythingIncludingGuidedScore() {

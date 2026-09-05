@@ -110,6 +110,9 @@ protocol OnboardingStoring {
     func markComplete(variant: OnboardingVariant)
     func saveProgress(step: OnboardingStep)
     func reset()
+    /// Re-persist the install's original A/B variant after a `reset()`
+    /// wiped it (a parent re-run must not change the recorded assignment).
+    func recordVariant(_ variant: OnboardingVariant)
     /// Await any pending background disk write so an app-suspension
     /// flush can guarantee the onboarding step is durable before the
     /// process suspends.
@@ -120,6 +123,7 @@ extension OnboardingStoring {
     func flush() async {}
     func markComplete() { markComplete(variant: .full) }
     var variantUsed: OnboardingVariant? { nil }
+    func recordVariant(_ variant: OnboardingVariant) {}
 }
 
 private struct OnboardingState: Codable {
@@ -182,6 +186,11 @@ final class JSONOnboardingStore: OnboardingStoring {
 
     func reset() {
         state = OnboardingState()
+        persist()
+    }
+
+    func recordVariant(_ variant: OnboardingVariant) {
+        state.variantUsedRaw = variant.rawValue
         persist()
     }
 
