@@ -2213,7 +2213,6 @@ public final class TracingViewModel {
     /// The new arm assignment takes effect on the NEXT app launch — the
     /// VM captures `thesisCondition` / `audioCondition` as `let` at init —
     /// so the caller surfaces a "relaunch required" prompt.
-    @discardableResult
     /// Set by `resetForNewParticipant()` and `markParticipantRestored()`.
     /// The arms and the trained subset are `let`s captured at init, so
     /// the VM in memory still carries the PREVIOUS child's; until the
@@ -2234,6 +2233,7 @@ public final class TracingViewModel {
         return studyPreconditionFailure
     }
 
+    @discardableResult
     func resetForNewParticipant() -> UUID {
         participantIdentityChanged = true
         dashboardStore.reset()          // PhaseSessionRecords, letterStats, durations

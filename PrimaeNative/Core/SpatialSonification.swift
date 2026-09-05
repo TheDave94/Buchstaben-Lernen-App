@@ -18,6 +18,7 @@
 //   range, comfortable headroom.
 
 import CoreGraphics
+import Foundation
 
 enum SpatialSonification {
     /// Seamlessly-looped neutral carrier: band-limited triangle,
