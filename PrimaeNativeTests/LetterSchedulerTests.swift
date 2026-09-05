@@ -297,6 +297,8 @@ struct LetterOrderingStrategyTests {
     /// the top of the queue forever.
     @Test("lowercase display names find their canonical progress")
     func lowercaseLooksUpCanonicalProgress() {
+        let scheduler = LetterScheduler.standard
+        let now = Date()
         let progress: [String: LetterProgress] = [
             "A": LetterProgress(completionCount: 9, bestAccuracy: 0.95, lastCompletedAt: now),
         ]

@@ -134,7 +134,11 @@ class TestG3VacuousPass(unittest.TestCase):
         poly = []
         for i in range(n):
             x = i / (n - 1)
-            y = 0.5 + random.gauss(0, 0.002)  # zero-mean noise
+            # Sub-pixel jitter that keeps every segment's turn angle far
+            # below the π/12 straightness class (σ = 0.002 with 1/59
+            # spacing reached 0.56 rad and was NOT straight — the old
+            # test hid that behind an `if`; CI run 1645).
+            y = 0.5 + random.gauss(0, 0.0002)  # zero-mean noise
             poly.append((x, y))
         result = ai.gate_g3_per_stroke(poly, poly, self._bbox(),
                                          threshold=10.0)
@@ -206,9 +210,15 @@ class TestG3StraightStroke(unittest.TestCase):
         poly = []
         for i in range(50):
             t = i / 49.0
-            # Two flat halves with a small bump in the middle.
-            if 0.45 < t < 0.55:
-                y = 0.55  # ~5 px above the baseline at y=50
+            # A gentle bump: 3 px (0.03 of the 100 px bbox) reached over
+            # ten points and released over ten, so no segment's turn angle
+            # leaves the straightness class (a 5 px step in one segment
+            # was classified NOT straight and the old test returned early
+            # — CI run 1645), while the deviation stays clearly > 1 px.
+            if 0.30 <= t <= 0.50:
+                y = 0.5 + 0.03 * (t - 0.30) / 0.20
+            elif 0.50 < t <= 0.70:
+                y = 0.5 + 0.03 * (0.70 - t) / 0.20
             else:
                 y = 0.5
             poly.append((t, y))

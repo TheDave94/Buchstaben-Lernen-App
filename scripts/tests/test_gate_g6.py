@@ -248,7 +248,7 @@ class TestGateG6PerJunctionVacuous(unittest.TestCase):
             attach_at_first=True, bbox=BBOX, threshold_deg=4.5)
         self.assertEqual(result["reason"],
                           "t_junction_detection_mismatch_between_rounds")
-        self.assertTrue(result["pass"])  # vacuous-pass
+        self.assertFalse(result["pass"])  # a lost T-junction FAILS (audit 2026-09-04)
 
 
 class TestGateG6Letter(unittest.TestCase):
@@ -324,7 +324,9 @@ class TestGateG6Letter(unittest.TestCase):
         r1 = [host, attach_r1]
         r2 = [host, attach_r2]
         result = ai.gate_g6(r2, r1, bbox=BBOX, threshold=4.5)
-        self.assertTrue(result["pass"])  # all vacuous → pass
+        # The only junction changed topology between rounds: that is a
+        # failure, not an all-vacuous pass (audit 2026-09-04).
+        self.assertFalse(result["pass"])
         self.assertEqual(result["letter_reason"], "all_vacuous")
         self.assertGreater(result["n_t_junctions_detected"], 0)
         self.assertEqual(result["n_t_junctions_measured"], 0)
