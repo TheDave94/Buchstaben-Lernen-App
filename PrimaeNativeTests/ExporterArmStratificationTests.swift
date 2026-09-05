@@ -484,7 +484,9 @@ import Foundation
         let lines = String(data: ParentDashboardExporter.csvData(
             from: snap, progress: [:], enrolledAt: nil), encoding: .utf8)!
             .components(separatedBy: "\n")
-        let r = try #require(Double(try #require(metrics(lines)["schedulerEffectivenessProxy_threePhase"])))
+        // Two steps, not a nested #require — nesting expands the macro recursively.
+        let raw = try #require(metrics(lines)["schedulerEffectivenessProxy_threePhase"])
+        let r = try #require(Double(raw))
         // freeWrite-only pairs: (0.1, +0.4), (0.5, +0.1) → r = -1 exactly.
         // With the guided rows paired in, the deltas alternate sign and r moves.
         #expect(abs(r - (-1.0)) < 1e-6, "expected r = -1 from the two freeWrite pairs, got \(r)")

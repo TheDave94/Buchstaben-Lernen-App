@@ -225,7 +225,7 @@ fileprivate final class ThirdPassRecordingStore: ParentDashboardStoring {
         deps.studyMode = true
         deps.audioCondition = .spatial
         let vm = TracingViewModel(deps)
-        #expect(vm.studyPreconditionFailure == nil, String(describing: vm.studyPreconditionFailure))
+        #expect(vm.studyPreconditionFailure == nil, "\(String(describing: vm.studyPreconditionFailure))")
     }
 
 }
