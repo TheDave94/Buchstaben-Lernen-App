@@ -86,31 +86,52 @@ final class PlaybackController {
     /// Apply a command from `transition(to:)`. Lifts the audio call out so
     /// lifecycle callers can choose when to issue the audio side-effect.
     /// Whether the last command this controller issued to the engine was
-    /// a play (true) or a stop (false) — the debounce above keys on it.
+    /// a play (true) or a stop (false).
     private var audioIsRunning = false
+    /// A play that the dedup window swallowed while the engine was
+    /// STOPPED. The window exists to coalesce rapid stop/play cycles
+    /// into one `audio.play()`; dropping the play outright left a stroke
+    /// that outlived the window silent with `isPlaying` true (class two,
+    /// 2026-09-05). Deferred to the end of the window instead, and fired
+    /// only if the machine is still active and the engine still silent.
+    private var deferredPlay: Task<Void, Never>?
 
     func apply(_ cmd: PlaybackStateMachine.Command) {
         switch cmd {
         case .play:
             let now = CACurrentMediaTime()
-            // Debounce only while the audio is still running: after a
-            // `.stop` the engine is silent, and swallowing the next play
-            // left the whole stroke mute with `isPlaying` reporting true
-            // (class two, 2026-09-05).
-            if audioIsRunning, now - lastPlayIntentWallTime < playIntentDebounceSeconds {
+            let sinceLast = now - lastPlayIntentWallTime
+            if sinceLast < playIntentDebounceSeconds {
                 onIsPlayingChanged(true)
+                if !audioIsRunning { scheduleDeferredPlay(after: playIntentDebounceSeconds - sinceLast) }
                 return
             }
+            deferredPlay?.cancel(); deferredPlay = nil
             lastPlayIntentWallTime = now
             audio.play()
             audioIsRunning = true
             onIsPlayingChanged(true)
         case .stop:
+            deferredPlay?.cancel(); deferredPlay = nil
             audio.stop()
             audioIsRunning = false
             onIsPlayingChanged(false)
         case .none:
             break
+        }
+    }
+
+    private func scheduleDeferredPlay(after delay: TimeInterval) {
+        deferredPlay?.cancel()
+        let sleeper = sleep
+        deferredPlay = Task { [weak self] in
+            try? await sleeper(.seconds(max(0, delay)))
+            guard !Task.isCancelled, let self,
+                  self.machine.state == .active, !self.audioIsRunning else { return }
+            self.lastPlayIntentWallTime = CACurrentMediaTime()
+            self.audio.play()
+            self.audioIsRunning = true
+            self.onIsPlayingChanged(true)
         }
     }
 
@@ -147,6 +168,7 @@ final class PlaybackController {
     /// Cancel any in-flight debounced transition AND any pending audio
     /// lifecycle work (AVAudioSession deactivation etc.).
     func cancelPending() {
+        deferredPlay?.cancel(); deferredPlay = nil
         pendingTransition?.cancel()
         pendingTransition = nil
         audio.cancelPendingLifecycleWork()

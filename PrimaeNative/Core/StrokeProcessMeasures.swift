@@ -144,17 +144,21 @@ enum StrokeProcessScorer {
     ) -> StrokeProcessMeasures? {
         guard !points.isEmpty, !reference.strokes.isEmpty else { return nil }
 
-        // EVERY traced stroke takes part, one-sample taps included, so
-        // `matchedReferenceOrder` is positional against `strokeCount`; and
-        // every reference stroke takes part, one-checkpoint dots included,
-        // so the indices are into `reference.strokes` as authored (a dot
-        // filtered out used to score identically wherever it landed).
-        // A one-point polyline is a valid Fréchet operand (2026-09-05).
-        let traceStrokes = splitStrokes(points: points, strokeStartIndices: strokeStartIndices)
-        guard !traceStrokes.isEmpty else { return nil }
-
-        let refStrokes = FreeWriteScorer.densifyReferenceStrokesPerStroke(reference)
-        guard !refStrokes.isEmpty else { return nil }
+        // Positional, without matching what cannot be matched (2026-09-05):
+        // every traced stroke has an entry in `matchedReferenceOrder` (a
+        // one-sample tap gets nil at ITS position) and every reference
+        // index is into `reference.strokes` as authored; the assignment
+        // itself runs over the strokes with >= 2 points on both sides. A
+        // trace with no such stroke is not a production and returns nil.
+        // Known limit: a one-checkpoint reference dot (i, j, umlauts) is
+        // never matched, so a dot's placement does not enter the distance.
+        let allTraceStrokes = splitStrokes(points: points, strokeStartIndices: strokeStartIndices)
+        let allRefStrokes = FreeWriteScorer.densifyReferenceStrokesPerStroke(reference)
+        let eligibleTrace = allTraceStrokes.indices.filter { allTraceStrokes[$0].count >= 2 }
+        let eligibleRef = allRefStrokes.indices.filter { allRefStrokes[$0].count >= 2 }
+        guard !eligibleTrace.isEmpty, !eligibleRef.isEmpty else { return nil }
+        let traceStrokes = eligibleTrace.map { allTraceStrokes[$0] }
+        let refStrokes = eligibleRef.map { allRefStrokes[$0] }
 
         let traceCount = traceStrokes.count
         let refCount = refStrokes.count
@@ -192,8 +196,11 @@ enum StrokeProcessScorer {
         var totalDeviation: CGFloat = 0
         var matchedCount = 0
         var reversedCount = 0
+        // Expand back to the ORIGINAL positions on both sides.
+        var matchedAll: [Int?] = Array(repeating: nil, count: allTraceStrokes.count)
         for i in 0..<traceCount {
             guard let j = matched[i] else { continue }
+            matchedAll[eligibleTrace[i]] = eligibleRef[j]
             totalDeviation += cost[i][j]
             matchedCount += 1
             if reversedWins[i][j] { reversedCount += 1 }
@@ -205,8 +212,8 @@ enum StrokeProcessScorer {
 
         return StrokeProcessMeasures(
             spatialDeviation: totalDeviation / CGFloat(matchedCount),
-            strokeCount: traceStrokes.count,
-            matchedReferenceOrder: matched,
+            strokeCount: allTraceStrokes.count,
+            matchedReferenceOrder: matchedAll,
             reversedStrokeCount: reversedCount
         )
     }
