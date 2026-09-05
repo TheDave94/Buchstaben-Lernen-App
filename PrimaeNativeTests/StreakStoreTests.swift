@@ -190,4 +190,18 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
             .filter { $0.hasPrefix(stem) && $0.contains(".undecodable-") }
         #expect(siblings.count == 1, "the corrupt file must be moved aside, not silently replaced: \(siblings)")
     }
+
+    // MARK: - dailyGoalMet (class two, 2026-09-05)
+
+    @Test func dailyGoalMet_isAwardedWhenTheGoalIsReached() {
+        let store = makeStore()
+        let none = store.recordSession(date: date(2025, 3, 1), lettersCompleted: ["A"], accuracy: 0.9,
+                                       dailyGoalReached: false)
+        #expect(!none.contains(.dailyGoalMet), "not yet: \(none)")
+        let hit = store.recordSession(date: date(2025, 3, 1), lettersCompleted: ["B"], accuracy: 0.9,
+                                      dailyGoalReached: true)
+        #expect(hit.contains(.dailyGoalMet), "the goal was reached and the reward never existed before: \(hit)")
+        #expect(store.earnedRewards.contains(.dailyGoalMet))
+    }
+
 }

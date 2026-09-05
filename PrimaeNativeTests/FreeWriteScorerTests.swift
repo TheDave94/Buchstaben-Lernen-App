@@ -278,4 +278,18 @@ struct FreeWriteScorerTests {
         #expect(abs(d - 5.0) < 1e-10,
                 "Single-point discrete Fréchet should equal Euclidean (3-4-5), got \(d)")
     }
+
+    // MARK: - resample corner cases (2026-09-05)
+
+    @Test("resample honours targetCount for a single point, for targetCount 1, and for a zero-length polyline")
+    func resampleCornerCases() {
+        let one = [CGPoint(x: 0.3, y: 0.3)]
+        #expect(FreeWriteScorer.resample(one, targetCount: 8).count == 8, "a single point is replicated to the requested density")
+        let line = (0..<20).map { CGPoint(x: CGFloat($0) / 19, y: 0.5) }
+        #expect(FreeWriteScorer.resample(line, targetCount: 1).count == 1)
+        let still = Array(repeating: CGPoint(x: 0.2, y: 0.2), count: 5)
+        let r = FreeWriteScorer.resample(still, targetCount: 6)
+        #expect(r.count == 6 && r.allSatisfy { $0 == CGPoint(x: 0.2, y: 0.2) })
+    }
+
 }

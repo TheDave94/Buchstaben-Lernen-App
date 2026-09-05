@@ -28,6 +28,13 @@ protocol StreakStoring {
     /// Record a practice session. Returns any newly earned RewardEvents.
     @discardableResult
     func recordSession(date: Date, lettersCompleted: [String], accuracy: Double) -> [RewardEvent]
+    /// Same, with whether the daily goal is reached after this session —
+    /// the store cannot see the goal, so `.dailyGoalMet` was never awarded
+    /// (class two, 2026-09-05). Requirement with a forwarding default so
+    /// doubles that implement the base method still conform.
+    @discardableResult
+    func recordSession(date: Date, lettersCompleted: [String], accuracy: Double,
+                       dailyGoalReached: Bool) -> [RewardEvent]
     func reset()
     /// Await any pending background write. See ProgressStoring.flush().
     func flush() async
@@ -38,6 +45,11 @@ extension StreakStoring {
     /// Default empty set so older conformers that pre-date the badge UI
     /// still compile. Production stores override with the persisted set.
     var earnedRewards: Set<RewardEvent> { [] }
+    @discardableResult
+    func recordSession(date: Date, lettersCompleted: [String], accuracy: Double,
+                       dailyGoalReached: Bool) -> [RewardEvent] {
+        recordSession(date: date, lettersCompleted: lettersCompleted, accuracy: accuracy)
+    }
 }
 
 // MARK: - Persisted model
@@ -94,6 +106,11 @@ final class JSONStreakStore: StreakStoring {
 
     @discardableResult
     func recordSession(date: Date, lettersCompleted: [String], accuracy: Double) -> [RewardEvent] {
+        recordSession(date: date, lettersCompleted: lettersCompleted, accuracy: accuracy, dailyGoalReached: false)
+    }
+
+    func recordSession(date: Date, lettersCompleted: [String], accuracy: Double,
+                       dailyGoalReached: Bool) -> [RewardEvent] {
         guard !lettersCompleted.isEmpty else { return [] }
 
         let dayString = dayKey(for: date)
@@ -130,6 +147,7 @@ final class JSONStreakStore: StreakStoring {
         newRewards += checkReward(.streakWeek, condition: state.currentStreak >= 7)
         newRewards += checkReward(.streakMonth, condition: state.currentStreak >= 30)
         newRewards += checkReward(.centuryClub, condition: state.totalCompletions >= 100)
+        newRewards += checkReward(.dailyGoalMet, condition: dailyGoalReached)
         // allLettersComplete: every supported uppercase letter.
         let allAlphabet = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ".map { String($0) }
             + ["Ä", "Ö", "Ü", "ß"])

@@ -504,7 +504,8 @@ final class PhaseTransitionCoordinator {
             let newRewards = vm.streakStore.recordSession(
                 date: Date(),
                 lettersCompleted: lettersToRecord,
-                accuracy: accuracy
+                accuracy: accuracy,
+                dailyGoalReached: vm.completionsToday >= vm.dailyGoal   // progress was committed above
             )
             // Slot freshly-unlocked badges ahead of the celebration the
             // child is already expecting.

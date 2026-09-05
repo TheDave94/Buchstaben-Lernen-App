@@ -146,6 +146,7 @@ Implications:
   cold, untrained probe, and a demonstration would train the very thing
   the probe depends on not having happened.
 
+  - *Limitation recorded 2026-09-05 (supervisor ruling C2-1).* The silent arm receives no demonstration because it has no mapping to demonstrate; a blank interstitial would be a confound, not a control. Two arms therefore get an added interaction/exposure period the third does not — stated in thesis Ch.6 §Threats to validity beside the acoustic-matching asymmetry (thesis ledger T2). No time-on-task cost: the 2.0 s demonstration is layered inside the observe window (two guide-dot cycles, 5–11 s on A F I L M) that every arm runs identically.
 - **D10 — Stroke-correspondence matching-policy parameters: DEFERRED
   pending pilot data.** D8's exhaustive-search assignment forces
   maximum cardinality (exactly `min(traced, reference)` pairs always

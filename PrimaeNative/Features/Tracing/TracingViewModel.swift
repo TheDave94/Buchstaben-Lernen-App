@@ -1566,6 +1566,10 @@ public final class TracingViewModel {
     func completeObservePhase() {
         guard phaseController.currentPhase == .observe else { return }
         stopGuideAnimation()
+        // The demonstration is layered over the observe window and must
+        // not outlive it (for the study letters two cycles take 5–11 s and
+        // the demonstration 2.0 s, so this is a guard, not a live case).
+        cancelPreTaskDemonstration()
         advanceLearningPhase()
     }
 

@@ -322,7 +322,9 @@ struct FreeWriteScorer {
     /// points so trace density (100s of samples) matches reference
     /// density (40–200 authored, 64 after densify) before Fréchet comparison.
     static func resample(_ points: [CGPoint], targetCount: Int) -> [CGPoint] {
-        guard points.count >= 2, targetCount >= 2 else { return points }
+        guard !points.isEmpty else { return points }
+        guard targetCount >= 2 else { return [points[0]] }
+        guard points.count >= 2 else { return Array(repeating: points[0], count: targetCount) }
 
         // Compute cumulative arc lengths.
         var cumLengths = [CGFloat](repeating: 0, count: points.count)
@@ -331,7 +333,9 @@ struct FreeWriteScorer {
         }
 
         let totalLength = cumLengths.last ?? 0
-        guard totalLength > 0 else { return [points[0]] }
+        // A zero-length polyline still honours `targetCount` (all one point),
+        // so callers get the density they asked for (2026-09-05).
+        guard totalLength > 0 else { return Array(repeating: points[0], count: targetCount) }
 
         var result = [CGPoint]()
         result.reserveCapacity(targetCount)
