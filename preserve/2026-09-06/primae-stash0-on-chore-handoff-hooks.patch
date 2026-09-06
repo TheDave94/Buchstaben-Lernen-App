@@ -1,0 +1,75 @@
+diff --git a/docs/DECISIONS.md b/docs/DECISIONS.md
+index 4055ac1..dc255bf 100644
+--- a/docs/DECISIONS.md
++++ b/docs/DECISIONS.md
+@@ -4,7 +4,17 @@
+ 
+ Companion docs: `docs/ROADMAP.md` holds the *work* (pilot freeze items H1–H6, known issues/residuals); `docs/PROJECT_STATUS.md` holds the *capability census*; `docs/SOUND_PRODUCTION_SPEC.md` holds the sound-asset *production procedure*. This file holds *decisions*. (Consolidated from the former `PILOT_READINESS.md`, 2026-06-20.)
+ 
+-**Study design (locked 2026-05-29).** Three-arm between-subjects pilot: phoneme sonification / engagement-matched arbitrary-sound / silent control. N≈40 kindergarten/Vorschule. Single session 10–20 min. Sound-off post-test. Framed as a pilot throughout.
++**Study design (locked 2026-05-29; third arm redesigned 2026-07-06).** Three-arm between-subjects pilot: phoneme / **spatial 2D sonification** / silent control. N≈40 kindergarten/Vorschule. Single session 10–20 min. Study letter set A F I L M (uppercase), each child trains a counterbalanced 3-of-5 subset. Sound-off post-test (designed, not yet built). Framed as a pilot throughout.
++
++> **Supersession notice (ledger brought into line with code, 2026-09-01; David's sign-off pending).** Commits `9a52c9a` and `b641022` (2026-07-06) implemented a redesign that this ledger had not yet recorded:
++> - **D2 is SUPERSEDED.** The third arm is no longer an engagement-matched abstract sound per letter. It is a spatial sonification: one shared, letter-independent carrier (seamless band-limited 440 Hz triangle, `Resources/Sonification/spatial_carrier.wav`) whose **pitch follows pen Y** (220–880 Hz, linear in cents, top = high) and whose pan follows pen X. No per-letter abstract sounds are needed; the Groß-Vogt abstract-sound design ask is off the critical path (ROADMAP H4 superseded).
++> - **D7 condition (1) NO LONGER HOLDS.** Pitch is driven **only in the spatial arm** (`setSpatialPitch`, per tick); the phoneme arm never drives pitch (regression test "phoneme arm: a touch never drives pitch"). The two sound arms are therefore matched on rate + pan + activation rules + headphone delivery, and **differ in two dimensions: sound identity (letter-specific phoneme vs letter-independent carrier) and pitch drive.** The §2.6 "matched on every property" discipline is replaced by an explicit statement of what is and is not matched (thesis Ch.4 §4.6, Ch.6 §6.5): the phoneme–spatial contrast compares two kinds of auditory content and is exploratory; the primary contrast is phoneme vs silent.
++> - **D6 is MOOT for the pilot set.** A F I L M are all vowels/continuants; the stop-consonant looping question is deferred to the full alphabet.
++> - **D9 (new, 2026-07-06): study letter set = A F I L M uppercase; practice pool = trained 3 of 5 (10 counterbalanced subsets from UUID byte 8); H6 post-test covers all 5, untrained pair = within-child comparison (not an inert baseline — Labat et al. 2015 found gains on untrained letters).**
++> - **D10 (new, 2026-07-06): clean study configuration under `studyMode`** — null speech/prompt/haptics in every arm, no celebration/reward overlays, difficulty pinned, retry gate off, fixed letter order, Druckschrift pinned. Outside `studyMode` behaviour is unchanged.
++> - **Protocol precondition (not code):** `thesisCondition` is NOT pinned by `studyMode`; the researcher override must be set to the full four-phase flow on every study device, because `guidedOnly`/`control` omit freeWrite and yield no Fréchet outcome.
++> - The rationale sections below for D2 and D7 are retained as history and no longer describe the shipped design.
++
+ 
+ **Governance (David, 2026-05-30).**
+ - No in-app consent / minor-assent UX required; KUG ethics does not require committee approval for this pilot. → consent UX is NOT a freeze item.
+@@ -26,7 +36,7 @@ Implications:
+ 
+ ## Locked decisions
+ 
+-- **D1 — Arm structure: audio-only-varies.** Every participant gets the SAME pedagogical flow; the three arms differ ONLY in audio (phoneme / arbitrary-sound / silent). NOT a crossed pedagogical×audio design. Simplifies the arm build to swap-enum + branch-audio.
++- **D1 — Arm structure: audio-only-varies.** Every participant gets the SAME pedagogical flow; the three arms differ ONLY in audio (phoneme / spatial / silent — see supersession notice). NOT a crossed pedagogical×audio design. Simplifies the arm build to swap-enum + branch-audio.
+ - **D5 — `direct` phase: CUT (move to three-phase `observe → guided → freeWrite`).** Decided on a six-paper both-sides evidence read (see "Evidence base for D5"). The pilot will run on the three-phase app — David's standard is methodological soundness, so the studied artifact should match the considered design. Execute as a separate, scoped, tested change. Cut blast-radius: ~12 Swift files + 2 docs + tests; sharpest edge is Codable rawValue backward-compat (preserve `case direct = 1` as deprecated-but-decodable, per the existing `ThesisCondition` precedent). NOT pilot-blocking either way (flow held constant across arms regardless of phase count).
+ 
+ ---
+@@ -46,7 +56,9 @@ Implications:
+ 
+ ---
+ 
+-## D2 — RESOLVED (2026-06-20): arbitrary arm = distinct abstract sound per letter
++## D2 — RESOLVED (2026-06-20), then SUPERSEDED (2026-07-06): arbitrary arm = distinct abstract sound per letter
++
++> Historical. Superseded by the spatial-sonification arm; see the supersession notice at the top.
+ 
+ > **Production detail: see [`docs/SOUND_PRODUCTION_SPEC.md`](SOUND_PRODUCTION_SPEC.md)** — the procedure companion for producing both pilot sound-asset sets (phonemes + abstract sounds) to one standard. This ledger keeps the *decision/status*; the spec keeps the *how*.
+ 
+@@ -76,7 +88,7 @@ Six papers read in full (both sides):
+ 
+ ---
+ 
+-## Evidence base for D7 (pitch RESOLVED)
++## Evidence base for D7 (pitch RESOLVED — but condition (1) superseded; pitch is now spatial-arm only)
+ 
+ **Same-age precedents (FULL-read, already cited in thesis §2.6):**
+ - **Ecalle et al. 2021** (Hum Mov Sci): 5-year-olds, sonification group (trajectory → pitch + brightness) outperformed controls on letter learning. Pitch present in the intervention, no reported harm.
+diff --git a/docs/STROKE_AUDIT.md b/docs/STROKE_AUDIT.md
+index 88a97bf..916c592 100644
+--- a/docs/STROKE_AUDIT.md
++++ b/docs/STROKE_AUDIT.md
+@@ -5,9 +5,15 @@
+ > launched the bake-pipeline rewrite. Most of its recommendations have
+ > shipped:
+ >
+-> - **Phase 1 (Critical letters)** — I, Z, U, M, V, B, E, H, i ship-blockers
+->   all fixed; verified in the calibrator and committed to
+->   `LETTER_OVERRIDES`.
++> - **Phase 1 (Critical letters)** — U, M, V, B, E, H, i ship-blockers
++>   fixed; verified in the calibrator and committed to
++>   `LETTER_OVERRIDES`. **Correction (2026-09-01):** the I "diagonal
++>   slash" and Z "21 % dead zone" findings were **false positives** —
++>   bounding-box-relative readings of a narrow, ~3.6°-slanted stem and of
++>   a top bar that genuinely starts inside the round cap. The shipped I
++>   (x 0.71→0.31 over 40 checkpoints) and Z (first checkpoint x ≈ 0.216)
++>   carry the same geometry today and are correct. Only U's stroke
++>   routing was a real defect.
+ > - **Phase 1.5 (Bake skeletonize)** — `generate_strokes_auto.py` now bakes
+ >   `skimage.skeletonize` centerlines into `strokes.json`; the Swift loader
+ >   prefers baked over runtime-derived (commits 77f1c22, 956bc5c, ce5f2f1,
