@@ -348,7 +348,12 @@ final class TouchDispatcher {
             return
         }
         let speed       = Self.mapVelocityToSpeed(smoothedVelocity)
-        let azimuthBias = vm.pencilPressure != nil ? cos(vm.pencilAzimuth) * 0.2 : 0
+        // Pencil azimuth adds a per-child constant pan offset (grip,
+        // handedness) of up to 10 % canvas width that finger users never
+        // get; under studyMode the pan is the documented x·2−1 and nothing
+        // else, so the mapping does not vary with input device (audit
+        // 2026-09-06). The casual app keeps the flourish.
+        let azimuthBias: CGFloat = (!vm.studyMode && vm.pencilPressure != nil) ? cos(vm.pencilAzimuth) * 0.2 : 0
         // Pan follows absolute x across the whole canvas (not the
         // active cell), so a right-hand cell sounds from the right.
         let hBias = Float(max(-1.0, min(1.0, (canvasNormalized.x * 2.0 - 1.0) + azimuthBias)))
