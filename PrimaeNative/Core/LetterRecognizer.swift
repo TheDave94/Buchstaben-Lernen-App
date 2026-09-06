@@ -352,10 +352,21 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendab
     ) -> RecognitionResult? {
         guard let top = classifications.first else { return nil }
         let rawTopLetter = top.identifier
+        // The history is the EXPECTED letter's form-accuracy history
+        // (`ConfidenceCalibrator.historyBoost`: "a strong history of
+        // writing the expected letter"). Passing it for every candidate
+        // inflated a WRONG prediction's confidence by the same 10 %
+        // (audit 2026-09-06); only the candidate that matches the
+        // expected letter has a history to be boosted by.
+        func history(for candidate: String) -> [CGFloat] {
+            guard let expected = expectedLetter,
+                  LetterMatch.matches(predicted: candidate, expected: expected) else { return [] }
+            return historicalFormScores
+        }
         let calibratedTopConfidence = calibrator.calibrate(
             rawConfidence: CGFloat(top.confidence),
             predictedLetter: rawTopLetter,
-            historicalFormScores: historicalFormScores
+            historicalFormScores: history(for: rawTopLetter)
         )
         let topThree: [RecognitionResult.TopCandidate] = classifications
             .prefix(3)
@@ -363,7 +374,7 @@ nonisolated final class CoreMLLetterRecognizer: LetterRecognizerProtocol, Sendab
                 let conf = calibrator.calibrate(
                     rawConfidence: CGFloat(obs.confidence),
                     predictedLetter: obs.identifier,
-                    historicalFormScores: historicalFormScores
+                    historicalFormScores: history(for: obs.identifier)
                 )
                 return .init(letter: obs.identifier, confidence: conf)
             }

@@ -155,6 +155,29 @@ final class LetterRepository {
         }
     }
 
+    /// Bundle-only load for study sessions: NO cache fallback and NO
+    /// hardcoded sample letter. `loadLetters()` "never returns empty" —
+    /// on a bundle-scan failure it serves whatever the on-disk cache
+    /// holds (a previous build's geometry) or a synthetic "A" — which is
+    /// the right contract for the casual app and the wrong one for a
+    /// study device: the frozen-stimulus claim (D1) rests on the bundle,
+    /// and a session on substituted geometry would stamp ordinary rows.
+    /// The study seam refuses instead (`studyPreconditionFailure`),
+    /// like the missing phonemes and carrier (audit 2026-09-06).
+    func loadBundledLettersOnly() -> Result<[LetterAsset], LetterRepositoryError> {
+        Self.verifyBakeMetadataOnce(resources: resources)
+        let stroked = loadBundledStrokeLettersWithValidation()
+        if !stroked.letters.isEmpty {
+            logValidationIssues(stroked.letters, issues: stroked.issues)
+            return .success(stroked.letters)
+        }
+        let allIssues = stroked.issues.map { "\($0.letter): \($0.message)" }
+        if !allIssues.isEmpty {
+            return .failure(.partialLoad(loaded: 0, issues: allIssues))
+        }
+        return .failure(.noAssetsFound)
+    }
+
     /// Typed-error variant for callers that want to surface failures.
     func loadWithErrors() -> Result<[LetterAsset], LetterRepositoryError> {
         Self.verifyBakeMetadataOnce(resources: resources)

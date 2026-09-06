@@ -66,7 +66,8 @@ fileprivate final class RecordingAudio: AudioControlling {
     private func makeVM(arm: PilotAudioCondition,
                         phonemeToggle: Bool,
                         studyMode: Bool = false,
-                        audio: AudioControlling? = nil) -> TracingViewModel {
+                        audio: AudioControlling? = nil,
+                        thesisCondition: ThesisCondition? = nil) -> TracingViewModel {
         var deps = TracingDependencies.stub
         deps.audioCondition = arm
         deps.enablePhonemeMode = phonemeToggle
@@ -74,6 +75,7 @@ fileprivate final class RecordingAudio: AudioControlling {
         // fires — keeps the test from polluting global state.
         deps.studyMode = studyMode
         if let audio { deps.audio = audio }
+        if let thesisCondition { deps.thesisCondition = thesisCondition }
         return TracingViewModel(deps)
     }
 
@@ -303,8 +305,11 @@ fileprivate final class RecordingAudio: AudioControlling {
     @Test("non-study freeWrite keeps the phonemic anchor (gate is study-mode only)")
     func nonStudyFreeWrite_stillCouples() {
         let audio = RecordingAudio()
-        let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: false, audio: audio)
+        let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: false, audio: audio,
+                        thesisCondition: .threePhase)
         vm.phaseController.resume(at: .freeWrite)
+        #expect(vm.phaseController.currentPhase == .freeWrite,
+                "the fixture's guidedOnly arm made resume(at: .freeWrite) a no-op — this asserted guided, not freeWrite (audit 2026-09-06)")
         driveTouch(vm)
         #expect(audio.setAdaptiveCount > 0)
     }

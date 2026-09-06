@@ -105,6 +105,27 @@ import CoreGraphics
         #expect(r?.isCorrect == true)
     }
 
+    /// Audit 2026-09-06: the history boost belongs to the EXPECTED
+    /// letter's form history; a wrong prediction must not inherit it.
+    @Test("a strong history boosts only the candidate matching the expected letter")
+    func historyBoostScopedToExpectedLetter() {
+        let strong: [CGFloat] = [0.9, 0.9, 0.9, 0.9, 0.9]
+        let classifications = [
+            LetterClassification(identifier: "H", confidence: 0.5),
+            LetterClassification(identifier: "A", confidence: 0.4)
+        ]
+        let r = CoreMLLetterRecognizer.makeResult(
+            from: classifications, expectedLetter: "A",
+            calibrator: ConfidenceCalibrator(), historicalFormScores: strong)
+        let unboosted = ConfidenceCalibrator().calibrate(rawConfidence: 0.5, predictedLetter: "H")
+        let boosted   = ConfidenceCalibrator().calibrate(rawConfidence: 0.4, predictedLetter: "A",
+                                                         historicalFormScores: strong)
+        #expect(r?.confidence == unboosted, "the wrong top prediction keeps its unboosted confidence")
+        #expect(r?.topThree.first(where: { $0.letter == "A" })?.confidence == boosted,
+                "the expected letter's candidate carries the boost")
+        #expect(boosted > 0.4, "fixture must actually trigger the boost")
+    }
+
     @Test("isCorrect compares case-insensitively against expectedLetter")
     func isCorrectCaseInsensitive() async {
         let recognizer = CoreMLLetterRecognizer(

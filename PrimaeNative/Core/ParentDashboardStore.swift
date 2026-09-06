@@ -559,7 +559,9 @@ struct DashboardSnapshot: Codable, Equatable {
         let numerator = zip(xs, ys).reduce(0.0) { $0 + ($1.0 - xMean) * ($1.1 - yMean) }
         let xVar = xs.reduce(0.0) { $0 + ($1 - xMean) * ($1 - xMean) }
         let yVar = ys.reduce(0.0) { $0 + ($1 - yMean) * ($1 - yMean) }
-        guard xVar > 0, yVar > 0 else { return 0 }
+        // Undefined, not zero: the docstring's contract, which the
+        // exporter turns into an empty cell (audit 2026-09-06).
+        guard xVar > 0, yVar > 0 else { return nil }
         return numerator / sqrt(xVar * yVar)
     }
 }

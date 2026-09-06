@@ -34,11 +34,13 @@ import Testing
 
     @Test("Distribution across audio arms is uniform to within the 256 % 3 residual")
     func roughly_uniform_distribution() {
-        // n = 100 000 v4 UUIDs: expected 33 333 per arm (86/256 → 33 594,
-        // 85/256 → 33 203), sd ≈ 149. Band ±750 ≈ 4 sd above the residual.
-        // Tight enough to catch keying on an RFC 4122 fixed byte (64
-        // values % 3 → 34.4 % = 34 375 here), which the old ±200-on-3 000
-        // band (7.7 sd) could not see.
+        // n = 100 000 v4 UUIDs: expected 33 594 (86/256) or 33 203
+        // (85/256) per arm, sd ≈ 149. Band 32 583–34 250: ≥ 4.1 sd on
+        // both sides of the residual (the old upper bound 34 083 sat
+        // 3.3 sd above 33 594 — a ~1e-3 per-run flake, audit 2026-09-06).
+        // Still below keying on an RFC 4122 fixed byte (64 values % 3 →
+        // 34.4 % = 34 375), which the exhaustive byte-count tests above
+        // pin exactly anyway.
         var counts: [PilotAudioCondition: Int] = [:]
         let n = 100_000
         for _ in 0..<n {
@@ -46,8 +48,8 @@ import Testing
         }
         for arm in PilotAudioCondition.allCases {
             let c = counts[arm] ?? 0
-            #expect(c > 32_583 && c < 34_083,
-                    "Arm \(arm) got \(c) assignments; expected ~33 333 ± 750")
+            #expect(c > 32_583 && c < 34_250,
+                    "Arm \(arm) got \(c) assignments; expected 33 203–33 594, band 32 583–34 250")
         }
     }
 

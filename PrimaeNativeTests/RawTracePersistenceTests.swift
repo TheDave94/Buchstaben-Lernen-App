@@ -219,6 +219,32 @@ import CoreGraphics
                 "CSV header must not gain a rawTraceID column")
     }
 
+    /// "Teilnehmer wiederherstellen" with a different id re-stamps
+    /// `enrolledAt` and filters the rows, but the traces were exported
+    /// whole — the previous child's ink under this participantId
+    /// (audit 2026-09-06). Same rule for both now; a same-id restore
+    /// keeps the original instant, so nothing of that child is lost.
+    @Test("JSON export filters raw traces by enrolment like the rows")
+    func jsonFiltersTracesBeforeEnrolment() throws {
+        let enrolledAt = Date(timeIntervalSince1970: 1_770_000_000)
+        let before = UUID(), after = UUID()
+        func trace(_ id: UUID, _ at: Date) -> RawTrace {
+            RawTrace(id: id, letter: "A", recordedAt: at,
+                     points: [CGPoint(x: 1, y: 2)], timestamps: [0], forces: [0],
+                     strokeStartIndices: [], canvasSize: CGSize(width: 10, height: 10))
+        }
+        let traces = [trace(before, enrolledAt.addingTimeInterval(-60)),
+                      trace(after, enrolledAt.addingTimeInterval(60))]
+        let filtered = String(data: try ParentDashboardExporter.jsonData(
+            from: DashboardSnapshot(), progress: [:], rawTraces: traces, enrolledAt: enrolledAt), encoding: .utf8)!
+        #expect(!filtered.contains(before.uuidString), "a pre-enrolment trace is another child's ink")
+        #expect(filtered.contains(after.uuidString))
+        let unenrolled = String(data: try ParentDashboardExporter.jsonData(
+            from: DashboardSnapshot(), progress: [:], rawTraces: traces, enrolledAt: nil), encoding: .utf8)!
+        #expect(unenrolled.contains(before.uuidString) && unenrolled.contains(after.uuidString),
+                "no enrolment, no filter — dev exports stay complete")
+    }
+
     @Test("exportFileURL JSON (the pre-wipe archive shape) embeds traces")
     func preWipeArchiveEmbedsTraces() throws {
         let traceID = UUID()

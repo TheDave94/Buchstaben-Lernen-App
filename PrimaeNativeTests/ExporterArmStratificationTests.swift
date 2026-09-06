@@ -184,8 +184,9 @@ import Foundation
         let m = metrics(csv())
 
         // threePhase: letter A has 3 completed records → 2 pairs.
-        //   pairs = (prio 0.1, Δ +0.4), (prio 0.5, Δ −0.1)
-        //   two points, opposite signs → r = −1 exactly.
+        //   scores 0.2 → 0.6 → 0.7: pairs = (prio 0.1, Δ +0.4), (prio 0.5, Δ +0.1)
+        //   two points, priority up while delta down → r = −1 exactly
+        //   (n = 2 is ±1 by construction; the test checks the sign).
         let proxy = try #require(m["schedulerEffectivenessProxy_threePhase"],
             "threePhase scheduler proxy is missing")
         let r = try #require(Double(proxy), "proxy '\(proxy)' does not parse")
@@ -502,6 +503,15 @@ import Foundation
             from: thin, progress: [:], enrolledAt: nil), encoding: .utf8)!.components(separatedBy: "\n")
         #expect(thinLines.contains("schedulerEffectivenessProxy,"), "undefined proxy must export as an empty cell")
         #expect(thin.schedulerEffectivenessProxyIfDefined == nil)
+        // Zero variance (every pair at the same priority): undefined too,
+        // per the docstring — the store returned 0 here (audit 2026-09-06).
+        var flat = DashboardSnapshot()
+        flat.phaseSessionRecords = [fw(0.2, 0.5, 1), fw(0.6, 0.5, 3), fw(0.7, 0.5, 5)]
+        #expect(flat.schedulerEffectivenessProxyIfDefined == nil,
+                "zero priority variance must be undefined, not 0: \(String(describing: flat.schedulerEffectivenessProxyIfDefined))")
+        let flatLines = String(data: ParentDashboardExporter.csvData(
+            from: flat, progress: [:], enrolledAt: nil), encoding: .utf8)!.components(separatedBy: "\n")
+        #expect(flatLines.contains("schedulerEffectivenessProxy,"), "zero-variance proxy must export as an empty cell")
     }
 
 }

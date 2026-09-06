@@ -30,8 +30,8 @@ import Testing
     @Test("Distribution across arms is uniform to within the 256 % 3 residual")
     func roughly_uniform_distribution() {
         // Same band and reasoning as PilotAudioConditionAssignmentTests:
-        // n = 100 000, expected 33 333 ± 750 (≈ 4 sd above the 86/85/85
-        // residual); catches keying on an RFC 4122 fixed byte.
+        // n = 100 000, expected 33 203–33 594 (86/85/85 residual), band
+        // 32 583–34 250 ≥ 4.1 sd on both sides (2026-09-06).
         var counts: [ThesisCondition: Int] = [:]
         let n = 100_000
         for _ in 0..<n {
@@ -39,8 +39,8 @@ import Testing
         }
         for arm in ThesisCondition.allCases {
             let c = counts[arm] ?? 0
-            #expect(c > 32_583 && c < 34_083,
-                    "Arm \(arm) got \(c) assignments; expected ~33 333 ± 750")
+            #expect(c > 32_583 && c < 34_250,
+                    "Arm \(arm) got \(c) assignments; expected 33 203–33 594, band 32 583–34 250")
         }
     }
 

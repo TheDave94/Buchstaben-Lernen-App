@@ -153,6 +153,7 @@ struct SettingsView: View {
                             set: {
                                 conditionOverride = $0
                                 ParticipantStore.conditionOverride = $0
+                                vm.markAssignmentOverrideChanged()
                             })) {
                         Text("Automatisch").tag(ThesisCondition?.none)
                         ForEach(ThesisCondition.allCases, id: \.self) { arm in
@@ -170,6 +171,7 @@ struct SettingsView: View {
                             set: {
                                 audioConditionOverride = $0
                                 ParticipantStore.audioConditionOverride = $0
+                                vm.markAssignmentOverrideChanged()
                             })) {
                         Text("Automatisch").tag(PilotAudioCondition?.none)
                         ForEach(PilotAudioCondition.allCases, id: \.self) { arm in
@@ -187,6 +189,7 @@ struct SettingsView: View {
                             set: {
                                 trainedSubsetOverride = $0
                                 ParticipantStore.trainedSubsetOverride = $0
+                                vm.markAssignmentOverrideChanged()
                             })) {
                         Text("Automatisch").tag(TrainedLetterSubset?.none)
                         ForEach(TrainedLetterSubset.allSubsets, id: \.self) { subset in

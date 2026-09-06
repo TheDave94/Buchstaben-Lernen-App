@@ -732,6 +732,10 @@ public final class TracingViewModel {
     // MARK: - Private playback / touch state
 
     var letters: [LetterAsset]          = []
+    /// Non-nil when a study session's bundle scan yielded no letters —
+    /// the repository's cache/sample fallback is bypassed under
+    /// `studyMode`, so this is the refusal's reason (see init).
+    private(set) var studyLetterSourceFailure: String?
     var letterIndex                      = 0
     private var variantStrokeCache: LetterStrokes? = nil
     /// Per-script stroke cache; invalidated in `schriftArt.didSet`.
@@ -896,7 +900,22 @@ public final class TracingViewModel {
         // `resolvedStrokes(for:)` reports "bundle geometry". The frozen-
         // stimulus claim (thesis Ch.5) rests on the bundle, not on a
         // cache keyed by a version string nobody bumps (2026-09-04).
-        letters = deps.studyMode ? repo.loadLetters() : repo.loadLettersFast()
+        // And never the cache-or-sample fallback either: `loadLetters()`
+        // "never returns empty", so a study device whose bundle scan
+        // failed would trace a previous build's cached geometry or a
+        // synthetic "A" and stamp ordinary rows. Bundle or refuse
+        // (audit 2026-09-06; the precondition below carries the text).
+        if deps.studyMode {
+            switch repo.loadBundledLettersOnly() {
+            case .success(let bundled):
+                letters = bundled
+            case .failure(let error):
+                letters = []
+                studyLetterSourceFailure = String(describing: error)
+            }
+        } else {
+            letters = repo.loadLettersFast()
+        }
         // Seed the mirror so the rail badge + gallery pick up
         // pre-existing progress on first render.
         allProgress = progressStore.allProgress
@@ -904,7 +923,25 @@ public final class TracingViewModel {
         if let audioError = effectiveAudio.initializationError {
             messages.show(toast: audioError)
         }
-        guard let first = letters.first else { return }
+        // Under studyMode the launch letter is the FIRST TRAINED letter,
+        // not `letters.first`: the repository sorts by name, so every
+        // device used to open on "A" — an UNTRAINED letter for the four
+        // subsets without it (FIL, FIM, FLM, ILM), fully traceable with
+        // scaffolding because `load(letter:)` never consults the
+        // `visibleLetterNames` filter, and with A's observe animation
+        // and sound-arm demonstration armed before any cold probe of A
+        // (audit 2026-09-06). The trained pool is empty only when the
+        // bundle is (refused above) — then nothing loads.
+        let first: LetterAsset?
+        if deps.studyMode {
+            first = visibleLetterNames.first.flatMap { name in
+                letters.first(where: { $0.name == name })
+            }
+        } else {
+            first = letters.first
+        }
+        guard let first else { return }
+        letterIndex = letters.firstIndex(where: { $0.name == first.name }) ?? 0
         // Don't play the phase cue at init — the audio session
         // hasn't settled and would produce ~2 s of crackle.
         load(letter: first, playPhaseCue: false)
@@ -1761,6 +1798,12 @@ public final class TracingViewModel {
         // tapped; until then all three assignment axes silently fell to
         // their defaults (phoneme, AFI, threePhase) — one arm, one subset,
         // no randomisation, stamped on every row (class two, 2026-09-05).
+        // The bundle scan found no letters: without this refusal the
+        // repository would have served the cache or a synthetic "A"
+        // (class two, 2026-09-06). Checked first — it is the stimulus.
+        if let studyLetterSourceFailure {
+            return "Keine Buchstaben aus dem Bundle geladen (\(studyLetterSourceFailure)). Die Sitzung wird nicht gestartet — ein Ersatz aus dem Cache oder ein eingebauter Beispielbuchstabe wäre nicht der eingefrorene Stimulus."
+        }
         if !participantEnrolled {
             return "Kein Teilnehmer eingeschrieben. Im Forschungsbereich „Neuer Teilnehmer“ wählen, damit Arm und Buchstaben zugewiesen werden — sonst laufen alle Kinder unter denselben Voreinstellungen."
         }
@@ -2264,12 +2307,26 @@ public final class TracingViewModel {
 
     func markParticipantRestored() { participantIdentityChanged = true }
 
+    /// A researcher override (pedagogical arm, audio arm, trained
+    /// subset) is read ONCE at init; the running VM keeps its `let`
+    /// arms. Until 2026-09-06 nothing blocked tracing after an override
+    /// was set, so a session could stamp rows under the UUID-derived arm
+    /// after the proctor had chosen a different one — internally
+    /// consistent rows, invisible until export. Same relaunch block as
+    /// a restored identity.
+    private(set) var assignmentOverrideChanged = false
+
+    func markAssignmentOverrideChanged() { assignmentOverrideChanged = true }
+
     /// Why the Schule surface must not start a session right now, or nil.
     /// Folds the study precondition (phoneme recordings) and the
     /// identity-changed relaunch requirement into one child-facing stop.
     var sessionBlockReason: String? {
         if studyMode, participantIdentityChanged {
             return "Teilnehmer gewechselt — die App muss neu gestartet werden, damit Arm und Buchstaben des neuen Kindes gelten."
+        }
+        if studyMode, assignmentOverrideChanged {
+            return "Zuweisung geändert — die App muss neu gestartet werden, damit der gewählte Arm bzw. die gewählten Buchstaben gelten."
         }
         return studyPreconditionFailure
     }

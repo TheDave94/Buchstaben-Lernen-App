@@ -146,20 +146,30 @@ import Foundation
 
     // MARK: - Letter assets
 
-    /// Enumerated through the real provider, not a fixture. The study set
-    /// is the five letters a pilot participant actually traces.
-    @Test("the real bundle carries audio for every study letter")
-    func studyLetterAudioResolves() {
-        let audioExtensions: Set<String> = ["mp3", "wav", "m4a", "aac", "flac", "ogg"]
-        let urls = BundleLetterResourceProvider().allResourceURLs()
-            .filter { audioExtensions.contains($0.pathExtension.lowercased()) }
-
-        let silent = TrainedLetterSubset.studyLetters.filter { letter in
-            !urls.contains { $0.deletingLastPathComponent().lastPathComponent
-                .compare(letter, options: .caseInsensitive) == .orderedSame }
+    /// Enumerated through the real provider, not a fixture. Until
+    /// 2026-09-06 this asserted "some audio file in each study letter's
+    /// folder" — true of the letter-NAME clips, which no sound arm plays
+    /// under studyMode: the phoneme arm needs `<L>_phoneme<n>.mp3`
+    /// (`LetterAsset.phonemeAudioFiles`, refused otherwise) and the
+    /// spatial arm plays the bundled carrier. It stayed green in exactly
+    /// the state where the phoneme arm cannot start. Now the phoneme
+    /// files are asserted (the carrier has its own check in
+    /// AuditThirdPassTests) under a KNOWN
+    /// ISSUE (ROADMAP H5, David records) — when the recordings land the
+    /// known issue stops occurring, this test FAILS, and the
+    /// `withKnownIssue` wrapper is removed so the check becomes a gate.
+    @Test("the real bundle carries a phoneme recording for every study letter (H5)")
+    func studyLetterPhonemesResolve() throws {
+        let repo = LetterRepository(resources: BundleLetterResourceProvider(),
+                                    cache: NullLetterCache())
+        let letters = try repo.loadBundledLettersOnly().get()
+        let missing = TrainedLetterSubset.studyLetters.filter { name in
+            letters.first(where: { $0.name == name })?.phonemeAudioFiles.isEmpty ?? true
         }
-        #expect(silent.isEmpty,
-                "study letters with no bundled audio: \(silent.joined(separator: ", ")) — they trace in silence in every sound arm")
+        withKnownIssue("ROADMAP H5: phoneme recordings A F I L M not yet made — the phoneme arm refuses to start (C3-6/Q2)") {
+            #expect(missing.isEmpty,
+                    "study letters without <L>_phoneme<n>.mp3: \(missing.joined(separator: ", "))")
+        }
     }
 
     /// `_meta.json` records bake-time provenance per weight. Missing, the

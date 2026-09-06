@@ -398,7 +398,16 @@ struct ParentDashboardExporter {
             // archive used to dump every phase row unfiltered and carried
             // no `enrolledAt`, so its consumer could not even reproduce
             // the rule the thesis states the exporter applies (Ch.3).
-            // Raw traces stay complete — they are the archive.
+            // Raw traces follow the SAME rule (2026-09-06): a trace
+            // recorded before this enrolment can link to no exported row
+            // (those rows are filtered), and after "Teilnehmer
+            // wiederherstellen" with a different id — the delayed test on
+            // an iPad whose last child was never wiped — it is that other
+            // child's ink under this participantId. Same-id restores keep
+            // the original `enrolledAt`, so the archive stays complete.
+            let filteredTraces = enrolledAt.map { at in
+                rawTraces.filter { $0.recordedAt >= at }
+            } ?? rawTraces
             let filtered: DashboardSnapshot = {
                 guard let enrolledAt else { return snapshot }
                 var s = snapshot
@@ -416,7 +425,7 @@ struct ParentDashboardExporter {
                 snapshot: filtered,
                 participantId: participantId,
                 progress: progress,
-                rawTraces: rawTraces,
+                rawTraces: filteredTraces,
                 enrolledAt: enrolledAt
             )
             return try encoder.encode(export)
