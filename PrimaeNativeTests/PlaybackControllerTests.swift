@@ -154,7 +154,7 @@ final class Box<T> {
         let first = c.pendingTransition
         #expect(first != nil)
         for _ in 0..<20 { c.request(.idle, immediate: false) }
-        #expect(c.pendingTransition === first as AnyObject?, "the same idle timer must survive repeated idle requests")
+        #expect(c.pendingTransition == first, "the same idle timer must survive repeated idle requests")
         for _ in 0..<200 where gate.count < 1 { await Task.yield() }
         #expect(gate.count == 1, "exactly one idle sleep in flight, got \(gate.count)")
         // Back on-path: the immediate active request cancels the pending idle.
