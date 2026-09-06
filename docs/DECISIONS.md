@@ -99,7 +99,10 @@ Implications:
   scripted demonstration immediately before the tracing task begins for
   each letter — not audio-coupled to the child's own trace. The
   `.phoneme` arm gets a sound-letter exposure: the letter's own
-  phoneme, played once. The `.spatial` arm gets an axis demonstration:
+  phoneme for the 2.0 s window (a sustained recording per
+  SOUND_PRODUCTION_SPEC plays once; a shorter clip loops within the
+  window — `loadAudioFile(autoplay: true)` schedules a loop and the
+  demonstration stops it at 2.0 s; redline 2026-09-06, audit item K). The `.spatial` arm gets an axis demonstration:
   a scripted pitch/pan sweep across the FULL canvas range (independent
   of the specific letter's own stroke shape, so every participant hears
   the same full-range sweep regardless of which letter loads first).
