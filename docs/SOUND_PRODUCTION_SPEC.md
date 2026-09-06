@@ -130,6 +130,14 @@ Every asset, phoneme or abstract, must satisfy all of these:
 
 ### 4.1 The no-schwa Anlaut articulation rule
 
+> **Playback-side normalisation (ruling AE-2, 2026-09-06).** The engine
+> measures each file's RMS once at load and plays it at the gain that
+> brings it to the bundled carrier's RMS (0.1463 full-scale, −16.7 dBFS;
+> `AudioEngine+Loudness.swift`), clamped to ±18 dB and logged when the
+> clamp bites. Per-letter loudness therefore cannot vary with the
+> recording's level — but produce the takes at the loudness target
+> anyway: a file that needs the clamp is a production defect.
+
 Record the **isolated phone**, sustained, with **no trailing schwa and no
 letter name**:
 

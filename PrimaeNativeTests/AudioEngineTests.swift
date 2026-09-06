@@ -109,6 +109,15 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertFalse(engine.debugShouldResumePlayback)
     }
 
+    /// AE-2: the loaded file's gain reaches the engine (the carrier is the
+    /// target, so unity); a missing file leaves the previous gain alone.
+    @MainActor func testLoadAudioFile_setsLoudnessGain() async throws {
+        let engine = try XCTUnwrap(self.engine, "AudioEngine must be initialized")
+        engine.loadAudioFile(named: SpatialSonification.carrierToneFile, autoplay: false)
+        XCTAssertEqual(engine.loudnessGain, 1.0, accuracy: 0.02,
+                       "the carrier defines the loudness target and must play at unity")
+    }
+
     @MainActor func testLoadAudioFile_missingFile_autoplayTrue_doesNotCrash() async throws {
         let engine = try XCTUnwrap(self.engine, "AudioEngine must be initialized")
         // autoplay=true with missing file must not crash or corrupt state
@@ -387,6 +396,73 @@ final class AudioEngineTests: XCTestCase {
         postInterruption(type: .began)
         postRouteChange(reason: .oldDeviceUnavailable)
         // Reaching here = no EXC_BAD_ACCESS from dangling observer
+    }
+
+    // MARK: - AE-1: rate must not move pitch (driven offline through the same unit type)
+
+    /// Ruling AE-1 (2026-09-06): the child's stroke velocity drives the
+    /// playback rate; the spatial arm's pitch encodes vertical position.
+    /// The engine drives BOTH through one `AVAudioUnitTimePitch`
+    /// (pitch-preserving time-stretch + an independent cents shift). This
+    /// test DRIVES that unit offline: a 440 Hz triangle rendered at rate
+    /// 0.5, 1.0 and 2.0 must stay at 440 Hz, and ±1200 cents must give
+    /// 880 / 220 Hz — while the same graph with an `AVAudioUnitVarispeed`
+    /// (what "playback-rate pitching" would be) is driven to the failure:
+    /// rate 2.0 → 880 Hz. Hardware suite: the simulator skips the engine.
+    @MainActor func testTimePitchRate_doesNotMovePitch_varispeedDoes() throws {
+        func dominantHz(_ node: AVAudioUnit, configure: (AVAudioUnit) -> Void) throws -> Double {
+            let engine = AVAudioEngine()
+            let player = AVAudioPlayerNode()
+            let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+            engine.attach(player); engine.attach(node)
+            engine.connect(player, to: node, format: format)
+            engine.connect(node, to: engine.mainMixerNode, format: format)
+            configure(node)
+            try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
+            // 2 s of 440 Hz triangle, looped like the carrier.
+            let frames = AVAudioFrameCount(88_200)
+            let src = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+            src.frameLength = frames
+            let p = src.floatChannelData![0]
+            for i in 0..<Int(frames) {
+                let phase = (Double(i) * 440.0 / 44_100).truncatingRemainder(dividingBy: 1)
+                p[i] = Float(4 * abs(phase - 0.5) - 1) * 0.5
+            }
+            try engine.start()
+            player.scheduleBuffer(src, at: nil, options: .loops)
+            player.play()
+            let out = AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat,
+                                       frameCapacity: engine.manualRenderingMaximumFrameCount)!
+            var samples: [Float] = []
+            // Skip the unit's warm-up, then keep 1.5 s.
+            var rendered = 0
+            while rendered < 44_100 * 3 {
+                let status = try engine.renderOffline(4096, to: out)
+                guard status == .success else { break }
+                let q = out.floatChannelData![0]
+                if rendered >= 44_100 { samples.append(contentsOf: UnsafeBufferPointer(start: q, count: Int(out.frameLength))) }
+                rendered += Int(out.frameLength)
+            }
+            engine.stop()
+            XCTAssertGreaterThan(samples.count, 44_100, "offline render produced too little audio")
+            // Fundamental by positive-going zero crossings.
+            var crossings = 0
+            for i in 1..<samples.count where samples[i - 1] < 0 && samples[i] >= 0 { crossings += 1 }
+            return Double(crossings) / (Double(samples.count) / 44_100)
+        }
+        // Time-pitch: rate does not move pitch.
+        for rate: Float in [0.5, 1.0, 2.0] {
+            let hz = try dominantHz(AVAudioUnitTimePitch()) { ($0 as! AVAudioUnitTimePitch).rate = rate }
+            XCTAssertEqual(hz, 440, accuracy: 15, "AVAudioUnitTimePitch at rate \(rate) moved the pitch to \(hz) Hz")
+        }
+        // Time-pitch: cents move pitch, independently of rate.
+        let up = try dominantHz(AVAudioUnitTimePitch()) { let t = $0 as! AVAudioUnitTimePitch; t.rate = 2.0; t.pitch = 1200 }
+        XCTAssertEqual(up, 880, accuracy: 30, "+1200 cents at rate 2.0 should be 880 Hz, got \(up)")
+        let down = try dominantHz(AVAudioUnitTimePitch()) { let t = $0 as! AVAudioUnitTimePitch; t.rate = 0.5; t.pitch = -1200 }
+        XCTAssertEqual(down, 220, accuracy: 15, "−1200 cents at rate 0.5 should be 220 Hz, got \(down)")
+        // The failure the ruling describes, driven: varispeed at rate 2.0 doubles the pitch.
+        let vari = try dominantHz(AVAudioUnitVarispeed()) { ($0 as! AVAudioUnitVarispeed).rate = 2.0 }
+        XCTAssertEqual(vari, 880, accuracy: 30, "varispeed at rate 2.0 is the confound: expected 880 Hz, got \(vari)")
     }
 
     // MARK: - Helpers

@@ -67,6 +67,11 @@ public final class AudioEngine: AudioControlling, CustomStringConvertible {
     /// full volume instead of resuming mid-ramp.
     private var fadeOutTask: Task<Void, Never>?
 
+    /// Per-file loudness gain for `currentFile` (ruling AE-2, 2026-09-06;
+    /// computed by AudioEngine+Loudness at load). "Full volume" for the
+    /// player is THIS value, not 1.0, so every file plays at one RMS.
+    private(set) var loudnessGain: Float = 1.0
+
     // MARK: - Debug accessors
 
     #if DEBUG
@@ -161,6 +166,8 @@ public final class AudioEngine: AudioControlling, CustomStringConvertible {
         do {
             player.stop()
             currentFile = try AVAudioFile(forReading: url)
+            loudnessGain = Self.loudnessGain(forFileAt: url)
+            player.volume = loudnessGain
             prepareCurrentTrack()
             guard engine.isRunning else { startIfNeeded(); return }
             shouldResumePlayback = autoplay
@@ -188,7 +195,7 @@ public final class AudioEngine: AudioControlling, CustomStringConvertible {
         // volume snapshot mid-ramp.
         fadeOutTask?.cancel()
         fadeOutTask = nil
-        player.volume = 1.0
+        player.volume = loudnessGain
         shouldResumePlayback           = true
         interruptionResumeGateRequired = false
         interruptionShouldResume       = true
