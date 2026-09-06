@@ -55,12 +55,13 @@ fileprivate final class RecordingAudio: AudioControlling {
 
     @Test func fastTouch_triggersPlay() async {
         simulateFastTouch(t0: 1000)
-        // Await the controller's exposed pendingTransition task so the
-        // assertion fires deterministically when the debounce resolves,
-        // independent of CI runner pressure.
-        await vm.awaitPlaybackDebounce()
+        // An active sample plays synchronously. The pending transition is
+        // the stall timeout (AE-2b, 2026-09-06): awaiting it is "the pen
+        // stopped", after which the sound is off by design.
         #expect(audio.hasEvent(.play), "Fast touch must trigger audio.play()")
-        #expect(vm.isPlaying)
+        #expect(vm.isPlaying, "playing right after the fast touch")
+        await vm.awaitPlaybackDebounce()
+        #expect(!vm.isPlaying, "a pen that stops falls silent (stall timeout)")
     }
 
     // MARK: - endTouch stops audio

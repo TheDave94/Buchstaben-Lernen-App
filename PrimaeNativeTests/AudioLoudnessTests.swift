@@ -62,19 +62,22 @@ struct AudioLoudnessTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("envelope-\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: url) }
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        let frames = 44_100
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
-        buffer.frameLength = AVAudioFrameCount(frames)
-        let p = buffer.floatChannelData![0]
         let peak: Float = 0.5
-        for i in 0..<frames {
-            let t = Float(i) / Float(frames)
-            let env: Float = t < 0.3 ? t / 0.3 : (t > 0.7 ? (1 - t) / 0.3 : 1)
-            p[i] = peak * env * sin(2 * .pi * 440 * Float(i) / 44_100)
-        }
-        try file.write(from: buffer)
+        // Scoped so the writer is released (header finalised) before the read.
+        try {
+            let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            let frames = 44_100
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
+            buffer.frameLength = AVAudioFrameCount(frames)
+            let p = buffer.floatChannelData![0]
+            for i in 0..<frames {
+                let t = Float(i) / Float(frames)
+                let env: Float = t < 0.3 ? t / 0.3 : (t > 0.7 ? (1 - t) / 0.3 : 1)
+                p[i] = peak * env * sin(2 * .pi * 440 * Float(i) / 44_100)
+            }
+            try file.write(from: buffer)
+        }()
         let measured = try #require(AudioEngine.fileRMS(at: url))
         let steady: Float = peak / Float(2).squareRoot()            // 0.354
         // Whole-file RMS of this envelope: mean square = peak²/2 · (0.4 + 2·0.3/3) = peak²/2 · 0.6

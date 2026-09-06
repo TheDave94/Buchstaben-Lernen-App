@@ -106,9 +106,13 @@ private func slowDrag(vm: TracingViewModel,
     @Test func fastVelocity_triggersPlayAfterDebounce() async {
         let playBefore = audio.playCount
         fastDrag(vm: vm, audio: audio)
-        await drainAsyncWork()
+        // An active sample plays synchronously; the pending transition
+        // is now the stall timeout (AE-2b, 2026-09-06) — draining it is
+        // "the pen stopped", after which the sound is OFF by design.
         #expect(audio.playCount > playBefore)
-        #expect(vm.isPlaying)
+        #expect(vm.isPlaying, "playing right after the fast drag")
+        await drainAsyncWork()
+        #expect(!vm.isPlaying, "a pen that stops falls silent (stall timeout)")
     }
     @Test func endTouch_stopsPlayback() async {
         fastDrag(vm: vm, audio: audio)
