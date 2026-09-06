@@ -114,6 +114,24 @@ public final class TracingViewModel {
             // cell's frame to map strokes into cell-local space.
             grid.layout(in: canvasSize, schriftArt: schriftArt)
             reloadStrokeCheckpoints(for: letters[letterIndex])
+            // The VM is built before any view exists, so the launch
+            // letter's observe animation was armed against the 1024×1024
+            // placeholder: `rawGlyphStrokes` bakes the cell's glyph rect
+            // into the payload, and the guide dot then ran a horizontally
+            // stretched path (W/H of the real canvas, ~1.5×) over the
+            // real ghost — the child's FIRST demonstration of the session
+            // (audit 2026-09-06). Re-arm with the laid-out geometry; the
+            // cycle count and `onCycleComplete` are untouched, so the
+            // observe window is not extended.
+            if animation.armedStrokes != nil,
+               let fresh = rawGlyphStrokes, !fresh.strokes.isEmpty,
+               fresh != animation.armedStrokes {
+                switch phaseController.currentPhase {
+                case .observe: animation.startAfterDelay(0.3, strokes: fresh)
+                case .guided:  animation.start(strokes: fresh)
+                case .direct, .freeWrite: break
+                }
+            }
         }
     }
 
@@ -889,6 +907,7 @@ public final class TracingViewModel {
         let ptc = PhaseTransitionCoordinator()
         self.phaseTransitions = ptc
         pb.onIsPlayingChanged = { [weak self] in self?.isPlaying = $0 }
+        pb.reloadBeforePlay   = { [weak self] in self?.reloadActiveAudioFile() }
         td.vm = self
         ptc.vm = self
         // Study devices always parse the bundle. `loadLettersFast()`
@@ -943,8 +962,9 @@ public final class TracingViewModel {
         guard let first else { return }
         letterIndex = letters.firstIndex(where: { $0.name == first.name }) ?? 0
         // Don't play the phase cue at init — the audio session
-        // hasn't settled and would produce ~2 s of crackle.
-        load(letter: first, playPhaseCue: false)
+        // hasn't settled and would produce ~2 s of crackle. A study
+        // launch is PARKED (see `launchParked`).
+        load(letter: first, playPhaseCue: false, parked: deps.studyMode)
     }
 
     // MARK: - Toggles
@@ -1007,6 +1027,20 @@ public final class TracingViewModel {
         guard let asset = letters.first(where: { $0.name == activeLetter }),
               let first = activeAudioFiles(for: asset).first else { return }
         audio.loadAudioFile(named: first, autoplay: true)
+    }
+
+    /// Load the active cell's arm file WITHOUT autoplay. Called at every
+    /// touch-down and — since 2026-09-06 — before every `play()`: the
+    /// engine's `stop()` discards its file (`finishStop`: `currentFile =
+    /// nil`) and `play()` is a no-op without one, so after the idle
+    /// transition fired mid-stroke (a ≥ 0.12 s pause) the rest of that
+    /// stroke was silent in both sound arms while `isPlaying` read true.
+    /// Silent arm: no files, nothing loads.
+    func reloadActiveAudioFile() {
+        guard letters.indices.contains(letterIndex) else { return }
+        let files = activeAudioFiles(for: letters[letterIndex])
+        guard files.indices.contains(audioIndex) else { return }
+        audio.loadAudioFile(named: files[audioIndex], autoplay: false)
     }
 
     func replayAudio() {
@@ -1416,7 +1450,7 @@ public final class TracingViewModel {
         audio.resumeAfterLifecycle()
         // Restart the active-time live slice for this foreground
         // window; the pre-background slice is in the accumulator.
-        if letterLoadTime == nil, !didCompleteCurrentLetter {
+        if letterLoadTime == nil, !didCompleteCurrentLetter, !launchParked {
             letterLoadTime = CACurrentMediaTime()
         }
         if playback.resumeIntent {
@@ -1999,7 +2033,27 @@ public final class TracingViewModel {
     /// main screen. Subsequent loads (user picks a letter, the
     /// scheduler advances after a celebration) all default to
     /// `playPhaseCue: true` because by then the app is settled.
-    private func load(letter: LetterAsset, playPhaseCue: Bool = true) {
+    /// Study launch state: the launch letter is loaded but NOTHING is
+    /// armed — no observe animation, no auto-advance, no sound-arm
+    /// demonstration, no active-time clock — until `startParkedLetter()`
+    /// (the observe pill tap under studyMode). Before 2026-09-06 the
+    /// launch letter ran a full unattended observe phase at app start:
+    /// its demonstration played into whatever the headphones were
+    /// pointed at, two cycles auto-advanced it into `direct`, and the
+    /// proctor's first probe load then wrote a `completed:false` row for
+    /// a letter nobody touched — all before the pretest.
+    private(set) var launchParked = false
+
+    /// Start the parked launch letter for real (full `load`, which arms
+    /// everything the observe phase needs). No-op unless parked.
+    func startParkedLetter() {
+        guard launchParked, letters.indices.contains(letterIndex) else { return }
+        launchParked = false
+        load(letter: letters[letterIndex])
+    }
+
+    private func load(letter: LetterAsset, playPhaseCue: Bool = true, parked: Bool = false) {
+        launchParked = parked
         // Study mode: the OUTGOING letter's trial must not vanish — a
         // finished-but-unscored freeWrite is scored and recorded, a
         // letter left mid-phase gets a `completed: false` row. Runs
@@ -2095,6 +2149,11 @@ public final class TracingViewModel {
                 if phaseController.currentPhase == .direct {
                     phaseController.advance(score: 1.0)  // skip direct (no dots to tap)
                 }
+            } else if parked {
+                // Parked study launch: the ghost is on screen, nothing
+                // runs, no active time accrues. `startParkedLetter()`
+                // re-runs this load un-parked.
+                letterLoadTime = nil
             } else {
                 armObserveAutoAdvance()
                 animation.startAfterDelay(0.3, strokes: observeStrokes)

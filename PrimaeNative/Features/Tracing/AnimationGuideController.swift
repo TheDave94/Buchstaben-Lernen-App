@@ -21,6 +21,11 @@ final class AnimationGuideController {
     var onCycleComplete: (@MainActor () -> Void)? = nil
 
     private var task: Task<Void, Never>?
+    /// The strokes the running or pending animation was armed with —
+    /// nil when idle. Read by `TracingViewModel.canvasSize.didSet` to
+    /// re-arm an observe demonstration that was armed before the canvas
+    /// had laid out (audit 2026-09-06), and by tests.
+    private(set) var armedStrokes: LetterStrokes? = nil
     /// Deferred-start task for `startAfterDelay(_:strokes:)`. Tracked
     /// separately so `stop()` can cancel either phase cleanly.
     private var startTask: Task<Void, Never>?
@@ -36,6 +41,7 @@ final class AnimationGuideController {
         stop()
         let guide = LetterAnimationGuide.build(from: strokes)
         guard !guide.steps.isEmpty else { return }
+        armedStrokes = strokes
 
         task = Task { [weak self, sleeper] in
             // Pre-attentive start cue: park the dot at the first step
@@ -92,6 +98,7 @@ final class AnimationGuideController {
     /// ahead of the letter ghost fade-in on a fresh letter load.
     func startAfterDelay(_ seconds: TimeInterval, strokes: LetterStrokes) {
         startTask?.cancel()
+        armedStrokes = strokes
         startTask = Task { [weak self, sleeper] in
             try? await sleeper(.seconds(seconds))
             guard !Task.isCancelled, let self else { return }
@@ -106,5 +113,6 @@ final class AnimationGuideController {
         task?.cancel()
         task = nil
         guidePoint = nil
+        armedStrokes = nil
     }
 }

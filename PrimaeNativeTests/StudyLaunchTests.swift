@@ -68,6 +68,21 @@ private final class StaleCache: LetterCacheStoring {
     func clear() {}
 }
 
+@MainActor
+private final class SpyAudio: AudioControlling {
+    var initializationError: String? { nil }
+    private(set) var loadedFiles: [String] = []
+    private(set) var autoplayFlags: [Bool] = []
+    func loadAudioFile(named: String, autoplay: Bool) { loadedFiles.append(named); autoplayFlags.append(autoplay) }
+    func setAdaptivePlayback(speed: Float, horizontalBias: Float) {}
+    func play() {}
+    func stop() {}
+    func restart() {}
+    func suspendForLifecycle() {}
+    func resumeAfterLifecycle() {}
+    func cancelPendingLifecycleWork() {}
+}
+
 private func staleLetter(_ id: String) -> LetterAsset {
     LetterAsset(id: id, name: id, audioFiles: [],
                 strokes: LetterStrokes(letter: id, checkpointRadius: 0.05,
@@ -100,6 +115,74 @@ struct StudyLaunchTests {
         #expect(vm.letters.indices.contains(vm.letterIndex)
                 && vm.letters[vm.letterIndex].name == vm.currentLetterName,
                 "letterIndex must point at the loaded letter, or the arrows navigate from the wrong place")
+    }
+
+    /// A study launch is PARKED: the letter is loaded, nothing runs. The
+    /// unparked launch used to run a full unattended observe phase at
+    /// app start — demonstration into the headphones, two cycles
+    /// auto-advancing into `direct`, and a `completed:false` row on the
+    /// proctor's first probe load — all before the pretest.
+    @Test("a study launch parks the letter: nothing armed until the observe pill is tapped")
+    func studyLaunchIsParked() async throws {
+        var deps = TracingDependencies.stub
+        deps.studyMode = true
+        deps.audioCondition = .phoneme      // the stub letter carries A_phoneme1.mp3
+        let audio = SpyAudio()
+        deps.audio = audio
+        let vm = TracingViewModel(deps)
+        #expect(vm.launchParked)
+        #expect(vm.learningPhase == .observe)
+        #expect(vm.currentLetterName == "A")
+        #expect(vm.animation.armedStrokes == nil, "no observe animation before the start")
+        #expect(vm.debugLetterLoadTime == nil, "no active time accrues while parked")
+        // The demonstration is a Task armed at load; give it turns to fire if it were armed.
+        for _ in 0..<50 { await Task.yield() }
+        #expect(!audio.autoplayFlags.contains(true), "no demonstration before the start: \(audio.loadedFiles)")
+        vm.appDidBecomeActive()
+        #expect(vm.debugLetterLoadTime == nil, "a foreground return does not start the clock of a parked letter")
+
+        vm.canvasSize = CGSize(width: 1200, height: 800)
+        vm.startParkedLetter()
+        #expect(!vm.launchParked)
+        #expect(vm.animation.armedStrokes != nil, "the start arms the observe animation")
+        #expect(vm.animation.armedStrokes == vm.rawGlyphStrokes, "armed against the laid-out canvas")
+        #expect(vm.debugLetterLoadTime != nil)
+        vm.startParkedLetter()   // idempotent once running
+        #expect(vm.learningPhase == .observe)
+    }
+
+    @Test("navigating away un-parks: a real load never stays parked")
+    func navigationUnparks() {
+        var deps = TracingDependencies.stub
+        deps.studyMode = true
+        deps.audioCondition = .silent
+        let vm = TracingViewModel(deps)
+        #expect(vm.launchParked)
+        vm.nextLetter()
+        #expect(!vm.launchParked)
+        #expect(vm.animation.armedStrokes != nil)
+    }
+
+    /// Outside a study session the launch letter is armed at init, before
+    /// any view exists — against the 1024×1024 placeholder. After the
+    /// canvas lays out the armed payload must be the laid-out geometry.
+    @Test("an observe animation armed before layout is re-armed with the laid-out canvas")
+    func launchAnimationReArmsOnLayout() {
+        var deps = TracingDependencies.stub
+        deps.studyMode = false
+        deps.thesisCondition = .threePhase   // the stub's guidedOnly would start in guided
+        let vm = TracingViewModel(deps)
+        #expect(vm.learningPhase == .observe)
+        let armedAtInit = vm.animation.armedStrokes
+        #expect(armedAtInit != nil, "the observe demonstration is armed at init outside a study")
+        vm.canvasSize = CGSize(width: 1200, height: 800)
+        let laidOut = vm.rawGlyphStrokes
+        #expect(vm.animation.armedStrokes == laidOut, "armed payload must equal the post-layout geometry")
+        if laidOut != armedAtInit {
+            #expect(vm.animation.armedStrokes != armedAtInit)
+        }
+        vm.animation.stop()
+        #expect(vm.animation.armedStrokes == nil)
     }
 
     @Test("outside a study session the launch letter stays letters.first")

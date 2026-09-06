@@ -454,11 +454,15 @@ struct SchuleWorldView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
-        // Under studyMode the tap is inert: every child watches the same
-        // two animation cycles (and the arm's demonstration over them),
-        // so model exposure does not vary with a child's impatience
-        // (audit 3.14a, 2026-09-04). The nav arrows still move on.
-        .onTapGesture { if !vm.studyMode { vm.completeObservePhase() } }
+        // Under studyMode the tap never SKIPS: every child watches the
+        // same two animation cycles (and the arm's demonstration over
+        // them), so model exposure does not vary with a child's
+        // impatience (audit 3.14a, 2026-09-04). It does START the parked
+        // launch letter (`launchParked`, 2026-09-06) — a no-op once the
+        // letter runs. The nav arrows still move on.
+        .onTapGesture {
+            if vm.studyMode { vm.startParkedLetter() } else { vm.completeObservePhase() }
+        }
         .accessibilityLabel("Beobachtungsphase")
         .accessibilityHint("Tippe, um zur nächsten Phase zu wechseln")
         .accessibilityAddTraits(.isButton)

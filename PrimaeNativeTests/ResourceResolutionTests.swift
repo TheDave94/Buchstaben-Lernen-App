@@ -39,6 +39,7 @@
 
 import Testing
 import Foundation
+import CryptoKit
 @testable import PrimaeNative
 
 @Suite struct ResourceResolutionTests {
@@ -180,6 +181,34 @@ import Foundation
             !Self.resolvesInPackageBundle("Resources/Letters/\($0)/_meta.json")
         }
         #expect(missing.isEmpty, "weights missing _meta.json: \(missing.joined(separator: ", "))")
+    }
+
+    /// `LetterRepository.verifyBakeMetadataOnce` recomputes the bundled
+    /// font's SHA-256 against `_meta.json` and LOGS a mismatch ("never
+    /// fatal"). Nothing asserted it (audit 2026-09-06): a font swapped
+    /// without a re-bake leaves every strokes.json golden green while the
+    /// rendered ghost and the glyph-bbox → cell mapping the pinned
+    /// checkpoints are projected through no longer match. Assert it here
+    /// so a swap fails CI the way a strokes.json drift does.
+    @Test("the bundled font matches the bake provenance hash of each weight")
+    func bundledFontMatchesBakeMeta() throws {
+        struct Meta: Decodable { let fontPath: String; let fontSha256: String }
+        let bundle = PrimaeBundle.resources
+        let roots = [bundle.bundleURL, bundle.resourceURL].compactMap { $0 }
+        func url(_ rel: String) -> URL? {
+            roots.map { $0.appendingPathComponent(rel) }
+                 .first { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        for weight in ["Regular", "Light"] {
+            let metaURL = try #require(url("Resources/Letters/\(weight)/_meta.json"))
+            let meta = try JSONDecoder().decode(Meta.self, from: Data(contentsOf: metaURL))
+            let fontFile = (meta.fontPath as NSString).lastPathComponent
+            let fontURL = try #require(url("Resources/Fonts/\(fontFile)"), "bundled font \(fontFile) for \(weight) missing")
+            let digest = SHA256.hash(data: try Data(contentsOf: fontURL))
+                .map { String(format: "%02x", $0) }.joined()
+            #expect(digest == meta.fontSha256,
+                    "\(weight): bundled \(fontFile) sha256 \(digest) ≠ _meta.json \(meta.fontSha256) — the strokes were baked from a different font; re-run scripts/generate_strokes_auto.py --weight \(weight.lowercased())")
+        }
     }
 
     // MARK: - The resolver itself

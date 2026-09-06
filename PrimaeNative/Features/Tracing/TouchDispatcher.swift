@@ -102,13 +102,9 @@ final class TouchDispatcher {
         // Guidance Hypothesis); gate haptics + ticks on intensity.
         if vm.feedbackIntensity > 0 { vm.haptics.fire(.strokeBegan) }
         // endTouch's stop() clears currentFile; reload before the next
-        // play() would silently fail.
-        if vm.letters.indices.contains(vm.letterIndex) {
-            let files = vm.activeAudioFiles(for: vm.letters[vm.letterIndex])
-            if files.indices.contains(vm.audioIndex) {
-                vm.audio.loadAudioFile(named: files[vm.audioIndex], autoplay: false)
-            }
-        }
+        // play() would silently fail. (PlaybackController reloads again
+        // before each play, for the same reason mid-stroke.)
+        vm.reloadActiveAudioFile()
     }
 
     func updateTouch(at p: CGPoint, t: CFTimeInterval, canvasSize: CGSize) {

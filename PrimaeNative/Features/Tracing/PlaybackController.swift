@@ -23,6 +23,14 @@ final class PlaybackController {
     /// post-init so the VM can wire `[weak self]` after `self.playback`
     /// is assigned (two-phase init seam).
     var onIsPlayingChanged: (Bool) -> Void
+    /// Runs immediately before every `audio.play()`. The VM wires the
+    /// arm-file reload here: `AudioEngine.stop()` discards its file and
+    /// `play()` is a no-op without one, so a play after the idle
+    /// transition (a mid-stroke pause) was silent until the next
+    /// touch-down (audit 2026-09-06). Load then play in one synchronous
+    /// block — `play()` cancels an in-flight fade-out, so the fade cannot
+    /// discard the file just loaded.
+    var reloadBeforePlay: (@MainActor () -> Void)?
 
     // MARK: - Tunable timings (live-adjustable from the debug audio panel)
 
@@ -38,6 +46,15 @@ final class PlaybackController {
     /// In-flight debounced transition. Read-only so tests can await it
     /// instead of sleeping past the debounce.
     private(set) var pendingTransition: Task<Void, Never>?
+    /// Target of `pendingTransition`. A repeated debounced request for
+    /// the SAME target keeps the running timer instead of restarting it:
+    /// `updateAdaptivePlayback` issues `request(.idle, immediate: false)`
+    /// on every move sample (8–16 ms apart), so a timer restarted per
+    /// sample could only ever fire after the finger STOPPED moving —
+    /// continuous off-path movement never went idle and the documented
+    /// proximity gate (`isNearStroke`, APP_DOCUMENTATION §7.3) was
+    /// activation-only (audit 2026-09-06).
+    private var pendingTarget: PlaybackStateMachine.State?
     private var lastPlayIntentWallTime: CFTimeInterval = 0
 
     // MARK: - Sleep injection
@@ -108,6 +125,7 @@ final class PlaybackController {
             }
             deferredPlay?.cancel(); deferredPlay = nil
             lastPlayIntentWallTime = now
+            reloadBeforePlay?()
             audio.play()
             audioIsRunning = true
             onIsPlayingChanged(true)
@@ -129,6 +147,7 @@ final class PlaybackController {
             guard !Task.isCancelled, let self,
                   self.machine.state == .active, !self.audioIsRunning else { return }
             self.lastPlayIntentWallTime = CACurrentMediaTime()
+            self.reloadBeforePlay?()
             self.audio.play()
             self.audioIsRunning = true
             self.onIsPlayingChanged(true)
@@ -139,8 +158,10 @@ final class PlaybackController {
     /// corresponding audio command fires synchronously before return. Without
     /// immediate, the transition is debounced by the active/idle timing.
     func request(_ target: PlaybackStateMachine.State, immediate: Bool) {
+        if !immediate, pendingTransition != nil, pendingTarget == target { return }
         pendingTransition?.cancel()
         pendingTransition = nil
+        pendingTarget = nil
 
         let wouldChange: Bool
         if target == .active && (!machine.appIsForeground || !machine.resumeIntent) {
@@ -158,9 +179,12 @@ final class PlaybackController {
 
         let delay = target == .active ? activeDebounceSeconds : idleDebounceSeconds
         let sleeper = sleep
+        pendingTarget = target
         pendingTransition = Task { [weak self] in
             try? await sleeper(.seconds(delay))
             guard !Task.isCancelled, let self else { return }
+            self.pendingTransition = nil
+            self.pendingTarget = nil
             self.apply(self.machine.transition(to: target))
         }
     }
@@ -171,6 +195,7 @@ final class PlaybackController {
         deferredPlay?.cancel(); deferredPlay = nil
         pendingTransition?.cancel()
         pendingTransition = nil
+        pendingTarget = nil
         audio.cancelPendingLifecycleWork()
     }
 
