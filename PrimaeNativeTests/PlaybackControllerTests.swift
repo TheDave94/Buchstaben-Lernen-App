@@ -96,6 +96,35 @@ final class Box<T> {
         #expect(audio.cancelLifecycleCount >= 1)
     }
 
+    /// F9 (touch-path sweep, 2026-09-06): the out-of-bounds path stops
+    /// the engine directly, then calls `forceIdle()` purely to reset the
+    /// pure state machine — `forceIdle()` must ALSO reset `audioIsRunning`
+    /// to match, or a `.play` that lands inside the play-intent debounce
+    /// window right after (a quick re-entry) reports `isPlaying = true`
+    /// while never actually calling `audio.play()` again: the debounce
+    /// branch's own deferred-play fallback exists exactly for a stopped
+    /// engine and refuses to believe one just because `audioIsRunning`
+    /// was left stale-true.
+    @Test func forceIdle_thenQuickReplay_stillResumesAudio() async {
+        let audio = PlaybackTestAudio()
+        // A huge debounce window guarantees the second request below
+        // lands inside it regardless of real wall-clock timing.
+        let c = PlaybackController(audio: audio, playIntentDebounceSeconds: 100,
+                                   sleep: { _ in }, onIsPlayingChanged: { _ in })
+        c.appIsForeground = true
+        c.resumeIntent = true
+        c.request(.active, immediate: true)
+        #expect(audio.playCount == 1)
+        // Out-of-bounds path: the engine was stopped directly (bypassing
+        // apply), then the machine is force-reset — audio.stop() is not
+        // called here on purpose, matching every production call site.
+        c.forceIdle()
+        c.request(.active, immediate: true)
+        for _ in 0..<200 where audio.playCount < 2 { await Task.yield() }
+        #expect(audio.playCount == 2,
+                "the deferred fallback must still resume the engine after forceIdle()")
+    }
+
     @Test func debouncedActive_firesAfterDelay() async {
         // Inject an instant sleep so the debounce fires deterministically — no wall clock.
         let audio = PlaybackTestAudio()

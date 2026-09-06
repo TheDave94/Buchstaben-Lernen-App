@@ -91,7 +91,23 @@ final class PlaybackController {
         set { machine.resumeIntent = newValue }
     }
 
-    func forceIdle() { machine.forceIdle() }
+    /// Force the pure state machine to `.idle` WITHOUT issuing an
+    /// `audio.stop()` — every call site already stopped the engine
+    /// itself (directly, or via `apply(.stop)`) immediately before
+    /// calling this, as a safety-net reset of the machine's tracked
+    /// state. `audioIsRunning` must be reset alongside it: it used to
+    /// stay stale-true, so a `.play` request landing inside the
+    /// play-intent debounce window shortly after (e.g. re-entering the
+    /// canvas right after an out-of-bounds excursion) took the
+    /// "coalesce rapid taps" branch, which reports `isPlaying = true`
+    /// to the VM but skips BOTH the immediate and the deferred
+    /// `audio.play()` — the deferred fallback exists exactly for a
+    /// stopped engine, and its own guard (`!audioIsRunning`) refused to
+    /// believe the engine was stopped (audit 2026-09-06).
+    func forceIdle() {
+        machine.forceIdle()
+        audioIsRunning = false
+    }
 
     /// Direct synchronous state transition (no debounce). Used by the
     /// app-lifecycle path where semantics require immediate effect.
