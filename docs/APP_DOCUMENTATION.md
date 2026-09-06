@@ -479,7 +479,10 @@ ProgressStore.recordRecognitionSample
 - The child writes the letter from memory.
 - A "Jetzt schreibst du den Buchstaben ganz alleine." prompt is spoken
   on entry.
-- No haptics, no real-time audio (`feedbackIntensity == 0.0`).
+- No haptics (`feedbackIntensity == 0.0`). Real-time audio is a
+  separate gate (§7.3/§7.4): in a STUDY session freeWrite is silent
+  (the outcome's sound-off post-test, DECISIONS.md header); in the
+  casual app the phoneme keeps sounding as the glyph's auditory anchor.
 - On lift-off, the child lifts the pen and the phase ends.
 
 **What the code does**
@@ -577,19 +580,21 @@ learning: A behavioral emphasis* (4th ed.). Human Kinetics.
   }
   ```
 
-* The gate is read at three call sites in `updateTouch`:
-  - line 891: `if !wasComplete && isNowComplete, feedbackIntensity > 0 { haptics.fire(...) }`
-  - line 918: `if (...stroke or checkpoint changed...), feedbackIntensity > 0 { haptics.fire(...) }`
-  - line 937: `let shouldBeActive = ... && feedbackIntensity > 0.3`
-
-  → audio cuts off entirely below 0.3 (so freeWrite is silent), haptics
-  cut off entirely below `> 0`.
+* The gate is read at the haptic call sites in `TouchDispatcher`
+  (`.strokeBegan`, checkpoint/stroke-completion ticks, `.letterCompleted`):
+  `guard feedbackIntensity > 0 else { return }`.
+* Real-time audio is NOT gated by `feedbackIntensity` (removed
+  2026-09-06, ruling AE-2b — see §7.3/§7.4): the letter sound is the
+  glyph's phonemic anchor, not Schmidt & Lee guidance feedback, so it
+  no longer fades with the haptics. `updateAdaptivePlayback` instead
+  short-circuits on the silent arm and, in a STUDY session only, on the
+  `.freeWrite` phase (the pilot's sound-off post-test).
 
 **How the implementation differs.** The paper describes a continuous
-fade; this implementation uses four discrete phase-pinned levels so
-the gating thresholds are auditable and can be tested. The 0.3
-threshold for audio is chosen so the `.guided` phase (0.6) keeps audio
-on while `.freeWrite` (0.0) silences it.
+fade; this implementation uses four discrete phase-pinned haptic
+intensity levels so the gating thresholds are auditable and can be
+tested. Audio no longer shares that fade (see above) — it fades with
+proximity/velocity (§7.3) instead.
 
 ### 4.3 Knowledge of Performance (KP) Visual Overlay
 
@@ -1588,11 +1593,15 @@ follow this identically; the silent arm never reaches it.
 
 ### 7.4 Phase-dependent audio gating
 
-`feedbackIntensity > 0.3` is the audio gate:
-* `.observe`: 1.0 → audio on (but touch is disabled anyway).
-* `.direct`: 1.0 → letter-name audio on first correct dot tap.
-* `.guided`: 0.6 → real-time proximity audio.
-* `.freeWrite`: 0.0 → audio silent (post-hoc TTS only).
+There is no `feedbackIntensity` audio gate (removed 2026-09-06, ruling
+AE-2b — §4.2, §7.3). Per phase:
+* `.observe`: the demonstration only (§3.1); no live touch, so no
+  proximity coupling to gate.
+* `.direct`: letter-name audio on first correct dot tap.
+* `.guided`: real-time proximity audio, §7.3's `isNearStroke` +
+  velocity gate.
+* `.freeWrite`: silent in a STUDY session (the sound-off post-test);
+  in the casual app the coupling still runs, the same as `.guided`.
 
 ---
 
