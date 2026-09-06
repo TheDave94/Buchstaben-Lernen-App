@@ -898,12 +898,21 @@ private struct PencilAwareCanvasOverlay: UIViewRepresentable {
         // Pencil callbacks are delivered on the main thread; no hop
         // needed.
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-            guard let t = touches.first, t.type == .pencil else { return }
+            // `touches` is an unordered Set: with a resting palm ALSO
+            // routed here (this view's `hitTest` claims the whole event
+            // once any pencil touch is present, so a palm hit-testing
+            // into the same region rides along), `.first` could be the
+            // palm and the pencil sample was silently dropped — the same
+            // defect `hitTest` was fixed for below, left in the sibling
+            // delegate methods (audit 2026-09-06). Find the pencil touch
+            // specifically; never picked = never take a palm's word for
+            // where the pencil is.
+            guard let t = touches.first(where: { $0.type == .pencil }) else { return }
             coordinator?.onBegan(t.location(in: self), t.timestamp)
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-            guard let t = touches.first, t.type == .pencil else { return }
+            guard let t = touches.first(where: { $0.type == .pencil }) else { return }
             // Every coalesced sample, for the same reason as the finger
             // overlay (class two, 2026-09-05).
             let samples = event?.coalescedTouches(for: t) ?? [t]
@@ -915,12 +924,15 @@ private struct PencilAwareCanvasOverlay: UIViewRepresentable {
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-            guard touches.first?.type == .pencil else { return }
+            // A simultaneous lift (pencil + resting palm in the same
+            // batch) must not let the palm's presence in the Set hide
+            // the pencil's end — check membership, not `.first`.
+            guard touches.contains(where: { $0.type == .pencil }) else { return }
             coordinator?.onEnded()
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-            guard touches.first?.type == .pencil else { return }
+            guard touches.contains(where: { $0.type == .pencil }) else { return }
             coordinator?.onEnded()
         }
     }
