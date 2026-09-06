@@ -26,7 +26,7 @@ _**Correction (2026-09-03):** three commits landed after the 2026-08-19 pass wit
 
 Everything in the **post-thesis** section (F1–F10) waits until the thesis ships.
 
-**P7** (thesis KUG compliance/formatting pass) waits on Ch.1/6/7 moving past template placeholders — recorded in §1 below, not actionable yet.
+**P7** (thesis KUG compliance/formatting pass) — CORRECTED same day: mostly already done (see §1 below), not blocked on anything.
 
 ---
 
@@ -74,52 +74,53 @@ Phonemic awareness (Adams 1990) predicts later reading acquisition; pairing hand
 
 ---
 
-### P7 — Thesis KUG compliance / formatting pass *(WAITS ON THE CHAPTERS — do not start yet)*
-**Effort:** M · **Priority:** P2 (not started; explicitly deferred)
+### P7 — Thesis KUG compliance / formatting pass *(mostly already done; two small placeholders remain)*
+**Effort:** S · **Priority:** P3
 
-Found by the 2026-09-01 full-thesis review (`docs/REVIEW_2026-09-01.md` in
-`master-thesis`, §F — uncommitted in that repo's working tree as of
-2026-09-06, `git -C ~/repos/master-thesis status --short` shows it `??`).
-Section F is the mechanical/typographic/structural class of finding, as
-opposed to the content corrections in §A–E (those are thesis-substance and
-tracked in the thesis repo itself, not duplicated here).
+**CORRECTED 2026-09-06 (same day as first written).** The entry as originally
+written here said this waits on Ch.1/6/7 being drafted, on the strength of
+`docs/REVIEW_2026-09-01.md`'s (`master-thesis`) §F.4 finding that those
+chapters were template placeholders. That was wrong: re-read directly against
+disk, `content/01-introduction.typ` (17 lines), `06-evaluation.typ` (68
+lines) and `07-conclusion.typ` (19 lines) are substantive drafted prose, and
+`thesis.typ`'s English abstract, Kurzfassung, acronym-list note and keywords
+are likewise real, not template text — all drafted **the same day** as the
+review that flagged them (`docs/THESIS_STATUS.md` §0 and
+`docs/THESIS_FRAMING.md` §3 both say "Drafted 2026-09-01"; the review's own
+top banner says "corrections applied the same day," which the first pass at
+this entry missed). The mistake was citing §F.4's diagnostic list (the
+pre-correction state) as current fact without checking that banner.
 
-**Why this waits:** as of the review, Ch.1, Ch.6 and Ch.7 plus both
-abstracts and the acronym list are still KUG template placeholder text
-(§F.4) — `content/01-introduction.typ`, `06-evaluation.typ`,
-`07-conclusion.typ`. Formatting front/back matter and cross-references
-against placeholder chapters is work that gets redone once those chapters
-have real content (headings shift, the acronym list depends on what the
-body actually uses, List of Figures/Listings depend on what figures the
-finished chapters need). **Do not do this until Ch.1/6/7 are real prose —
-recorded here only so it is not lost, not as a queued task.**
+**What's actually still open, re-verified against disk 2026-09-06:**
+1. `thesis.typ:14` — `#let thesis-title = [Primae]`, still a literal
+   placeholder. `THESIS_FRAMING.md:220-227` (thesis repo) names a working
+   title and says explicitly "to replace." Trivial edit, but not before a
+   title is chosen — thesis writing, not formatting.
+2. `thesis.typ:28` — `#let thesis-date = [Month Year]`, still literal.
+   Fill in at submission time; there's nothing to decide, just nothing to
+   fill in yet.
+3. Spelling/wording consistency (§F.3 of the review — British vs. American
+   mixed, one proper-noun inconsistency, Ch.5 jargon headings):
+   `docs/THESIS_STATUS.md` reports British spelling normalised, but this was
+   NOT independently re-verified repo-wide this session — treat as
+   reported-fixed, not confirmed-fixed, until someone greps for it.
 
-**What it covers, for when the chapters exist:**
-1. Cross-references render wrong against the current chapter numbering
-   (Methodology renders as Ch.3, Evaluation as Ch.4, but body text says
-   "Chapter 5"/"Chapter 6"; `@ch-...` references render as "Section N"
-   instead of "Chapter N") — needs a heading-supplement fix in
-   `thesis.typ` plus a pass over every hardcoded chapter-number mention.
-2. Bibliography rendering (`.bib` entries): several author/booktitle
-   fields render wrong from the compiled PDF (bracing, capitalisation,
-   a `howpublished`/`\url` entry that drops its URL, an institution-name
-   mismatch against the cover page).
-3. Spelling/wording consistency: British vs. American spelling mixed
-   throughout (centre/center, artefact/artifact, -ise/-ize), one
-   proper-noun spelling inconsistency (Télémaque/Telemaque), and Ch.5's
-   headings/footnote-level detail using project jargon (Phase 2b/2c,
-   Track B, G1–G6, ANKER, SKELETT, bake) an examiner won't know.
-4. Front/back matter: abstract + Kurzfassung are template text (depends
-   on Ch.1/6/7 existing); List of Acronyms lists terms that don't occur
-   in the body and omits ones that do; List of Figures/Listings render
-   as empty pages; keywords don't describe the thesis; the cover date
-   placeholder (`thesis-date = [Month Year]`) renders literally.
+**Verified fixed, no longer open (checked directly, not taken from the
+review):** cross-references (§F.1 — `thesis.typ:90` has the
+`heading.where(level:1)` supplement fix; `02-background.typ` uses
+`@ch-evaluation`/`@ch-methodology` labels, not hardcoded numbers);
+bibliography rendering (§F.2 — per `THESIS_STATUS.md` §0); List of
+Figures/Listings (§F.4 — no longer necessarily empty: `content/03-
+architecture.typ`, `04-implementation.typ`, `05-methodology.typ` now contain
+5 `#figure(...)` calls between them); keywords (`thesis.typ:35` now reads
+"letter learning, sonification, phoneme, handwriting, iPad, pilot study,
+Druckschrift" — describes the thesis, not the old iOS-generic list).
+`typst compile thesis.typ` exits 0, 75 pages, only the two known font
+warnings (re-run 2026-09-06).
 
-Do not action any of this from a Primae or thesis-repo session until the
-placeholder chapters are drafted; re-derive the item list from
-`docs/REVIEW_2026-09-01.md` §F at that point rather than trusting this
-summary, since the review predates whatever chapter work lands between
-now and then.
+Nothing here is Primae's to action — it's thesis-repo prose/formatting, and
+what remains (title choice, date, one unverified spelling pass) is a final
+proofread pass near submission, not blocked engineering work.
 
 ---
 
