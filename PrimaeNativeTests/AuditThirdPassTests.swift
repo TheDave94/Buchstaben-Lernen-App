@@ -51,8 +51,15 @@ fileprivate final class ThirdPassRecordingStore: ParentDashboardStoring {
         let vm = studyVM()
         vm.canvasSize = canvas
         #expect(vm.learningPhase == .observe, "precondition: a study session starts in observe")
+        // A study launch is PARKED (2026-09-06): nothing is installed
+        // until the observe pill starts the letter. Then the
+        // auto-advance must be there — it used to be left nil on the
+        // first letter, and studyMode makes the skip tap inert.
+        #expect(vm.launchParked && vm.animation.onCycleComplete == nil,
+                "a parked launch installs no auto-advance")
+        vm.startParkedLetter()
         #expect(vm.animation.onCycleComplete != nil,
-                "load(letter:) must install the auto-advance — it used to leave it nil on the first letter, and studyMode makes the tap inert")
+                "starting the parked letter must install the auto-advance")
         vm.animation.onCycleComplete?()
         #expect(vm.learningPhase == .observe, "one cycle is not enough")
         vm.animation.onCycleComplete?()
