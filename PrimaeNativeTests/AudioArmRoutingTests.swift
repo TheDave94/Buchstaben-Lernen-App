@@ -31,7 +31,8 @@ fileprivate final class RecordingAudio: AudioControlling {
     func suspendForLifecycle()        { isPlaying = false }
     func resumeAfterLifecycle()       {}
     func cancelPendingLifecycleWork() {}
-    func setAdaptivePlayback(speed: Float, horizontalBias: Float) { setAdaptiveCount += 1 }
+    private(set) var lastHorizontalBias: Float = 0
+    func setAdaptivePlayback(speed: Float, horizontalBias: Float) { setAdaptiveCount += 1; lastHorizontalBias = horizontalBias }
     func setSpatialPitch(cents: Float) { spatialPitches.append(cents) }
 }
 
@@ -355,6 +356,42 @@ fileprivate final class RecordingAudio: AudioControlling {
         }
         #expect(counts[.phoneme]?.play == counts[.spatial]?.play && counts[.phoneme]?.stop == counts[.spatial]?.stop,
                 "the two sound arms must be driven identically: \(counts)")
+    }
+
+    /// Under studyMode the pan is x·2−1 and nothing else — the Pencil
+    /// azimuth offset must not enter (audit 2026-09-06).
+    @Test("study pan ignores the Pencil azimuth bias")
+    func studyPan_hasNoAzimuthBias() {
+        for studyMode in [true, false] {
+            let audio = RecordingAudio()
+            let vm = makeVM(arm: .phoneme, phonemeToggle: true, studyMode: studyMode, audio: audio)
+            vm.phaseController.resume(at: .guided)
+            // A real Pencil session: the touch-down is marked as Pencil
+            // (a finger session clears the pressure at touch-down and
+            // ignores Pencil samples), and pressure/azimuth are set per
+            // sample as the overlay does. cos 0 = 1 → +0.2 bias if applied.
+            vm.pencilDidTouchDown()
+            vm.pencilAzimuth = 0
+            vm.pencilPressure = 0.5
+            // Same drive as the other routing tests: 15 fast samples from
+            // x = 100, ending at x = 250 → pan x·2−1 = 0.25 on a 400 pt canvas.
+            vm.beginTouch(at: CGPoint(x: 100, y: 200), t: 1000)
+            var t: CFTimeInterval = 1000
+            var p = CGPoint(x: 100, y: 200)
+            for _ in 0..<15 {
+                t += 0.001; p.x += 10
+                vm.pencilPressure = 0.5; vm.pencilAzimuth = 0
+                vm.updateTouch(at: p, t: t, canvasSize: canvas)
+            }
+            #expect(audio.setAdaptiveCount > 0, "the drive must reach the coupling")
+            let pan = audio.lastHorizontalBias
+            let centre: Float = Float(250.0 / 400.0 * 2 - 1)   // 0.25
+            if studyMode {
+                #expect(abs(pan - centre) < 1e-4, "study pan must be x·2−1 exactly, got \(pan)")
+            } else {
+                #expect(abs(pan - (centre + 0.2)) < 1e-4, "casual pan keeps the azimuth bias, got \(pan)")
+            }
+        }
     }
 
     // The three non-touch entries that reach `loadAudioFile(autoplay:
