@@ -140,6 +140,21 @@ final class AudioEngineTests: XCTestCase {
                       "interruptionResumeGateRequired must be set after .began")
     }
 
+    /// R5 (audit 2026-09-06): iOS does not guarantee an `.ended` for every
+    /// `.began`. A `play()` after an un-ended `.began` is the user's intent
+    /// and must clear `interrupted`; otherwise every later play() in the
+    /// session is refused and both sound arms go silent with no trace.
+    @MainActor func testPlayAfterBeganWithoutEnded_clearsInterrupted() async throws {
+        let engine = try XCTUnwrap(self.engine, "AudioEngine must be initialized")
+        postInterruption(type: .began)
+        XCTAssertTrue(engine.debugInterrupted, "precondition: .began sets interrupted")
+        engine.play()
+        XCTAssertFalse(engine.debugInterrupted,
+                       "play() must clear a stale interrupted flag (no .ended arrived)")
+        XCTAssertTrue(engine.debugShouldResumePlayback)
+        XCTAssertFalse(engine.debugInterruptionResumeGateRequired)
+    }
+
     @MainActor func testInterruptionBegan_isIdempotent() async throws {
         let engine = try XCTUnwrap(self.engine, "AudioEngine must be initialized")
         postInterruption(type: .began)
