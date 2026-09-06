@@ -172,6 +172,16 @@ final class PlaybackController {
 
         if immediate {
             apply(machine.transition(to: target))
+            // Ruling AE-2b (2026-09-06): a pen that STOPS produces no
+            // further samples, and only a sample could request idle — so
+            // a finger held still on the path kept the loop playing at
+            // its last rate until it lifted or crawled. Every active
+            // sample now arms a stall timeout of one idle debounce; the
+            // next active sample re-arms it, a stationary pen lets it
+            // fire, and the sound resumes at the next movement (at the
+            // pitch and pan of wherever the pen now is). Both sound arms
+            // go through this identically.
+            if target == .active, machine.state == .active { armStallIdle() }
             return
         }
 
@@ -186,6 +196,23 @@ final class PlaybackController {
             self.pendingTransition = nil
             self.pendingTarget = nil
             self.apply(self.machine.transition(to: target))
+        }
+    }
+
+    /// Debounced idle that fires unless another active sample arrives
+    /// within `idleDebounceSeconds` — the movement-contingency of the
+    /// coupling (see `request`).
+    private func armStallIdle() {
+        pendingTransition?.cancel()
+        let delay = idleDebounceSeconds
+        let sleeper = sleep
+        pendingTarget = .idle
+        pendingTransition = Task { [weak self] in
+            try? await sleeper(.seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.pendingTransition = nil
+            self.pendingTarget = nil
+            self.apply(self.machine.transition(to: .idle))
         }
     }
 

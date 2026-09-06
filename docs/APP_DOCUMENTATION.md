@@ -1570,13 +1570,21 @@ blocks, init/deinit structure are particularly load-bearing).
 let shouldPlayForStroke = strokeTracker.isNearStroke
 let shouldBeActive = shouldPlayForStroke
                      && smoothedVelocity >= playbackActivationVelocityThreshold
-                     && feedbackIntensity > 0.3
 playback.request(shouldBeActive ? .active : .idle, immediate: shouldBeActive)
 ```
 
 `isNearStroke` is true when the touch is within `checkpointRadius * 3`
-of the next checkpoint. The 22 pt/s velocity threshold prevents audio
-on stationary touches.
+of the next checkpoint. There is no `feedbackIntensity` gate on the
+sound (the letter sound is the glyph's phonemic anchor, not guidance
+feedback; an earlier `> 0.3` gate was removed and this section lagged
+until 2026-09-06). Movement-contingency (ruling AE-2b, 2026-09-06): an
+active request is immediate; an idle request is debounced by
+`idleDebounceSeconds` (0.12 s) and a repeated idle request keeps the
+running timer rather than restarting it; and every active sample arms
+a stall timeout of the same length, so a pen that STOPS — which sends
+no further samples — falls silent after 0.12 s and resumes at the next
+movement, at the pitch and pan of wherever it now is. Both sound arms
+follow this identically; the silent arm never reaches it.
 
 ### 7.4 Phase-dependent audio gating
 

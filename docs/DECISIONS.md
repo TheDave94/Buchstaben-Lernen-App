@@ -198,6 +198,54 @@ Implications:
   rather than relying on this analytical bound.
   Implemented: `dfae2de` on `feat/order-invariant-primary-outcome`.
 
+- **D13 — Sound delivery is matched across the two sound arms in
+  LEVEL and in MOVEMENT-CONTINGENCY (rulings AE-1, AE-2, AE-2a, AE-2b,
+  David, 2026-09-06).** Three points, each with the argument that
+  decided it, because the next reader should see why:
+  1. *Per-file loudness normalisation, RMS over the steady state.*
+     Every file the engine loads is played at the gain that brings its
+     RMS to one target — the bundled spatial carrier's own RMS (0.1463
+     full-scale), so the verified carrier is unity and the phonemes are
+     matched to it. RMS, not peak: peak equalises the loudest sample,
+     and fricatives and vowels have very different crest factors, which
+     is the vowel/continuant line the letter set spans — peak would
+     leave most of that bias in place. Steady state, not the whole
+     file: onset and release drag a phone's average down by an amount
+     that also differs between fricatives and vowels. Measured once per
+     file (20 ms windows within −6 dB of the loudest window), clamped
+     ±18 dB and logged when the clamp bites (`AudioEngine+Loudness`).
+     Side effect worth stating: this also removes the between-arm level
+     difference the thesis records as a limitation.
+  2. *Both sound arms go silent when the pen is not moving.* The
+     argument for the other side is real: the carrier encodes position,
+     not movement, so a held tone during a pause is still "true". It
+     lost to this: if the phoneme arm fell silent on a pause and the
+     spatial arm did not, the arms would differ in something other
+     than what the sound carries — the same class as the silent-arm
+     confound fixed the same day. The manipulation is what the audio
+     encodes, not whether audio is present. The spatial mapping loses
+     nothing: it resumes the moment the pen moves, at the pitch and pan
+     of wherever the pen now is; a child who pauses and hears nothing,
+     then moves and hears the position, gets a cleaner mapping than one
+     who hears a held tone that means nothing during the pause.
+     Mechanism: a pen that stops sends no samples, and only a sample
+     could request idle, so every active sample arms a 0.12 s stall
+     timeout (`PlaybackController.armStallIdle`); pinned by
+     `bothSoundArms_stopOnPause_resumeOnMove` for both arms.
+  3. *Rate does not move pitch — verified, not changed.* The ruling
+     AE-1 premise ("playback-rate pitching contaminates the spatial
+     arm's pitch with stroke velocity") does not hold: rate and pitch
+     both go through the one `AVAudioUnitTimePitch` (pitch-preserving
+     time-stretch; independent cents), no varispeed path exists, and
+     Ch.4 states it. The rate coupling is the matched design across both
+     sound arms and stays. Driven rather than read:
+     `testTimePitchRate_doesNotMovePitch_varispeedDoes` (hardware suite)
+     renders 440 Hz through the unit at rates 0.5/1/2 (→ 440), ±1200
+     cents (→ 880/220) and through a varispeed unit at 2.0 (→ 880, the
+     confound the ruling describes).
+  Implemented: `605f8f0` (1, 3) and the follow-up commit (1 steady
+  state, 2) on `feat/order-invariant-primary-outcome`.
+
 ---
 
 ## Open design decisions (David's, no external gate)

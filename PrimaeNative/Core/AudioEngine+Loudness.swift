@@ -11,9 +11,14 @@
 // a gain that brings its RMS to ONE target, whatever level it was
 // recorded or rendered at.
 //
+// RMS, not peak (AE-2a): peak equalises the loudest sample, and
+// fricatives and vowels have very different crest factors — peak would
+// leave most of the vowel/consonant bias in place. And RMS over the
+// STEADY STATE, not the whole file: see `fileRMS`.
+//
 // The target is the bundled spatial carrier's own RMS (measured
 // 2026-09-06: 16-bit PCM, peak 8231 = −12.0 dBFS, rms/peak 0.5825 →
-// 0.1463 full-scale). The verified carrier therefore plays at unity gain
+// 0.1463 full-scale; constant, so steady state = whole file). The verified carrier therefore plays at unity gain
 // — nothing about the spatial arm's stimulus changes — and the phoneme
 // arm's files are matched to it, which also removes the between-arm
 // level difference the thesis records as a limitation.
@@ -41,9 +46,23 @@ extension AudioEngine {
     /// every play).
     private static var loudnessGainCache: [URL: Float] = [:]
 
-    /// Full-scale RMS of the whole file, all channels pooled; nil when the
-    /// file cannot be read or holds no samples. Opens its OWN reader so the
-    /// engine's scheduled `AVAudioFile` keeps its frame position.
+    /// Analysis window for the RMS envelope (ruling AE-2a, 2026-09-06:
+    /// steady state, not onset and decay). 20 ms is above the period of
+    /// every voiced phone and below any onset or release.
+    static let loudnessWindowSeconds: Double = 0.020
+    /// A window counts as steady state when its RMS is within −6 dB of
+    /// the loudest window. Onset ramps and the release tail fall below
+    /// this; a sustained phone and the carrier sit entirely above it.
+    static let loudnessSteadyStateFraction: Float = 0.5
+
+    /// Full-scale RMS over the STEADY-STATE portion of the file — the
+    /// 20 ms windows within −6 dB of the loudest window, all channels
+    /// pooled — nil when the file cannot be read or holds no samples.
+    /// Opens its OWN reader so the engine's scheduled `AVAudioFile` keeps
+    /// its frame position. Whole-file RMS would let a long release tail
+    /// or a slow onset drag a phone's measured level down by an amount
+    /// that differs between fricatives and vowels — the very contrast
+    /// the letter set spans (AE-2a).
     static func fileRMS(at url: URL) -> Float? {
         guard let file = try? AVAudioFile(forReading: url),
               file.length > 0,
@@ -54,12 +73,26 @@ extension AudioEngine {
         let frames = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
         guard frames > 0, channelCount > 0 else { return nil }
-        var sum: Double = 0
-        for c in 0..<channelCount {
-            let p = channels[c]
-            for i in 0..<frames { let v = Double(p[i]); sum += v * v }
+        let window = max(1, Int(buffer.format.sampleRate * loudnessWindowSeconds))
+        // Mean square per window, channels pooled.
+        var windows: [Double] = []
+        var start = 0
+        while start < frames {
+            let end = min(frames, start + window)
+            var sum: Double = 0
+            for c in 0..<channelCount {
+                let p = channels[c]
+                for i in start..<end { let v = Double(p[i]); sum += v * v }
+            }
+            windows.append(sum / Double((end - start) * channelCount))
+            start = end
         }
-        let rms = (sum / Double(frames * channelCount)).squareRoot()
+        guard let peakMS = windows.max(), peakMS > 0 else { return nil }
+        // −6 dB in amplitude = a quarter in mean square.
+        let floorMS = peakMS * Double(loudnessSteadyStateFraction * loudnessSteadyStateFraction)
+        let steady = windows.filter { $0 >= floorMS }
+        guard !steady.isEmpty else { return nil }
+        let rms = (steady.reduce(0, +) / Double(steady.count)).squareRoot()
         return rms.isFinite ? Float(rms) : nil
     }
 

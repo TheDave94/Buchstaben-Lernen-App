@@ -24,8 +24,9 @@ fileprivate final class RecordingAudio: AudioControlling {
     /// from "played then stopped".
     private(set) var playCount = 0
     func loadAudioFile(named: String, autoplay: Bool) { loadedFiles.append(named) }
+    private(set) var stopCount = 0
     func play()    { playCount += 1; isPlaying = true }
-    func stop()    { isPlaying = false }
+    func stop()    { stopCount += 1; isPlaying = false }
     func restart() {}
     func suspendForLifecycle()        { isPlaying = false }
     func resumeAfterLifecycle()       {}
@@ -312,6 +313,48 @@ fileprivate final class RecordingAudio: AudioControlling {
                 "the fixture's guidedOnly arm made resume(at: .freeWrite) a no-op — this asserted guided, not freeWrite (audit 2026-09-06)")
         driveTouch(vm)
         #expect(audio.setAdaptiveCount > 0)
+    }
+
+    /// Ruling AE-2b (2026-09-06): BOTH sound arms go silent when the pen
+    /// is not moving and resume the moment it moves — the manipulation is
+    /// what the audio encodes, not whether audio is present. The play /
+    /// stop decision is arm-independent (`updateAdaptivePlayback`), and
+    /// this pins it by driving the two arms through the same pause.
+    @Test("both sound arms stop on a pause and resume on movement, identically")
+    func bothSoundArms_stopOnPause_resumeOnMove() async {
+        var counts: [PilotAudioCondition: (play: Int, stop: Int)] = [:]
+        for arm in [PilotAudioCondition.phoneme, .spatial] {
+            let audio = RecordingAudio()
+            var deps = TracingDependencies.stub
+            deps.audioCondition = arm
+            deps.enablePhonemeMode = true
+            deps.studyMode = true
+            deps.audio = audio
+            // Instant sleeper: the idle debounce fires as soon as awaited.
+            deps.makePlaybackController = { a, cb in
+                PlaybackController(audio: a, playIntentDebounceSeconds: 0, sleep: { _ in }, onIsPlayingChanged: cb)
+            }
+            let vm = TracingViewModel(deps)
+            vm.phaseController.resume(at: .guided)
+            let t0: CFTimeInterval = 1000
+            vm.beginTouch(at: CGPoint(x: 50, y: 200), t: t0)
+            var t = t0
+            var p = CGPoint(x: 50, y: 200)
+            for _ in 0..<15 { t += 0.001; p.x += 10; vm.updateTouch(at: p, t: t, canvasSize: canvas) }
+            #expect(audio.playCount > 0, "\(arm): the on-path drive must reach play()")
+            // Pause: no further samples; the idle transition is pending.
+            #expect(vm.playback.pendingTransition != nil, "\(arm): a pause must arm the idle transition")
+            await vm.playback.pendingTransition?.value
+            #expect(audio.stopCount > 0 && !audio.isPlaying, "\(arm): a pause must stop the sound")
+            // Move again: the sound resumes at once (file reloaded first).
+            let playsBefore = audio.playCount
+            for _ in 0..<15 { t += 0.001; p.x += 10; vm.updateTouch(at: p, t: t, canvasSize: canvas) }
+            #expect(audio.playCount > playsBefore && audio.isPlaying, "\(arm): movement must resume the sound")
+            #expect(audio.loadedFiles.count >= 2, "\(arm): the file is reloaded before the resumed play")
+            counts[arm] = (audio.playCount, audio.stopCount)
+        }
+        #expect(counts[.phoneme]?.play == counts[.spatial]?.play && counts[.phoneme]?.stop == counts[.spatial]?.stop,
+                "the two sound arms must be driven identically: \(counts)")
     }
 
     // The three non-touch entries that reach `loadAudioFile(autoplay:

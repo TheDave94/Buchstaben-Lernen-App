@@ -157,10 +157,34 @@ final class Box<T> {
         #expect(c.pendingTransition == first, "the same idle timer must survive repeated idle requests")
         for _ in 0..<200 where gate.count < 1 { await Task.yield() }
         #expect(gate.count == 1, "exactly one idle sleep in flight, got \(gate.count)")
-        // Back on-path: the immediate active request cancels the pending idle.
+        // Back on-path: the immediate active request replaces the pending
+        // idle with a fresh stall timeout (AE-2b) — a new task, not none.
         c.request(.active, immediate: true)
-        #expect(c.pendingTransition == nil)
+        #expect(c.pendingTransition != nil && c.pendingTransition != first,
+                "an active sample re-arms the stall timeout")
         #expect(audio.stopCount == 0, "idle never fired")
+        c.cancelPending()
+    }
+
+    /// Ruling AE-2b: a pen that stops sends no samples; the last active
+    /// sample's stall timeout must stop the sound, and the next active
+    /// sample must start it again.
+    @Test func immediateActive_armsStallIdle_thatStopsAStationaryPen() async {
+        let audio = PlaybackTestAudio()
+        let c = PlaybackController(audio: audio, idleDebounceSeconds: 0.12,
+                                   playIntentDebounceSeconds: 0,
+                                   sleep: { _ in }, onIsPlayingChanged: { _ in })
+        c.appIsForeground = true
+        c.resumeIntent = true
+        c.request(.active, immediate: true)
+        #expect(audio.playCount == 1)
+        #expect(c.pendingTransition != nil, "an active sample must arm the stall timeout")
+        await c.pendingTransition?.value
+        #expect(audio.stopCount == 1, "no further sample → the stall timeout stops the sound")
+        c.request(.active, immediate: true)
+        #expect(audio.playCount == 2, "the next movement resumes the sound")
+        await c.pendingTransition?.value
+        #expect(audio.stopCount == 2)
     }
 
     @Test func resetPlayIntentClock_allowsImmediateReplay() {

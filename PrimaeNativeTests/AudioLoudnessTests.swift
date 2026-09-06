@@ -54,6 +54,39 @@ struct AudioLoudnessTests {
         #expect(gLoud < 1 && gQuiet > 1)
     }
 
+    /// AE-2a: onset and decay must not drag the measured level down.
+    /// A file with 30 % linear ramp-in and ramp-out around a steady
+    /// middle measures as its middle, not as its whole-file average.
+    @Test("the RMS is taken over the steady state, not onset and decay")
+    func steadyStateExcludesOnsetAndDecay() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("envelope-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        let frames = 44_100
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let p = buffer.floatChannelData![0]
+        let peak: Float = 0.5
+        for i in 0..<frames {
+            let t = Float(i) / Float(frames)
+            let env: Float = t < 0.3 ? t / 0.3 : (t > 0.7 ? (1 - t) / 0.3 : 1)
+            p[i] = peak * env * sin(2 * .pi * 440 * Float(i) / 44_100)
+        }
+        try file.write(from: buffer)
+        let measured = try #require(AudioEngine.fileRMS(at: url))
+        let steady = peak / 2.squareRoot()            // 0.354
+        // Whole-file RMS of this envelope: mean square = peak²/2 · (0.4 + 2·0.3/3) = peak²/2 · 0.6
+        let wholeFile = steady * (0.6).squareRoot()    // 0.274
+        // The −6 dB gate keeps the upper halves of the ramps (env ≥ 0.5):
+        // expected ≈ 0.906 · steady for this envelope (computed by hand:
+        // mean square (0.4·1 + 0.3·0.583)/0.7 = 0.821). Whole-file would
+        // be 0.775 · steady.
+        #expect(abs(measured - steady) / steady < 0.12, "steady-state rms \(measured) should be ≈ 0.91 × \(steady)")
+        #expect(measured > wholeFile * 1.10, "whole-file rms \(wholeFile) must NOT be what is measured; got \(measured)")
+    }
+
     @Test("the bundled carrier defines the target and plays at unity")
     func carrierIsUnity() throws {
         AudioEngine.resetLoudnessCache()
