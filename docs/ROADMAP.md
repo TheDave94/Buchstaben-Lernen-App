@@ -26,6 +26,8 @@ _**Correction (2026-09-03):** three commits landed after the 2026-08-19 pass wit
 
 Everything in the **post-thesis** section (F1–F10) waits until the thesis ships.
 
+**P7** (thesis KUG compliance/formatting pass) waits on Ch.1/6/7 moving past template placeholders — recorded in §1 below, not actionable yet.
+
 ---
 
 ## What's already shipped this session (for context — not action)
@@ -69,6 +71,55 @@ Phonemic awareness (Adams 1990) predicts later reading acquisition; pairing hand
 **Citations.**
 - Adams, M. J. (1990). *Beginning to Read: Thinking and Learning about Print*. MIT Press.
 - Krech, E.-M. et al. (2009). *Deutsches Aussprachewörterbuch*. de Gruyter.
+
+---
+
+### P7 — Thesis KUG compliance / formatting pass *(WAITS ON THE CHAPTERS — do not start yet)*
+**Effort:** M · **Priority:** P2 (not started; explicitly deferred)
+
+Found by the 2026-09-01 full-thesis review (`docs/REVIEW_2026-09-01.md` in
+`master-thesis`, §F — uncommitted in that repo's working tree as of
+2026-09-06, `git -C ~/repos/master-thesis status --short` shows it `??`).
+Section F is the mechanical/typographic/structural class of finding, as
+opposed to the content corrections in §A–E (those are thesis-substance and
+tracked in the thesis repo itself, not duplicated here).
+
+**Why this waits:** as of the review, Ch.1, Ch.6 and Ch.7 plus both
+abstracts and the acronym list are still KUG template placeholder text
+(§F.4) — `content/01-introduction.typ`, `06-evaluation.typ`,
+`07-conclusion.typ`. Formatting front/back matter and cross-references
+against placeholder chapters is work that gets redone once those chapters
+have real content (headings shift, the acronym list depends on what the
+body actually uses, List of Figures/Listings depend on what figures the
+finished chapters need). **Do not do this until Ch.1/6/7 are real prose —
+recorded here only so it is not lost, not as a queued task.**
+
+**What it covers, for when the chapters exist:**
+1. Cross-references render wrong against the current chapter numbering
+   (Methodology renders as Ch.3, Evaluation as Ch.4, but body text says
+   "Chapter 5"/"Chapter 6"; `@ch-...` references render as "Section N"
+   instead of "Chapter N") — needs a heading-supplement fix in
+   `thesis.typ` plus a pass over every hardcoded chapter-number mention.
+2. Bibliography rendering (`.bib` entries): several author/booktitle
+   fields render wrong from the compiled PDF (bracing, capitalisation,
+   a `howpublished`/`\url` entry that drops its URL, an institution-name
+   mismatch against the cover page).
+3. Spelling/wording consistency: British vs. American spelling mixed
+   throughout (centre/center, artefact/artifact, -ise/-ize), one
+   proper-noun spelling inconsistency (Télémaque/Telemaque), and Ch.5's
+   headings/footnote-level detail using project jargon (Phase 2b/2c,
+   Track B, G1–G6, ANKER, SKELETT, bake) an examiner won't know.
+4. Front/back matter: abstract + Kurzfassung are template text (depends
+   on Ch.1/6/7 existing); List of Acronyms lists terms that don't occur
+   in the body and omits ones that do; List of Figures/Listings render
+   as empty pages; keywords don't describe the thesis; the cover date
+   placeholder (`thesis-date = [Month Year]`) renders literally.
+
+Do not action any of this from a Primae or thesis-repo session until the
+placeholder chapters are drafted; re-derive the item list from
+`docs/REVIEW_2026-09-01.md` §F at that point rather than trusting this
+summary, since the review predates whatever chapter work lands between
+now and then.
 
 ---
 
