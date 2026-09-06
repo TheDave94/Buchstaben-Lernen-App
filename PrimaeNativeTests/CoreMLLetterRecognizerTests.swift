@@ -117,12 +117,15 @@ import CoreGraphics
         let r = CoreMLLetterRecognizer.makeResult(
             from: classifications, expectedLetter: "A",
             calibrator: ConfidenceCalibrator(), historicalFormScores: strong)
+        // The classifier's confidence is a Float; the calibrator works in
+        // CGFloat — compare with a tolerance, not `==` (CI run 1656).
         let unboosted = ConfidenceCalibrator().calibrate(rawConfidence: 0.5, predictedLetter: "H")
         let boosted   = ConfidenceCalibrator().calibrate(rawConfidence: 0.4, predictedLetter: "A",
                                                          historicalFormScores: strong)
-        #expect(r?.confidence == unboosted, "the wrong top prediction keeps its unboosted confidence")
-        #expect(r?.topThree.first(where: { $0.letter == "A" })?.confidence == boosted,
-                "the expected letter's candidate carries the boost")
+        let top = r?.confidence ?? -1
+        let a   = r?.topThree.first(where: { $0.letter == "A" })?.confidence ?? -1
+        #expect(abs(top - unboosted) < 1e-6, "the wrong top prediction keeps its unboosted confidence: \(top) vs \(unboosted)")
+        #expect(abs(a - boosted) < 1e-6, "the expected letter's candidate carries the boost: \(a) vs \(boosted)")
         #expect(boosted > 0.4, "fixture must actually trigger the boost")
     }
 
