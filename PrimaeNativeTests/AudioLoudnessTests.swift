@@ -76,9 +76,9 @@ struct AudioLoudnessTests {
         }
         try file.write(from: buffer)
         let measured = try #require(AudioEngine.fileRMS(at: url))
-        let steady = peak / 2.squareRoot()            // 0.354
+        let steady: Float = peak / Float(2).squareRoot()            // 0.354
         // Whole-file RMS of this envelope: mean square = peak²/2 · (0.4 + 2·0.3/3) = peak²/2 · 0.6
-        let wholeFile = steady * (0.6).squareRoot()    // 0.274
+        let wholeFile: Float = steady * Float(0.6).squareRoot()     // 0.274
         // The −6 dB gate keeps the upper halves of the ramps (env ≥ 0.5):
         // expected ≈ 0.906 · steady for this envelope (computed by hand:
         // mean square (0.4·1 + 0.3·0.583)/0.7 = 0.821). Whole-file would
